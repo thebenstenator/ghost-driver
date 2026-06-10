@@ -182,7 +182,9 @@ export class GameScene extends Phaser.Scene {
     grip.add(car, 'gripHigh',      0.005, 0.2,   0.005).name('Grip (high speed)');
     grip.add(car, 'gripSpeedRef',  50,    600,   5    ).name('High-speed grip at (px/s)');
     grip.add(car, 'gripHandbrake', 0.001, 0.05,  0.001).name('Grip (handbrake)');
-    grip.add(car, 'entryKick',     0,     0.8,   0.01 ).name('Entry Kick (handbrake)');
+    grip.add(car, 'entryKick',         0,   0.8,  0.01).name('Entry Kick (handbrake)');
+    grip.add(car, 'entryKickDuration', 0,   0.5,  0.01).name('Entry Kick Duration (s)');
+    grip.add(car, 'entryKickCooldown', 0,   3.0,  0.05).name('Entry Kick Cooldown (s)');
 
     gui.add({ copyStats: () => {
       const s = car;
@@ -204,7 +206,9 @@ this.gripLow         = ${s.gripLow};
 this.gripHigh        = ${s.gripHigh};
 this.gripSpeedRef    = ${s.gripSpeedRef};
 this.gripHandbrake   = ${s.gripHandbrake};
-this.entryKick       = ${s.entryKick};`);
+this.entryKick         = ${s.entryKick};
+this.entryKickDuration = ${s.entryKickDuration};
+this.entryKickCooldown = ${s.entryKickCooldown};`);
     } }, 'copyStats').name('Copy Stats → Console');
 
     gui.domElement.style.position = 'fixed';

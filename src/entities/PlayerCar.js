@@ -6,9 +6,13 @@ export class PlayerCar {
     this.facing = -Math.PI / 2; // start facing up (negative y)
     this.vx = 0;
     this.vy = 0;
-    this.isDrifting  = false;
-    this.driftAngle  = 0; // signed angle between facing and velocity, exposed for camera
+    this.isDrifting    = false;
+    this.driftAngle    = 0; // signed angle between facing and velocity, exposed for camera
     this._wasHandbrake = false;
+    this._kickCooldown  = 0; // seconds remaining before another entry kick is allowed
+    this._kickTimer     = 0; // progress through current kick animation
+    this._kickTotal     = 0; // total rotation (radians) for current kick
+    this._kickApplied   = 0; // how much has been applied so far
 
     // Pilgrim stats — baseline sedan
     this.maxSpeed        = 600;
@@ -35,7 +39,9 @@ export class PlayerCar {
 
     // Entry kick: facing rotation (radians) applied the frame the handbrake is first pressed.
     // Creates the "rear snaps out" feel rather than a gradual grip fade.
-    this.entryKick = 0.45;
+    this.entryKick         = 0.45;
+    this.entryKickDuration = 1.0;  // seconds to complete the kick ease-out
+    this.entryKickCooldown = 1.0;  // seconds before another kick is allowed
 
     // Sprite is pre-loaded in BootScene
     this.sprite = scene.physics.add.image(x, y, 'player_car');
@@ -101,12 +107,27 @@ export class PlayerCar {
     // perpendicular to the facing direction (in the steer direction). This creates
     // the immediate "rear snaps out" feel instead of a gradual grip fade.
     // Only fires when steering — no kick on a straight-line handbrake.
-    if (handbrake && !this._wasHandbrake && speed > 80 && steer !== 0) {
-      // Rotate facing instantly — creates a velocity/facing gap so the rear
-      // appears to snap out rather than translating the whole car sideways.
-      this.facing += this.entryKick * steer;
+    this._kickCooldown = Math.max(0, this._kickCooldown - dt);
+
+    // Trigger a new kick on the rising edge of handbrake
+    if (handbrake && !this._wasHandbrake && speed > 80 && steer !== 0 && this._kickCooldown === 0) {
+      this._kickTotal    = this.entryKick * steer;
+      this._kickTimer    = 0;
+      this._kickApplied  = 0;
+      this._kickCooldown = this.entryKickCooldown;
     }
     this._wasHandbrake = handbrake;
+
+    // Apply kick as an ease-out cubic over entryKickDuration seconds.
+    // Snappy but not frame-instant — most of the rotation lands in the first third.
+    if (this._kickTimer < this.entryKickDuration && this._kickTotal !== 0) {
+      this._kickTimer = Math.min(this._kickTimer + dt, this.entryKickDuration);
+      const t         = this._kickTimer / this.entryKickDuration;
+      const eased     = 1 - Math.pow(1 - t, 3); // cubic ease-out
+      const delta     = eased * this._kickTotal - this._kickApplied;
+      this.facing    += delta;
+      this._kickApplied += delta;
+    }
 
     // --- Forward acceleration ---
     // Allowed during handbrake at 70% power so the player can hold a power drift
