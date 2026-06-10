@@ -14,27 +14,28 @@ export class PlayerCar {
     this.maxSpeed        = 600;
     this.maxReverseSpeed = 220;
     this.acceleration    = 345;
-    this.hardBrakeForce  = 330;
+    this.hardBrakeForce  = 350;
     this.brakeForce      = 275;
     this.reverseAccel    = 200;
-    this.turnSpeed       = 2.0;   // radians/second
+    this.turnSpeedLow    = 2.2;   // radians/second at low speed
+    this.turnSpeed       = 1.2;   // radians/second at high speed (gripSpeedRef)
     this.maxDriftAngle   = 1.9163715186897738; // ~110°
 
     // Drag params (tunable via debug panel)
     this.handBrakeDrag  = 0.975;
     this.coastDrag      = 0.992;
-    this.accelDragBase  = 0.9965;
+    this.accelDragBase  = 0.9975;
     this.accelDragCurve = 0.018; // subtracted as speedFraction² × this value
 
     // Grip params (tunable via debug panel)
     this.gripLow        = 0.14;  // grip at near-zero speed
-    this.gripHigh       = 0.03;  // grip at max speed
+    this.gripHigh       = 0.03;  // grip at gripSpeedRef
+    this.gripSpeedRef   = 350;   // speed (px/s) at which gripHigh is fully reached
     this.gripHandbrake  = 0.008; // grip during handbrake drift
 
-    // Entry kick: lateral impulse applied the frame the handbrake is first pressed.
-    // Fraction of current speed added perpendicular to facing, in the steer direction.
+    // Entry kick: facing rotation (radians) applied the frame the handbrake is first pressed.
     // Creates the "rear snaps out" feel rather than a gradual grip fade.
-    this.entryKick = 0.30;
+    this.entryKick = 0.45;
 
     // Sprite is pre-loaded in BootScene
     this.sprite = scene.physics.add.image(x, y, 'player_car');
@@ -68,18 +69,27 @@ export class PlayerCar {
     // --- Steering ---
     // Speed-gated so the car can't spin on the spot.
     const speedFactor = Phaser.Math.Clamp(speed / 60, 0, 1);
+    const steerFrac   = Math.min(speed / this.gripSpeedRef, 1);
+    const turnRate    = Phaser.Math.Linear(this.turnSpeedLow, this.turnSpeed, steerFrac);
     const steer       = (right ? 1 : 0) - (left ? 1 : 0);
-    this.facing += steer * this.turnSpeed * speedFactor * dt;
+    this.facing += steer * turnRate * speedFactor * dt;
 
     // Drift angle cap: during a handbrake, facing can't deviate more than
     // maxDriftAngle from the velocity vector. Simulates front-wheel grip
     // resisting a full-axis spin — the rear can slide out but you can't
     // spin the nose past perpendicular and accelerate in a new direction.
-    if (handbrake && speed > 30) {
-      const velAngle = Math.atan2(this.vy, this.vx);
-      const diff     = Math.atan2(Math.sin(this.facing - velAngle), Math.cos(this.facing - velAngle));
-      if (Math.abs(diff) > this.maxDriftAngle) {
-        this.facing = velAngle + Math.sign(diff) * this.maxDriftAngle;
+    // Guard against reversing: when going backward the velocity is naturally
+    // ~180° from facing, which would trigger a false snap without this check.
+    {
+      const cosF0   = Math.cos(this.facing);
+      const sinF0   = Math.sin(this.facing);
+      const fwdDot0 = this.vx * cosF0 + this.vy * sinF0;
+      if (handbrake && speed > 30 && fwdDot0 > 0) {
+        const velAngle = Math.atan2(this.vy, this.vx);
+        const diff     = Math.atan2(Math.sin(this.facing - velAngle), Math.cos(this.facing - velAngle));
+        if (Math.abs(diff) > this.maxDriftAngle) {
+          this.facing = velAngle + Math.sign(diff) * this.maxDriftAngle;
+        }
       }
     }
 
@@ -92,9 +102,9 @@ export class PlayerCar {
     // the immediate "rear snaps out" feel instead of a gradual grip fade.
     // Only fires when steering — no kick on a straight-line handbrake.
     if (handbrake && !this._wasHandbrake && speed > 80 && steer !== 0) {
-      const kick = speed * this.entryKick * steer;
-      this.vx += -sinF * kick;
-      this.vy +=  cosF * kick;
+      // Rotate facing instantly — creates a velocity/facing gap so the rear
+      // appears to snap out rather than translating the whole car sideways.
+      this.facing += this.entryKick * steer;
     }
     this._wasHandbrake = handbrake;
 
@@ -179,7 +189,7 @@ export class PlayerCar {
     // at high speed so full-speed 90° corners require planning.
     const gripBase = handbrake
       ? this.gripHandbrake
-      : Phaser.Math.Linear(this.gripLow, this.gripHigh, speedFraction);
+      : Phaser.Math.Linear(this.gripLow, this.gripHigh, Math.min(speed / this.gripSpeedRef, 1));
     const grip = 1 - Math.pow(1 - gripBase, dt * 60);
 
     if (speed > 5) {
