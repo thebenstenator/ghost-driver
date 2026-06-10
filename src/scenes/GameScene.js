@@ -157,6 +157,7 @@ export class GameScene extends Phaser.Scene {
   _setupTunePanel() {
     const car = this.car;
     const gui = new GUI({ title: 'Car Tuning', width: 280 });
+    gui.close();
 
     const engine = gui.addFolder('Engine');
     engine.add(car, 'acceleration',    10, 1500,  5  ).name('Acceleration');
