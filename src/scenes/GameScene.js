@@ -235,15 +235,15 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
 
     this.car.update(delta, controls);
 
+    // Zoom out as speed increases. Reference against natural terminal (~450) rather
+    // than the hard cap so the full zoom range is visible during normal driving.
+    const speed      = this.car.getSpeed();
+
     // Camera look-ahead: offset toward current velocity so the player
     // sees more of the road ahead at speed
     const lookX = this.car.vx * 0.15;
     const lookY = this.car.vy * 0.15;
     this.cameras.main.setFollowOffset(-lookX, -lookY);
-
-    // Zoom out as speed increases. Reference against natural terminal (~450) rather
-    // than the hard cap so the full zoom range is visible during normal driving.
-    const speed      = this.car.getSpeed();
     const targetZoom = Phaser.Math.Linear(1.0, 0.62, Math.min(speed / 450, 1));
     this.cameras.main.zoom = Phaser.Math.Linear(
       this.cameras.main.zoom, targetZoom, 0.04
