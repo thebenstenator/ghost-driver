@@ -75,7 +75,7 @@ export class GameScene extends Phaser.Scene {
     this.cops       = [];
     this.sightRange = 650; // px — how far a cop can spot the player in clear line
     this.pursuit    = new Pursuit(10); // seconds out of sight to complete a ditch
-    this._spawnCop(WORLD_WIDTH / 2, WORLD_HEIGHT / 2 - 700);
+    this._spawnCop(WORLD_WIDTH / 2, WORLD_HEIGHT / 2 + 700);
 
     // Debug graphics for AI steering targets + line of sight
     this.aiDebug = this.add.graphics().setDepth(50);
