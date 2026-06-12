@@ -191,11 +191,19 @@ export class CopAI {
       // can actually turn instead of understeering wide.
       controls.brake = true;
       mode = 'CORNER-BRAKE';
+    } else if (absErr <= 1.3) {
+      // Roughly aligned — drive.
+      controls.up = true; mode = 'PURSUE';
     } else {
-      // Open pursuit: accelerate when roughly aligned; creep forward when slow
-      // so a car that's pointed wrong can still arc around (can't turn in place).
-      if (absErr < 1.3 || speed < 110) { controls.up = true; mode = 'PURSUE'; }
-      else                               mode = 'COAST-TURN';
+      // Target is well off to the side or behind (hard turn / U-turn). HOLD a
+      // moderate turn speed rather than coasting: steering authority scales with
+      // speed (speedFactor ~ speed/60), so coasting to a stall kills the cop's
+      // ability to turn and it can never come around. Maintaining ~130 keeps it
+      // arcing tightly until it's pointed back at the target.
+      const TURN_SPEED = 130;
+      if (speed > TURN_SPEED + 40)      { controls.brake = true; mode = 'TURN-BRAKE'; }
+      else if (speed < TURN_SPEED - 20) { controls.up = true;    mode = 'TURN'; }
+      else                                mode = 'TURN-COAST';
     }
 
     cop.debug = { mode, speed, dist, bend, cornerLimit: cornerSpeedLimit, angleErr, reverseTime: 0 };
