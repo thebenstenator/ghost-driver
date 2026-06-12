@@ -30,11 +30,11 @@ export class CopCar extends Vehicle {
         // Modest grip + steering edge over the player (interceptor), halfway
         // between the player's handling and a full superhuman buff — corners
         // better than you but still goes wide enough to lose sight sometimes.
-        gripLow:      0.17, // player 0.14
-        gripHigh:     0.05, // player 0.03 — more traction at speed
-        gripSpeedRef: 400,  // player 350 — grip stays high a bit longer
-        turnSpeedLow: 2.4,  // player 2.2
-        turnSpeed:    1.55, // player 1.2 — turns harder at speed
+        gripLow:      0.18, // player 0.14
+        gripHigh:     0.06, // player 0.03 — more traction at speed
+        gripSpeedRef: 430,  // player 350 — grip stays high a bit longer
+        turnSpeedLow: 2.5,  // player 2.2
+        turnSpeed:    1.72, // player 1.2 — turns harder at speed
         // Keep most of its steering authority even at a near-stall so it can
         // always rotate out of a deadlock (player is 0 — can't pivot in place).
         minSteerFactor: 0.6,

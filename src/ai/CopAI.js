@@ -29,8 +29,8 @@ export class CopAI {
     // Corner speed governor: brake before bends so the car doesn't understeer wide
     this.senseLookahead  = 400; // how far ahead the second carrot looks for curvature
     this.maxApproachSpeed = 600; // speed cap on a straight (effectively none)
-    this.cornerMinSpeed   = 165; // speed cap through the sharpest (~90°+) corner
-                                 // (split between the old 130 and the 200 buff)
+    this.cornerMinSpeed   = 190; // speed cap through the sharpest (~90°+) corner
+    this.turnHoldSpeed    = 130; // speed held while turning hard / U-turning
     this.cornerClamp      = 1.1; // rad (~63°) — only clamp near-90° grid corners,
                                  // not the shallow off-grid bend toward the player
 
@@ -204,7 +204,7 @@ export class CopAI {
       // Target off to the side (hard turn). HOLD a moderate turn speed rather than
       // coasting: steering authority scales with speed (speedFactor ~ speed/60),
       // so coasting to a stall kills the turn and it can never come around.
-      const TURN_SPEED = 130;
+      const TURN_SPEED = this.turnHoldSpeed;
       if (speed > TURN_SPEED + 40)      { controls.brake = true; mode = 'TURN-BRAKE'; }
       else if (speed < TURN_SPEED - 20) { controls.up = true;    mode = 'TURN'; }
       else                                mode = 'TURN-COAST';

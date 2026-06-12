@@ -75,6 +75,8 @@ export class GameScene extends Phaser.Scene {
     this.navGrid    = new NavGrid();
     this.cops       = [];
     this.sightRange = 650;             // px — cop spotting range in clear line
+    this.sepRadius  = 80;              // separation: how close before cops repel
+    this.sepStrength = 150;            // separation: aim push strength
     this.pursuit    = new Pursuit(10, 15); // 10s to ditch, then 15s of hot search
     // Station the cops withdraw to once the heat cools (SE corner, for testing)
     this.station    = this.navGrid.pos(this.navGrid.index(this.navGrid.cols - 1, this.navGrid.rows - 1));
@@ -104,6 +106,7 @@ export class GameScene extends Phaser.Scene {
     this._setupInput();
     this._setupDebugOverlay();
     this._setupTunePanel();
+    this._setupCopTunePanel();
   }
 
   _spawnCop(x, y) {
@@ -158,7 +161,7 @@ export class GameScene extends Phaser.Scene {
   // they spread out and surround the target instead of piling onto one point
   // and jamming each other.
   _separate(cop, target) {
-    const R = 80, STRENGTH = 150;
+    const R = this.sepRadius, STRENGTH = this.sepStrength;
     let sx = 0, sy = 0;
     for (const other of this.cops) {
       if (other === cop) continue;
@@ -251,7 +254,7 @@ export class GameScene extends Phaser.Scene {
   }
 
   _setupDebugOverlay() {
-    this.debugText = this.add.text(10, 10, '', {
+    this.debugText = this.add.text(10, 46, '', {
       fontFamily: 'monospace',
       fontSize: '14px',
       color: '#39ff14',
@@ -389,6 +392,83 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
       const active = document.activeElement;
       if (active && active !== document.body) active.blur();
     });
+  }
+
+  _setupCopTunePanel() {
+    if (!this.cops.length) return;
+    const c = this.cops[0], a = c.ai;
+
+    // Single source of truth for the panel; changes are pushed to every cop.
+    this.copTuning = {
+      maxSpeed: c.maxSpeed, acceleration: c.acceleration,
+      gripLow: c.gripLow, gripHigh: c.gripHigh, gripSpeedRef: c.gripSpeedRef,
+      turnSpeedLow: c.turnSpeedLow, turnSpeed: c.turnSpeed, minSteerFactor: c.minSteerFactor,
+      cornerMinSpeed: a.cornerMinSpeed, turnHoldSpeed: a.turnHoldSpeed,
+      senseLookahead: a.senseLookahead, cornerClamp: a.cornerClamp,
+      lookahead: a.lookahead, directRange: a.directRange,
+      sepRadius: this.sepRadius, sepStrength: this.sepStrength,
+    };
+
+    const gui = new GUI({ title: 'Cop Tuning', width: 300 });
+    gui.close();
+    const apply = () => this._applyCopTuning();
+
+    const drive = gui.addFolder('Handling');
+    drive.add(this.copTuning, 'maxSpeed',       100, 1200, 10).name('Max Speed').onChange(apply);
+    drive.add(this.copTuning, 'acceleration',   10, 1500,  5).name('Acceleration').onChange(apply);
+    drive.add(this.copTuning, 'turnSpeedLow',   0.5, 8.0, 0.05).name('Turn Speed low').onChange(apply);
+    drive.add(this.copTuning, 'turnSpeed',      0.5, 8.0, 0.05).name('Turn Speed high').onChange(apply);
+    drive.add(this.copTuning, 'minSteerFactor', 0,   1.0, 0.05).name('Low-speed steer floor').onChange(apply);
+
+    const grip = gui.addFolder('Grip');
+    grip.add(this.copTuning, 'gripLow',      0.02,  0.6, 0.01).name('Grip (low speed)').onChange(apply);
+    grip.add(this.copTuning, 'gripHigh',     0.005, 0.2, 0.005).name('Grip (high speed)').onChange(apply);
+    grip.add(this.copTuning, 'gripSpeedRef', 50,    600, 5).name('High-speed grip at').onChange(apply);
+
+    const corner = gui.addFolder('Cornering AI');
+    corner.add(this.copTuning, 'cornerMinSpeed', 80,  500, 5).name('Corner min speed').onChange(apply);
+    corner.add(this.copTuning, 'turnHoldSpeed',  60,  300, 5).name('U-turn hold speed').onChange(apply);
+    corner.add(this.copTuning, 'senseLookahead', 100, 700, 10).name('Corner sense ahead').onChange(apply);
+    corner.add(this.copTuning, 'lookahead',      50,  300, 5).name('Steering lookahead').onChange(apply);
+    corner.add(this.copTuning, 'cornerClamp',    0.5, 2.5, 0.05).name('Corner clamp (rad)').onChange(apply);
+    corner.add(this.copTuning, 'directRange',    50,  400, 10).name('Direct-aim range').onChange(apply);
+
+    const pack = gui.addFolder('Pack');
+    pack.add(this.copTuning, 'sepRadius',   0, 250, 5).name('Separation radius').onChange(apply);
+    pack.add(this.copTuning, 'sepStrength', 0, 400, 5).name('Separation strength').onChange(apply);
+
+    gui.add({ copyStats: () => {
+      const t = this.copTuning;
+      console.log(`// --- Cop handling (CopCar stats) ---
+maxSpeed: ${t.maxSpeed}, acceleration: ${t.acceleration},
+gripLow: ${t.gripLow}, gripHigh: ${t.gripHigh}, gripSpeedRef: ${t.gripSpeedRef},
+turnSpeedLow: ${t.turnSpeedLow}, turnSpeed: ${t.turnSpeed}, minSteerFactor: ${t.minSteerFactor},
+// --- Cop behaviour (CopAI) ---
+cornerMinSpeed: ${t.cornerMinSpeed}, turnHoldSpeed: ${t.turnHoldSpeed},
+senseLookahead: ${t.senseLookahead}, lookahead: ${t.lookahead}, cornerClamp: ${t.cornerClamp}, directRange: ${t.directRange},
+// --- Separation (GameScene) ---
+sepRadius: ${t.sepRadius}, sepStrength: ${t.sepStrength}`);
+    } }, 'copyStats').name('Copy Cop Stats → Console');
+
+    gui.domElement.style.position = 'fixed';
+    gui.domElement.style.top  = '8px';
+    gui.domElement.style.left = '8px';
+    gui.domElement.style.zIndex = '9999';
+  }
+
+  _applyCopTuning() {
+    const t = this.copTuning;
+    for (const cop of this.cops) {
+      cop.maxSpeed = t.maxSpeed; cop.acceleration = t.acceleration;
+      cop.gripLow = t.gripLow; cop.gripHigh = t.gripHigh; cop.gripSpeedRef = t.gripSpeedRef;
+      cop.turnSpeedLow = t.turnSpeedLow; cop.turnSpeed = t.turnSpeed; cop.minSteerFactor = t.minSteerFactor;
+      const a = cop.ai;
+      a.cornerMinSpeed = t.cornerMinSpeed; a.turnHoldSpeed = t.turnHoldSpeed;
+      a.senseLookahead = t.senseLookahead; a.cornerClamp = t.cornerClamp;
+      a.lookahead = t.lookahead; a.directRange = t.directRange;
+    }
+    this.sepRadius = t.sepRadius;
+    this.sepStrength = t.sepStrength;
   }
 
   update(_time, delta) {
