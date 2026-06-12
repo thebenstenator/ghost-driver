@@ -34,6 +34,14 @@ export class CopAI {
     this.cornerClamp      = 1.1; // rad (~63°) — only clamp near-90° grid corners,
                                  // not the shallow off-grid bend toward the player
 
+    // Cached route — recomputed only when the goal changes or the timer lapses,
+    // so the cop commits to one path instead of flip-flopping between equal-cost
+    // grid routes every frame (which makes it thrash and stall).
+    this._pathPts   = null;
+    this._goalNode  = -1;
+    this._pathTimer = 0;
+    this.pathRecomputeInterval = 0.5; // seconds
+
     // Per-cop state
     this._reverseTime  = 0;     // remaining time in a reverse-recovery maneuver
     this._escapeDir    = 1;     // which way to steer while backing out (alternates)
@@ -68,14 +76,22 @@ export class CopAI {
     let aimX = target.x, aimY = target.y;
     let cornerSpeedLimit = this.maxApproachSpeed;
     let bend = 0;
+    this._pathTimer -= dt;
     if (dist > this.directRange) {
       const copNode    = this.nav.nearestNode(cx, cy);
       const playerNode = this.nav.nearestNode(target.x, target.y);
-      const path       = this.nav.findPath(copNode, playerNode);
+
+      // Recompute the route only when the goal moves or the cache expires —
+      // otherwise reuse it, so the cop sticks to one path frame-to-frame.
+      if (!this._pathPts || playerNode !== this._goalNode || this._pathTimer <= 0) {
+        const path     = this.nav.findPath(copNode, playerNode);
+        this._pathPts  = path.map(n => this.nav.pos(n));
+        this._goalNode = playerNode;
+        this._pathTimer = this.pathRecomputeInterval;
+      }
 
       // Polyline of intersection positions, ending at the player's real position
-      const pts = path.map(n => this.nav.pos(n));
-      pts.push({ x: target.x, y: target.y });
+      const pts = this._pathPts.concat({ x: target.x, y: target.y });
 
       const near = this._carrot(pts, cx, cy, this.lookahead);
       aimX = near.x; aimY = near.y;

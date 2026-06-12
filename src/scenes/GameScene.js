@@ -535,20 +535,24 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
     lines.push('', 'WASD / Arrows — Drive', 'Space — Handbrake', 'Shift — Brake', 'C — Cop console log', 'R — Restart');
     this.debugText.setText(lines);
 
-    // Throttled console telemetry for the nearest cop
-    if (this.copLog && nearestCop && nearestCop.debug) {
+    // Throttled console telemetry for every cop
+    if (this.copLog) {
       this._copLogTimer += delta;
       if (this._copLogTimer >= 350) {
         this._copLogTimer = 0;
-        const d = nearestCop.debug;
-        console.log(
-          `[cop] ${d.mode.padEnd(14)} spd=${Math.round(d.speed).toString().padStart(3)} ` +
-          `lim=${Math.round(d.cornerLimit).toString().padStart(3)} ` +
-          `dist=${Math.round(d.dist).toString().padStart(4)} ` +
-          `bend=${(d.bend * 180 / Math.PI).toFixed(0).padStart(3)}° ` +
-          `err=${(d.angleErr * 180 / Math.PI).toFixed(0).padStart(4)}°` +
-          (d.reverseTime > 0 ? ` rev=${d.reverseTime.toFixed(2)}` : '')
-        );
+        this.cops.forEach((cop, i) => {
+          const d = cop.debug;
+          if (!d) return;
+          console.log(
+            `[cop${i}] ${(cop.hasLOS ? 'LOS ' : '    ')}${d.mode.padEnd(14)} ` +
+            `spd=${Math.round(d.speed).toString().padStart(3)} ` +
+            `lim=${Math.round(d.cornerLimit).toString().padStart(3)} ` +
+            `dist=${Math.round(d.dist).toString().padStart(4)} ` +
+            `bend=${(d.bend * 180 / Math.PI).toFixed(0).padStart(3)}° ` +
+            `err=${(d.angleErr * 180 / Math.PI).toFixed(0).padStart(4)}°` +
+            (d.reverseTime > 0 ? ` rev=${d.reverseTime.toFixed(2)}` : '')
+          );
+        });
       }
     }
   }
