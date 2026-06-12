@@ -13,6 +13,12 @@ import Phaser from 'phaser';
 //    contact instead of orbiting at speed.
 export class CopAI {
   constructor(navGrid) {
+    // ── COP BEHAVIOUR TUNING ─────────────────────────────────────────────────
+    // These constants control how the cop *decides* to drive (cornering
+    // aggression, approach/ram, stuck recovery). Cop *handling* (speed, grip,
+    // steering) lives in CopCar's stats override. Tune here for behaviour,
+    // there for the car itself.
+    // ─────────────────────────────────────────────────────────────────────────
     this.nav = navGrid;
     this.steerDeadzone = 0.05; // rad — avoid left/right jitter when nearly aligned
     this.directRange   = 120;  // within this, aim straight at the player
@@ -147,10 +153,13 @@ export class CopAI {
     // --- Throttle ---
     let mode;
     if (dist < 130) {
-      // Close approach: bleed speed so we converge and bump rather than orbit.
-      if (speed > 140)      { controls.brake = true; mode = 'APPROACH-BRAKE'; }
-      else if (absErr < 1.3){ controls.up    = true; mode = 'APPROACH'; }
-      else                    mode = 'APPROACH-COAST';
+      // Close approach. If we're lined up on the player, floor it and ram —
+      // don't bleed speed. Only brake when we're off-angle and fast, where
+      // keeping speed would overshoot into an orbit instead of converging.
+      if (absErr < 0.5)       { controls.up    = true; mode = 'RAM'; }
+      else if (speed > 140)   { controls.brake = true; mode = 'APPROACH-BRAKE'; }
+      else if (absErr < 1.3)  { controls.up    = true; mode = 'APPROACH'; }
+      else                      mode = 'APPROACH-COAST';
     } else if (speed > cornerSpeedLimit) {
       // Going too fast for the bend ahead — brake to a safe entry speed so we
       // can actually turn instead of understeering wide.
