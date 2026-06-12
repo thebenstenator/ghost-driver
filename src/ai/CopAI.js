@@ -3,17 +3,20 @@ import Phaser from 'phaser';
 // Drives a cop Vehicle toward the player along the road network.
 //
 // Behaviours (milestone 1):
-//  - Pathfind over the NavGrid (BFS) and steer toward the next intersection
-//    waypoint, so the cop follows streets instead of beelining through buildings.
-//  - Stuck detection + reverse recovery: if it wedges against a building it
-//    backs off and reorients instead of grinding the wall forever.
-//  - Approach control: as it closes on the player it bleeds speed so it actually
-//    makes contact instead of orbiting at speed.
+//  - Pathfind over the NavGrid (BFS) to a polyline of road intersections, then
+//    follow it with a lookahead "carrot" (pure-pursuit path following). This
+//    keeps the cop on the streets and rounds corners instead of cutting across
+//    building footprints toward a single far node.
+//  - Stuck detection + reverse recovery: if it wedges on a building it backs off
+//    while turning so it re-approaches at a new angle.
+//  - Approach control: as it closes on the player it bleeds speed so it makes
+//    contact instead of orbiting at speed.
 export class CopAI {
   constructor(navGrid) {
     this.nav = navGrid;
     this.steerDeadzone = 0.05; // rad — avoid left/right jitter when nearly aligned
-    this.directRange   = 150;  // within this, aim straight at the player
+    this.directRange   = 120;  // within this, aim straight at the player
+    this.lookahead     = 150;  // carrot distance ahead along the path (px)
 
     // Per-cop state
     this._stuckTime   = 0; // how long we've been barely moving while pursuing
@@ -28,16 +31,19 @@ export class CopAI {
     const dist  = Phaser.Math.Distance.Between(cx, cy, target.x, target.y);
     const speed = cop.getSpeed();
 
-    // --- Choose a steering target: a road waypoint, or the player directly ---
+    // --- Choose a steering target ---
     let aimX = target.x, aimY = target.y;
     if (dist > this.directRange) {
       const copNode    = this.nav.nearestNode(cx, cy);
       const playerNode = this.nav.nearestNode(target.x, target.y);
       const path       = this.nav.findPath(copNode, playerNode);
-      if (path.length >= 2) {
-        const wp = this.nav.pos(path[1]); // next intersection toward the player
-        aimX = wp.x; aimY = wp.y;
-      }
+
+      // Polyline of intersection positions, ending at the player's real position
+      const pts = path.map(n => this.nav.pos(n));
+      pts.push({ x: target.x, y: target.y });
+
+      const carrot = this._carrot(pts, cx, cy, this.lookahead);
+      aimX = carrot.x; aimY = carrot.y;
     }
     cop.aiTarget = { x: aimX, y: aimY }; // exposed for debug draw
 
@@ -90,5 +96,40 @@ export class CopAI {
     }
 
     return controls;
+  }
+
+  // Pure-pursuit carrot: find the closest point on the polyline to (x,y), then
+  // walk `lookahead` px forward along the polyline and return that point.
+  _carrot(pts, x, y, lookahead) {
+    // 1) closest point across all segments
+    let bestSeg = 0, bestPx = pts[0].x, bestPy = pts[0].y, bestD2 = Infinity;
+    for (let i = 0; i < pts.length - 1; i++) {
+      const a = pts[i], b = pts[i + 1];
+      const abx = b.x - a.x, aby = b.y - a.y;
+      const len2 = abx * abx + aby * aby || 1e-6;
+      let t = ((x - a.x) * abx + (y - a.y) * aby) / len2;
+      t = Math.max(0, Math.min(1, t));
+      const px = a.x + abx * t, py = a.y + aby * t;
+      const dx = x - px, dy = y - py;
+      const d2 = dx * dx + dy * dy;
+      if (d2 < bestD2) { bestD2 = d2; bestSeg = i; bestPx = px; bestPy = py; }
+    }
+
+    // 2) walk forward `lookahead` from that point
+    let remain = lookahead;
+    let curx = bestPx, cury = bestPy;
+    for (let i = bestSeg; i < pts.length - 1; i++) {
+      const b = pts[i + 1];
+      const dx = b.x - curx, dy = b.y - cury;
+      const segLen = Math.hypot(dx, dy);
+      if (segLen >= remain) {
+        const f = remain / segLen;
+        return { x: curx + dx * f, y: cury + dy * f };
+      }
+      remain -= segLen;
+      curx = b.x; cury = b.y;
+    }
+    // ran past the end of the path → aim at the final point (the player)
+    return { x: pts[pts.length - 1].x, y: pts[pts.length - 1].y };
   }
 }
