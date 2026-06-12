@@ -27,13 +27,14 @@ export class CopCar extends Vehicle {
       stats: {
         maxSpeed:     570, // just under the player's 600 — catchable on straights
         acceleration: 350, // ~ the player's 345
-        // Superhuman grip + steering (interceptor) so it corners without
-        // bleeding all its speed — less understeer than the player at speed.
-        gripLow:      0.20, // player 0.14
-        gripHigh:     0.07, // player 0.03 — much more traction at speed
-        gripSpeedRef: 450,  // player 350 — grip stays high to higher speeds
-        turnSpeedLow: 2.6,  // player 2.2
-        turnSpeed:    1.9,  // player 1.2 — turns harder at speed
+        // Modest grip + steering edge over the player (interceptor), halfway
+        // between the player's handling and a full superhuman buff — corners
+        // better than you but still goes wide enough to lose sight sometimes.
+        gripLow:      0.17, // player 0.14
+        gripHigh:     0.05, // player 0.03 — more traction at speed
+        gripSpeedRef: 400,  // player 350 — grip stays high a bit longer
+        turnSpeedLow: 2.4,  // player 2.2
+        turnSpeed:    1.55, // player 1.2 — turns harder at speed
       },
     });
 
