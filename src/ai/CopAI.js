@@ -22,6 +22,7 @@ export class CopAI {
     this.senseLookahead  = 400; // how far ahead the second carrot looks for curvature
     this.maxApproachSpeed = 600; // speed cap on a straight (effectively none)
     this.cornerMinSpeed   = 130; // speed cap through the sharpest (~90°+) corner
+    this.cornerClamp      = 0.7; // rad — carrot won't walk past a turn sharper than this
 
     // Per-cop state
     this._reverseTime  = 0;     // remaining time in a reverse-recovery maneuver
@@ -153,11 +154,14 @@ export class CopAI {
       if (d2 < bestD2) { bestD2 = d2; bestSeg = i; bestPx = px; bestPy = py; }
     }
 
-    // 2) walk forward `lookahead` from that point
+    // 2) walk forward `lookahead` from that point, but stop at a sharp turn so
+    //    the carrot never reaches past a corner (which would aim straight across
+    //    the building on the inside of the bend). The cop drives to the corner,
+    //    then the carrot advances onto the next street.
     let remain = lookahead;
     let curx = bestPx, cury = bestPy;
     for (let i = bestSeg; i < pts.length - 1; i++) {
-      const b = pts[i + 1];
+      const a = pts[i], b = pts[i + 1];
       const dx = b.x - curx, dy = b.y - cury;
       const segLen = Math.hypot(dx, dy);
       if (segLen >= remain) {
@@ -166,6 +170,15 @@ export class CopAI {
       }
       remain -= segLen;
       curx = b.x; cury = b.y;
+      // If the path turns sharply at vertex b, clamp the carrot there.
+      if (i + 2 < pts.length) {
+        const c = pts[i + 2];
+        const inAng  = Math.atan2(b.y - a.y, b.x - a.x);
+        const outAng = Math.atan2(c.y - b.y, c.x - b.x);
+        if (Math.abs(Phaser.Math.Angle.Wrap(outAng - inAng)) > this.cornerClamp) {
+          return { x: b.x, y: b.y };
+        }
+      }
     }
     // ran past the end of the path → aim at the final point (the player)
     return { x: pts[pts.length - 1].x, y: pts[pts.length - 1].y };
