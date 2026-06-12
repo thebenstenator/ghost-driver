@@ -154,6 +154,27 @@ export class GameScene extends Phaser.Scene {
     cop.searchIndex = 0;
   }
 
+  // Boids-style separation: nudge a cop's aim point away from nearby cops so
+  // they spread out and surround the target instead of piling onto one point
+  // and jamming each other.
+  _separate(cop, target) {
+    const R = 80, STRENGTH = 150;
+    let sx = 0, sy = 0;
+    for (const other of this.cops) {
+      if (other === cop) continue;
+      const dx = cop.sprite.x - other.sprite.x;
+      const dy = cop.sprite.y - other.sprite.y;
+      const d  = Math.hypot(dx, dy);
+      if (d > 0.001 && d < R) {
+        const w = (R - d) / R; // stronger the closer they are
+        sx += (dx / d) * w;
+        sy += (dy / d) * w;
+      }
+    }
+    if (sx === 0 && sy === 0) return target;
+    return { x: target.x + sx * STRENGTH, y: target.y + sy * STRENGTH };
+  }
+
   _buildWorld() {
     // Asphalt ground
     this.add.rectangle(
@@ -416,9 +437,10 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
     //  IDLE      → parked at the station (stand down)
     for (const cop of this.cops) {
       let target = null;
-      if      (state === PursuitState.ACTIVE)    target = this.car.sprite;
+      if      (state === PursuitState.ACTIVE)    target = { x: this.car.sprite.x, y: this.car.sprite.y };
       else if (state === PursuitState.SEARCH)    target = this._cooldownTarget(cop);
       else if (state === PursuitState.RETURNING) target = this.station;
+      if (target) target = this._separate(cop, target);
       cop.update(delta, target);
     }
 

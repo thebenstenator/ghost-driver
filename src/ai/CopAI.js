@@ -194,12 +194,16 @@ export class CopAI {
     } else if (absErr <= 1.3) {
       // Roughly aligned — drive.
       controls.up = true; mode = 'PURSUE';
+    } else if (absErr > 2.0) {
+      // Target is BEHIND us — a U-turn. Reverse while steering toward it: backing
+      // up swings the nose around AND pulls us off any wall we've nosed into,
+      // whereas creeping forward just drives away (often straight into a building)
+      // and at low speed there isn't enough steering authority to come around.
+      controls.down = true; mode = 'TURN-REVERSE';
     } else {
-      // Target is well off to the side or behind (hard turn / U-turn). HOLD a
-      // moderate turn speed rather than coasting: steering authority scales with
-      // speed (speedFactor ~ speed/60), so coasting to a stall kills the cop's
-      // ability to turn and it can never come around. Maintaining ~130 keeps it
-      // arcing tightly until it's pointed back at the target.
+      // Target off to the side (hard turn). HOLD a moderate turn speed rather than
+      // coasting: steering authority scales with speed (speedFactor ~ speed/60),
+      // so coasting to a stall kills the turn and it can never come around.
       const TURN_SPEED = 130;
       if (speed > TURN_SPEED + 40)      { controls.brake = true; mode = 'TURN-BRAKE'; }
       else if (speed < TURN_SPEED - 20) { controls.up = true;    mode = 'TURN'; }
