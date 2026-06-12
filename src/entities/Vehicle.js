@@ -40,6 +40,10 @@ export class Vehicle {
     this.turnSpeedLow    = 2.2;   // radians/second at low speed
     this.turnSpeed       = 1.2;   // radians/second at high speed (gripSpeedRef)
     this.maxDriftAngle   = 1.9163715186897738; // ~110°
+    // Floor on steering authority at low speed. 0 = the player's weighty
+    // "can't pivot in place" feel; cops use a higher value so they can always
+    // rotate out of a low-speed deadlock instead of getting stuck facing a wall.
+    this.minSteerFactor  = 0;
 
     this.handBrakeDrag  = 0.975;
     this.coastDrag      = 0.992;
@@ -95,7 +99,7 @@ export class Vehicle {
 
     // --- Steering ---
     // Speed-gated so the car can't spin on the spot.
-    const speedFactor = Phaser.Math.Clamp(speed / 60, 0, 1);
+    const speedFactor = Math.max(Phaser.Math.Clamp(speed / 60, 0, 1), this.minSteerFactor);
     const steerFrac   = Math.min(speed / this.gripSpeedRef, 1);
     const turnRate    = Phaser.Math.Linear(this.turnSpeedLow, this.turnSpeed, steerFrac);
     const steer       = (right ? 1 : 0) - (left ? 1 : 0);
