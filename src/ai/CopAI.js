@@ -32,14 +32,18 @@ export class CopAI {
     this._anchorX      = 0;     // where we first got stuck this cycle
     this._anchorY      = 0;
     this._anchorInit   = false;
+    this._graceTime    = 0;     // post-reverse window where stuck detection is suspended
     this._sampleTimer  = 0;     // time accumulated toward the next displacement check
     this._sampleX      = 0;     // position at the start of the current window
     this._sampleY      = 0;
     this._sampleInit   = false;
 
-    // Stuck = barely moved over a short window while still trying to pursue.
-    this.stuckWindow = 0.3; // seconds between displacement checks
-    this.stuckDist   = 12;  // px — moved less than this in a window → wedged
+    // Stuck = barely moved over a window while still pursuing. The window is long
+    // enough (and the distance high enough) that a car accelerating from a stop
+    // clears it easily — only a genuinely pinned car stays under it.
+    this.stuckWindow = 0.6; // seconds between displacement checks
+    this.stuckDist   = 20;  // px — moved less than this in a window → wedged
+    this.graceDur    = 0.5; // seconds after a reverse before stuck can re-arm
     this.escapeReset = 160; // px from the wedge before we consider ourselves free
   }
 
@@ -93,6 +97,7 @@ export class CopAI {
     // cop is guaranteed to break free rather than oscillating forever.
     if (this._reverseTime > 0) {
       this._reverseTime -= dt;
+      if (this._reverseTime <= 0) this._graceTime = this.graceDur; // let it rebuild speed
       controls.down  = true;
       controls.left  = this._escapeDir < 0;
       controls.right = this._escapeDir > 0;
@@ -110,22 +115,32 @@ export class CopAI {
     }
 
     // --- Stuck detection (displacement-based) ---
-    // "Stuck" = barely moved over a short window while still pursuing (NOT merely
-    // slow — a cop creeping through an alley is displacing). Each consecutive
-    // trigger escalates: back out longer and flip the steer direction.
-    if (!this._sampleInit) {
-      this._sampleX = cx; this._sampleY = cy; this._sampleInit = true;
-    }
-    this._sampleTimer += dt;
-    if (this._sampleTimer >= this.stuckWindow) {
-      const moved = Phaser.Math.Distance.Between(cx, cy, this._sampleX, this._sampleY);
-      if (dist > 80 && moved < this.stuckDist) {
-        if (!this._anchorInit) { this._anchorX = cx; this._anchorY = cy; this._anchorInit = true; }
-        this._stuckCount++;
-        this._escapeDir   = (this._stuckCount % 2 === 0) ? 1 : -1; // alternate each attempt
-        this._reverseTime = Math.min(0.5 + (this._stuckCount - 1) * 0.3, 1.4); // escalate duration
-      }
+    // "Stuck" = barely moved over the window while still pursuing (NOT merely
+    // slow — a car accelerating from a stop, or creeping through an alley, is
+    // displacing). Suspended briefly after a reverse so the cop can rebuild speed
+    // before we re-check. Each consecutive trigger escalates the recovery.
+    if (this._graceTime > 0) {
+      this._graceTime -= dt;
       this._sampleX = cx; this._sampleY = cy; this._sampleTimer = 0;
+    } else {
+      if (!this._sampleInit) {
+        this._sampleX = cx; this._sampleY = cy; this._sampleInit = true;
+      }
+      this._sampleTimer += dt;
+      if (this._sampleTimer >= this.stuckWindow) {
+        const moved = Phaser.Math.Distance.Between(cx, cy, this._sampleX, this._sampleY);
+        if (dist > 80 && moved < this.stuckDist) {
+          if (!this._anchorInit) { this._anchorX = cx; this._anchorY = cy; this._anchorInit = true; }
+          this._stuckCount++;
+          this._escapeDir   = (this._stuckCount % 2 === 0) ? 1 : -1; // alternate each attempt
+          this._reverseTime = Math.min(0.5 + (this._stuckCount - 1) * 0.3, 1.4); // escalate duration
+        } else {
+          // Made progress this window — clear any escalation.
+          this._stuckCount = 0;
+          this._anchorInit = false;
+        }
+        this._sampleX = cx; this._sampleY = cy; this._sampleTimer = 0;
+      }
     }
 
     // --- Throttle ---
