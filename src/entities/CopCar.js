@@ -15,7 +15,7 @@ import { CopAI } from '../ai/CopAI.js';
 // in here; for now this is the single "level 1 patrol" profile.
 // ───────────────────────────────────────────────────────────────────────────
 export class CopCar extends Vehicle {
-  constructor(scene, x, y, navGrid) {
+  constructor(scene, x, y, navGrid, rects = null) {
     super(scene, x, y, {
       texture: 'player_car',
       displayWidth: 38,
@@ -38,7 +38,7 @@ export class CopCar extends Vehicle {
       },
     });
 
-    this.ai = new CopAI(navGrid);
+    this.ai = new CopAI(navGrid, rects);
     this.aiTarget = { x, y }; // current steering target, for debug draw
   }
 

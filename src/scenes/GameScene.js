@@ -107,7 +107,7 @@ export class GameScene extends Phaser.Scene {
   }
 
   _spawnCop(x, y) {
-    const cop = new CopCar(this, x, y, this.navGrid);
+    const cop = new CopCar(this, x, y, this.navGrid, this.losRects);
     this.physics.add.collider(cop.sprite, this.walls);
     this.physics.add.collider(cop.sprite, this.car.sprite);
     // Cops bump off each other rather than stacking

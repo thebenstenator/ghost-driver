@@ -1,4 +1,5 @@
 import Phaser from 'phaser';
+import { segmentClear } from './lineOfSight.js';
 
 // Drives a cop Vehicle toward the player along the road network.
 //
@@ -12,7 +13,8 @@ import Phaser from 'phaser';
 //  - Approach control: as it closes on the player it bleeds speed so it makes
 //    contact instead of orbiting at speed.
 export class CopAI {
-  constructor(navGrid) {
+  constructor(navGrid, rects = null) {
+    this.rects = rects; // building footprints, for the "don't aim through a wall" safety net
     // ── COP BEHAVIOUR TUNING ─────────────────────────────────────────────────
     // These constants control how the cop *decides* to drive (cornering
     // aggression, approach/ram, stuck recovery). Cop *handling* (speed, grip,
@@ -86,6 +88,14 @@ export class CopAI {
       bend       = Math.abs(Phaser.Math.Angle.Wrap(h2 - h1)); // 0..π
       const t    = Math.min(bend / (Math.PI / 2), 1);         // 90°+ bend = full severity
       cornerSpeedLimit = Phaser.Math.Linear(this.maxApproachSpeed, this.cornerMinSpeed, t);
+
+      // Safety net: never steer in a straight line through a building. If the aim
+      // point is blocked, fall back to the cop's own nearest road node, which is
+      // always reachable along the road it's currently on.
+      if (this.rects && !segmentClear(cx, cy, aimX, aimY, this.rects)) {
+        const np = this.nav.pos(copNode);
+        aimX = np.x; aimY = np.y;
+      }
     }
     cop.aiTarget = { x: aimX, y: aimY }; // exposed for debug draw
 
