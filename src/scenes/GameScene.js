@@ -77,6 +77,7 @@ export class GameScene extends Phaser.Scene {
     this.sightRange = 650;             // px — cop spotting range in clear line
     this.sepRadius  = 80;              // separation: how close before cops repel
     this.sepStrength = 150;            // separation: aim push strength
+    this.searchSpeed = 250;            // cop speed cap while searching (clean corners)
     this.pursuit    = new Pursuit(10, 15); // 10s to ditch, then 15s of hot search
     // Station the cops withdraw to once the heat cools (SE corner, for testing)
     this.station    = this.navGrid.pos(this.navGrid.index(this.navGrid.cols - 1, this.navGrid.rows - 1));
@@ -111,6 +112,7 @@ export class GameScene extends Phaser.Scene {
 
   _spawnCop(x, y) {
     const cop = new CopCar(this, x, y, this.navGrid, this.losRects);
+    cop.searchSlot = this.cops.length; // 0,1,2… — its angular sector when searching
     // Floating debug label so each cop's AI state is visible in the world
     cop.modeLabel = this.add.text(x, y, '', {
       fontFamily: 'monospace', fontSize: '11px', color: '#ffffff',
@@ -129,7 +131,7 @@ export class GameScene extends Phaser.Scene {
   // player. Reaching the player's true location while searching re-acquires line
   // of sight elsewhere in the loop and snaps back to ACTIVE.
   _cooldownTarget(cop) {
-    const ARRIVE = 70; // px — close enough to count as "reached"
+    const ARRIVE = 120; // px — "general area" is close enough; no need to hit the exact point
     const lk = this.pursuit.lastKnown;
 
     if (!cop.searching) {
@@ -153,7 +155,21 @@ export class GameScene extends Phaser.Scene {
   _buildSearchRoute(cop, x, y) {
     const start = this.navGrid.nearestNode(x, y);
     const nodes = this.navGrid.nodesInRange(start, 3); // ~3 intersections outward
-    cop.searchRoute = nodes.map(n => this.navGrid.pos(n));
+
+    // Each cop favours its own angular sector around the search centre, so the
+    // pack fans out to cover different streets instead of sweeping the same ones.
+    const n = Math.max(1, this.cops.length);
+    const prefAngle = (cop.searchSlot || 0) * (2 * Math.PI / n);
+    const scored = nodes.map(idx => {
+      const p   = this.navGrid.pos(idx);
+      const dx  = p.x - x, dy = p.y - y;
+      const ring = Math.round(Math.hypot(dx, dy) / 250); // expand outward ring by ring
+      const angDiff = Math.abs(Phaser.Math.Angle.Wrap(Math.atan2(dy, dx) - prefAngle));
+      return { p, ring, angDiff };
+    });
+    scored.sort((a, b) => (a.ring - b.ring) || (a.angDiff - b.angDiff));
+
+    cop.searchRoute = scored.map(s => s.p);
     cop.searchIndex = 0;
   }
 
@@ -418,6 +434,7 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
       senseLookahead: a.senseLookahead, cornerClamp: a.cornerClamp,
       lookahead: a.lookahead, directRange: a.directRange,
       sepRadius: this.sepRadius, sepStrength: this.sepStrength,
+      searchSpeed: this.searchSpeed,
     };
 
     const gui = new GUI({ title: 'Cop Tuning', width: 300 });
@@ -444,9 +461,10 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
     corner.add(this.copTuning, 'cornerClamp',    0.5, 2.5, 0.05).name('Corner clamp (rad)').onChange(apply);
     corner.add(this.copTuning, 'directRange',    50,  400, 10).name('Direct-aim range').onChange(apply);
 
-    const pack = gui.addFolder('Pack');
+    const pack = gui.addFolder('Pack & Search');
     pack.add(this.copTuning, 'sepRadius',   0, 250, 5).name('Separation radius').onChange(apply);
     pack.add(this.copTuning, 'sepStrength', 0, 400, 5).name('Separation strength').onChange(apply);
+    pack.add(this.copTuning, 'searchSpeed', 80, 600, 10).name('Search speed cap').onChange(apply);
 
     gui.add({ copyStats: () => {
       const t = this.copTuning;
@@ -480,6 +498,7 @@ sepRadius: ${t.sepRadius}, sepStrength: ${t.sepStrength}`);
     }
     this.sepRadius = t.sepRadius;
     this.sepStrength = t.sepStrength;
+    this.searchSpeed = t.searchSpeed;
   }
 
   update(_time, delta) {
@@ -537,6 +556,8 @@ sepRadius: ${t.sepRadius}, sepStrength: ${t.sepStrength}`);
       else if (state === PursuitState.SEARCH)    target = this._cooldownTarget(cop);
       else if (state === PursuitState.RETURNING) target = this.station;
       if (target) target = this._separate(cop, target);
+      // Cap speed while searching so cops corner cleanly instead of overshooting
+      cop.ai.speedCap = (state === PursuitState.SEARCH) ? this.searchSpeed : Infinity;
       cop.update(delta, target);
     }
 

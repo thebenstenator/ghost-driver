@@ -31,6 +31,7 @@ export class CopAI {
     this.maxApproachSpeed = 600; // speed cap on a straight (effectively none)
     this.cornerMinSpeed   = 190; // speed cap through the sharpest (~90°+) corner
     this.turnHoldSpeed    = 130; // speed held while turning hard / U-turning
+    this.speedCap         = Infinity; // hard speed ceiling (lowered during search)
     this.cornerClamp      = 1.1; // rad (~63°) — only clamp near-90° grid corners,
                                  // not the shallow off-grid bend toward the player
 
@@ -186,9 +187,9 @@ export class CopAI {
       else if (speed > 140)   { controls.brake = true; mode = 'APPROACH-BRAKE'; }
       else if (absErr < 1.3)  { controls.up    = true; mode = 'APPROACH'; }
       else                      mode = 'APPROACH-COAST';
-    } else if (speed > cornerSpeedLimit) {
-      // Going too fast for the bend ahead — brake to a safe entry speed so we
-      // can actually turn instead of understeering wide.
+    } else if (speed > Math.min(cornerSpeedLimit, this.speedCap)) {
+      // Going too fast for the bend ahead (or over our search speed cap) — brake
+      // so we can actually turn instead of understeering wide.
       controls.brake = true;
       mode = 'CORNER-BRAKE';
     } else if (absErr <= 1.3) {
