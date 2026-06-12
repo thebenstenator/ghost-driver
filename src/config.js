@@ -3,8 +3,8 @@ export const GAME_HEIGHT = 720;
 
 // --- City grid layout ---
 // BLOCK×BLOCK buildings separated by ROAD-wide streets, with a MARGIN border.
-export const GRID_COLS = 6;
-export const GRID_ROWS = 6;
+export const GRID_COLS = 12;
+export const GRID_ROWS = 12;
 export const BLOCK     = 376;
 export const ROAD      = 128;
 export const MARGIN    = 80;
