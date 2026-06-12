@@ -24,8 +24,16 @@ export class CopAI {
     this.cornerMinSpeed   = 130; // speed cap through the sharpest (~90°+) corner
 
     // Per-cop state
-    this._stuckTime   = 0; // how long we've been barely moving while pursuing
-    this._reverseTime = 0; // remaining time in a reverse-recovery maneuver
+    this._reverseTime  = 0;     // remaining time in a reverse-recovery maneuver
+    this._sampleTimer  = 0;     // time accumulated toward the next displacement check
+    this._sampleX      = 0;     // position at the start of the current window
+    this._sampleY      = 0;
+    this._sampleInit   = false;
+
+    // Stuck = barely moved over a short window while still trying to pursue.
+    this.stuckWindow = 0.3; // seconds between displacement checks
+    this.stuckDist   = 12;  // px — moved less than this in a window → wedged
+    this.reverseDur  = 0.5; // seconds to back out when stuck
   }
 
   // Returns { up, down, left, right, handbrake, brake }
@@ -39,6 +47,7 @@ export class CopAI {
     // --- Choose a steering target + sense the upcoming corner ---
     let aimX = target.x, aimY = target.y;
     let cornerSpeedLimit = this.maxApproachSpeed;
+    let bend = 0;
     if (dist > this.directRange) {
       const copNode    = this.nav.nearestNode(cx, cy);
       const playerNode = this.nav.nearestNode(target.x, target.y);
@@ -56,7 +65,7 @@ export class CopAI {
       const far  = this._carrot(pts, cx, cy, this.senseLookahead);
       const h1   = Math.atan2(near.y - cy, near.x - cx);
       const h2   = Math.atan2(far.y - near.y, far.x - near.x);
-      const bend = Math.abs(Phaser.Math.Angle.Wrap(h2 - h1)); // 0..π
+      bend       = Math.abs(Phaser.Math.Angle.Wrap(h2 - h1)); // 0..π
       const t    = Math.min(bend / (Math.PI / 2), 1);         // 90°+ bend = full severity
       cornerSpeedLimit = Phaser.Math.Linear(this.maxApproachSpeed, this.cornerMinSpeed, t);
     }
@@ -74,6 +83,8 @@ export class CopAI {
     // Back off while turning, so we both pull away from the obstacle and change
     // our heading. Force a turn even when "aligned" — otherwise a cop wedged
     // straight into a wall just reverses and re-approaches the same spot forever.
+    // Keep the displacement sample pinned to here so we don't instantly re-trigger
+    // once we resume.
     if (this._reverseTime > 0) {
       this._reverseTime -= dt;
       controls.down  = true;
@@ -82,36 +93,46 @@ export class CopAI {
       if (absErr < 0.3) controls.right = true;        // pointed at the wall: pick a side to swing out
       else if (angleErr > 0) controls.right = true;   // otherwise rotate toward the target
       else controls.left = true;
+      this._sampleX = cx; this._sampleY = cy; this._sampleTimer = 0;
+      cop.debug = { mode: 'REVERSE', speed, dist, bend: 0, cornerLimit: cornerSpeedLimit,
+                    angleErr, reverseTime: this._reverseTime };
       return controls;
     }
 
-    // --- Stuck detection ---
-    // Barely moving while not already on top of the player → we're wedged.
-    if (dist > 80 && speed < 40) {
-      this._stuckTime += dt;
-      if (this._stuckTime > 0.22) {
-        this._reverseTime = 0.7;
-        this._stuckTime   = 0;
-      }
-    } else {
-      this._stuckTime = Math.max(0, this._stuckTime - dt * 2);
+    // --- Stuck detection (displacement-based) ---
+    // "Stuck" means we've barely moved over a short window while still pursuing —
+    // NOT merely going slow. A cop creeping through a narrow alley is displacing,
+    // so it won't false-trigger; only a genuinely wedged car stays put.
+    if (!this._sampleInit) {
+      this._sampleX = cx; this._sampleY = cy; this._sampleInit = true;
+    }
+    this._sampleTimer += dt;
+    if (this._sampleTimer >= this.stuckWindow) {
+      const moved = Phaser.Math.Distance.Between(cx, cy, this._sampleX, this._sampleY);
+      if (dist > 80 && moved < this.stuckDist) this._reverseTime = this.reverseDur;
+      this._sampleX = cx; this._sampleY = cy; this._sampleTimer = 0;
     }
 
     // --- Throttle ---
+    let mode;
     if (dist < 130) {
       // Close approach: bleed speed so we converge and bump rather than orbit.
-      if (speed > 140)        controls.brake = true;
-      else if (absErr < 1.3)  controls.up    = true;
+      if (speed > 140)      { controls.brake = true; mode = 'APPROACH-BRAKE'; }
+      else if (absErr < 1.3){ controls.up    = true; mode = 'APPROACH'; }
+      else                    mode = 'APPROACH-COAST';
     } else if (speed > cornerSpeedLimit) {
       // Going too fast for the bend ahead — brake to a safe entry speed so we
       // can actually turn instead of understeering wide.
       controls.brake = true;
+      mode = 'CORNER-BRAKE';
     } else {
       // Open pursuit: accelerate when roughly aligned; creep forward when slow
       // so a car that's pointed wrong can still arc around (can't turn in place).
-      if (absErr < 1.3 || speed < 110) controls.up = true;
+      if (absErr < 1.3 || speed < 110) { controls.up = true; mode = 'PURSUE'; }
+      else                               mode = 'COAST-TURN';
     }
 
+    cop.debug = { mode, speed, dist, bend, cornerLimit: cornerSpeedLimit, angleErr, reverseTime: 0 };
     return controls;
   }
 
