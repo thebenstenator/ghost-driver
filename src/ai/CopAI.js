@@ -22,10 +22,16 @@ export class CopAI {
     this.senseLookahead  = 400; // how far ahead the second carrot looks for curvature
     this.maxApproachSpeed = 600; // speed cap on a straight (effectively none)
     this.cornerMinSpeed   = 130; // speed cap through the sharpest (~90°+) corner
-    this.cornerClamp      = 0.7; // rad — carrot won't walk past a turn sharper than this
+    this.cornerClamp      = 1.1; // rad (~63°) — only clamp near-90° grid corners,
+                                 // not the shallow off-grid bend toward the player
 
     // Per-cop state
     this._reverseTime  = 0;     // remaining time in a reverse-recovery maneuver
+    this._escapeDir    = 1;     // which way to steer while backing out (alternates)
+    this._stuckCount   = 0;     // consecutive stuck triggers without escaping
+    this._anchorX      = 0;     // where we first got stuck this cycle
+    this._anchorY      = 0;
+    this._anchorInit   = false;
     this._sampleTimer  = 0;     // time accumulated toward the next displacement check
     this._sampleX      = 0;     // position at the start of the current window
     this._sampleY      = 0;
@@ -34,7 +40,7 @@ export class CopAI {
     // Stuck = barely moved over a short window while still trying to pursue.
     this.stuckWindow = 0.3; // seconds between displacement checks
     this.stuckDist   = 12;  // px — moved less than this in a window → wedged
-    this.reverseDur  = 0.5; // seconds to back out when stuck
+    this.escapeReset = 160; // px from the wedge before we consider ourselves free
   }
 
   // Returns { up, down, left, right, handbrake, brake }
@@ -81,36 +87,44 @@ export class CopAI {
     else if (angleErr < -this.steerDeadzone) controls.left  = true;
 
     // --- Reverse recovery (in progress) ---
-    // Back off while turning, so we both pull away from the obstacle and change
-    // our heading. Force a turn even when "aligned" — otherwise a cop wedged
-    // straight into a wall just reverses and re-approaches the same spot forever.
-    // Keep the displacement sample pinned to here so we don't instantly re-trigger
-    // once we resume.
+    // Back out while turning hard in one consistent direction so we trace a wide
+    // arc and actually relocate (not just nudge off and re-wedge). The direction
+    // alternates each attempt and the duration escalates (see below), so a stuck
+    // cop is guaranteed to break free rather than oscillating forever.
     if (this._reverseTime > 0) {
       this._reverseTime -= dt;
       controls.down  = true;
-      controls.left  = false;
-      controls.right = false;
-      if (absErr < 0.3) controls.right = true;        // pointed at the wall: pick a side to swing out
-      else if (angleErr > 0) controls.right = true;   // otherwise rotate toward the target
-      else controls.left = true;
+      controls.left  = this._escapeDir < 0;
+      controls.right = this._escapeDir > 0;
       this._sampleX = cx; this._sampleY = cy; this._sampleTimer = 0;
-      cop.debug = { mode: 'REVERSE', speed, dist, bend: 0, cornerLimit: cornerSpeedLimit,
-                    angleErr, reverseTime: this._reverseTime };
+      cop.debug = { mode: 'REVERSE', speed, dist, bend, cornerLimit: cornerSpeedLimit,
+                    angleErr, reverseTime: this._reverseTime, stuckCount: this._stuckCount };
       return controls;
     }
 
+    // Once we've moved well clear of where we got stuck, reset the escalation.
+    if (this._anchorInit &&
+        Phaser.Math.Distance.Between(cx, cy, this._anchorX, this._anchorY) > this.escapeReset) {
+      this._anchorInit = false;
+      this._stuckCount = 0;
+    }
+
     // --- Stuck detection (displacement-based) ---
-    // "Stuck" means we've barely moved over a short window while still pursuing —
-    // NOT merely going slow. A cop creeping through a narrow alley is displacing,
-    // so it won't false-trigger; only a genuinely wedged car stays put.
+    // "Stuck" = barely moved over a short window while still pursuing (NOT merely
+    // slow — a cop creeping through an alley is displacing). Each consecutive
+    // trigger escalates: back out longer and flip the steer direction.
     if (!this._sampleInit) {
       this._sampleX = cx; this._sampleY = cy; this._sampleInit = true;
     }
     this._sampleTimer += dt;
     if (this._sampleTimer >= this.stuckWindow) {
       const moved = Phaser.Math.Distance.Between(cx, cy, this._sampleX, this._sampleY);
-      if (dist > 80 && moved < this.stuckDist) this._reverseTime = this.reverseDur;
+      if (dist > 80 && moved < this.stuckDist) {
+        if (!this._anchorInit) { this._anchorX = cx; this._anchorY = cy; this._anchorInit = true; }
+        this._stuckCount++;
+        this._escapeDir   = (this._stuckCount % 2 === 0) ? 1 : -1; // alternate each attempt
+        this._reverseTime = Math.min(0.5 + (this._stuckCount - 1) * 0.3, 1.4); // escalate duration
+      }
       this._sampleX = cx; this._sampleY = cy; this._sampleTimer = 0;
     }
 
