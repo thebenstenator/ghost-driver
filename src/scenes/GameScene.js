@@ -251,6 +251,17 @@ export class GameScene extends Phaser.Scene {
       this.copLog = !this.copLog;
       console.log(`[cop telemetry] ${this.copLog ? 'ON' : 'OFF'}`);
     });
+
+    // Spectate: press V to cycle the camera through player → each cop. While
+    // viewing a cop, the car is frozen so you can watch a search without driving.
+    this.camFocusIndex = 0; // 0 = player, 1..N = cop index + 1
+    this.input.keyboard.on('keydown-V', () => {
+      this.camFocusIndex = (this.camFocusIndex + 1) % (1 + this.cops.length);
+      const sprite = this.camFocusIndex === 0
+        ? this.car.sprite
+        : this.cops[this.camFocusIndex - 1].sprite;
+      this.cameras.main.startFollow(sprite, true, 0.1, 0.1);
+    });
   }
 
   _setupDebugOverlay() {
@@ -478,14 +489,19 @@ sepRadius: ${t.sepRadius}, sepStrength: ${t.sepStrength}`);
       return;
     }
 
-    const controls = {
-      up:        this.cursors.up.isDown    || this.wasd.W.isDown,
-      down:      this.cursors.down.isDown  || this.wasd.S.isDown,
-      left:      this.cursors.left.isDown  || this.wasd.A.isDown,
-      right:     this.cursors.right.isDown || this.wasd.D.isDown,
-      handbrake: this.cursors.space.isDown,
-      brake:     this.shiftKey.isDown,
-    };
+    // While spectating a cop (camera not on the player), freeze the car so the
+    // observer can't accidentally drive or re-trigger anything.
+    const spectating = this.camFocusIndex !== 0;
+    const controls = spectating
+      ? { up: false, down: false, left: false, right: false, handbrake: false, brake: false }
+      : {
+          up:        this.cursors.up.isDown    || this.wasd.W.isDown,
+          down:      this.cursors.down.isDown  || this.wasd.S.isDown,
+          left:      this.cursors.left.isDown  || this.wasd.A.isDown,
+          right:     this.cursors.right.isDown || this.wasd.D.isDown,
+          handbrake: this.cursors.space.isDown,
+          brake:     this.shiftKey.isDown,
+        };
 
     this.car.update(delta, controls);
 
@@ -574,19 +590,20 @@ sepRadius: ${t.sepRadius}, sepStrength: ${t.sepStrength}`);
     this.aiDebug.lineStyle(2, 0x4a90ff, 0.6);
     this.aiDebug.strokeRect(this.station.x - 24, this.station.y - 24, 48, 48);
 
-    // Zoom out as speed increases. Reference against natural terminal (~450) rather
-    // than the hard cap so the full zoom range is visible during normal driving.
-    const speed      = this.car.getSpeed();
+    const speed = this.car.getSpeed();
 
-    // Camera look-ahead: offset toward current velocity so the player
-    // sees more of the road ahead at speed
-    const lookX = this.car.vx * 0.15;
-    const lookY = this.car.vy * 0.15;
-    this.cameras.main.setFollowOffset(-lookX, -lookY);
-    const targetZoom = Phaser.Math.Linear(1.0, 0.62, Math.min(speed / 450, 1));
-    this.cameras.main.zoom = Phaser.Math.Linear(
-      this.cameras.main.zoom, targetZoom, 0.04
-    );
+    // Camera: when following the player, add speed-based look-ahead and zoom-out.
+    // When spectating a cop, sit centered on it at neutral zoom.
+    if (!spectating) {
+      const lookX = this.car.vx * 0.15;
+      const lookY = this.car.vy * 0.15;
+      this.cameras.main.setFollowOffset(-lookX, -lookY);
+      const targetZoom = Phaser.Math.Linear(1.0, 0.62, Math.min(speed / 450, 1));
+      this.cameras.main.zoom = Phaser.Math.Linear(this.cameras.main.zoom, targetZoom, 0.04);
+    } else {
+      this.cameras.main.setFollowOffset(0, 0);
+      this.cameras.main.zoom = Phaser.Math.Linear(this.cameras.main.zoom, 1.0, 0.06);
+    }
 
 
     // --- Pursuit HUD ---
@@ -608,12 +625,14 @@ sepRadius: ${t.sepRadius}, sepStrength: ${t.sepStrength}`);
     }
 
     // Debug overlay
+    const view = this.camFocusIndex === 0 ? 'PLAYER' : `COP ${this.camFocusIndex - 1}`;
     const lines = [
       `FPS:   ${Math.round(this.game.loop.actualFps)}`,
       `Speed: ${Math.round(speed)} px/s`,
       `Cops:  ${this.cops.length}`,
       `State: ${state}`,
       `Bust:  ${Math.round(this.bust.value)}%${this.bust.pinned ? ' PINNED' : ''}`,
+      `View:  ${view}${spectating ? ' (car frozen)' : ''}`,
     ];
 
     // Nearest cop + its AI state
@@ -634,7 +653,7 @@ sepRadius: ${t.sepRadius}, sepStrength: ${t.sepStrength}`);
       }
     }
     if (this.car.isDrifting) lines.push('[HANDBRAKE DRIFT]');
-    lines.push('', 'WASD / Arrows — Drive', 'Space — Handbrake', 'Shift — Brake', 'C — Cop console log', 'R — Restart');
+    lines.push('', 'WASD / Arrows — Drive', 'Space — Handbrake', 'Shift — Brake', 'C — Cop console log', 'V — Cycle camera', 'R — Restart');
     this.debugText.setText(lines);
 
     // Throttled console telemetry for every cop
