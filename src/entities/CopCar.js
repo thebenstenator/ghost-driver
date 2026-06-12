@@ -16,8 +16,8 @@ export class CopCar extends Vehicle {
       tint: 0xffffff,   // flat white silhouette so cops pop against the dark map
       tintFill: true,
       stats: {
-        maxSpeed:     570,
-        acceleration: 350,
+        maxSpeed:     660, // faster than the player's 600 so it can run you down
+        acceleration: 430, // and out-accelerates the player's 345 off the line
       },
     });
 
