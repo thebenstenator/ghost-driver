@@ -157,6 +157,14 @@ export class GameScene extends Phaser.Scene {
     this.cursors   = this.input.keyboard.createCursorKeys(); // includes .space
     this.wasd      = this.input.keyboard.addKeys('W,A,S,D');
     this.shiftKey  = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.SHIFT);
+
+    // Cop telemetry: press C to toggle throttled console logging of cop state
+    this.copLog       = false;
+    this._copLogTimer = 0;
+    this.input.keyboard.on('keydown-C', () => {
+      this.copLog = !this.copLog;
+      console.log(`[cop telemetry] ${this.copLog ? 'ON' : 'OFF'}`);
+    });
   }
 
   _setupDebugOverlay() {
@@ -284,14 +292,43 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
       `Speed: ${Math.round(speed)} px/s`,
       `Cops:  ${this.cops.length}`,
     ];
-    if (this.cops.length) {
-      const nearest = Math.min(...this.cops.map(c =>
-        Phaser.Math.Distance.Between(c.sprite.x, c.sprite.y, this.car.sprite.x, this.car.sprite.y)
-      ));
-      lines.push(`Nearest cop: ${Math.round(nearest)} px`);
+
+    // Nearest cop + its AI state
+    let nearestCop = null, nearestDist = Infinity;
+    for (const c of this.cops) {
+      const d = Phaser.Math.Distance.Between(c.sprite.x, c.sprite.y, this.car.sprite.x, this.car.sprite.y);
+      if (d < nearestDist) { nearestDist = d; nearestCop = c; }
+    }
+    if (nearestCop) {
+      const d = nearestCop.debug;
+      lines.push(`Nearest cop: ${Math.round(nearestDist)} px`);
+      if (d) {
+        lines.push(
+          `  mode:  ${d.mode}`,
+          `  speed: ${Math.round(d.speed)}  limit: ${Math.round(d.cornerLimit)}`,
+          `  bend:  ${(d.bend * 180 / Math.PI).toFixed(0)}°  err: ${(d.angleErr * 180 / Math.PI).toFixed(0)}°`
+        );
+      }
     }
     if (this.car.isDrifting) lines.push('[HANDBRAKE DRIFT]');
-    lines.push('', 'WASD / Arrows — Drive', 'Space — Handbrake', 'Shift — Brake');
+    lines.push('', 'WASD / Arrows — Drive', 'Space — Handbrake', 'Shift — Brake', 'C — Cop console log');
     this.debugText.setText(lines);
+
+    // Throttled console telemetry for the nearest cop
+    if (this.copLog && nearestCop && nearestCop.debug) {
+      this._copLogTimer += delta;
+      if (this._copLogTimer >= 350) {
+        this._copLogTimer = 0;
+        const d = nearestCop.debug;
+        console.log(
+          `[cop] ${d.mode.padEnd(14)} spd=${Math.round(d.speed).toString().padStart(3)} ` +
+          `lim=${Math.round(d.cornerLimit).toString().padStart(3)} ` +
+          `dist=${Math.round(d.dist).toString().padStart(4)} ` +
+          `bend=${(d.bend * 180 / Math.PI).toFixed(0).padStart(3)}° ` +
+          `err=${(d.angleErr * 180 / Math.PI).toFixed(0).padStart(4)}°` +
+          (d.reverseTime > 0 ? ` rev=${d.reverseTime.toFixed(2)}` : '')
+        );
+      }
+    }
   }
 }
