@@ -1,16 +1,12 @@
 import Phaser from 'phaser';
 import GUI from 'lil-gui';
 import { PlayerCar } from '../entities/PlayerCar.js';
-import { WORLD_WIDTH, WORLD_HEIGHT } from '../config.js';
-
-// City block layout — generated from grid constants.
-// Each slot is BLOCK×BLOCK px, separated by ROAD px streets, with MARGIN px border.
-const GRID_COLS  = 6;
-const GRID_ROWS  = 6;
-const BLOCK      = 376;
-const ROAD       = 128;
-const MARGIN     = 80;
-const GRID_STEP  = BLOCK + ROAD; // 504
+import { CopCar } from '../entities/CopCar.js';
+import { NavGrid } from '../ai/NavGrid.js';
+import {
+  WORLD_WIDTH, WORLD_HEIGHT,
+  GRID_COLS, GRID_ROWS, BLOCK, ROAD, MARGIN, GRID_STEP,
+} from '../config.js';
 
 // Building sizes cycle through slight variations for visual interest
 const W_SIZES = [350, 340, 360, 330, 355, 345];
@@ -72,6 +68,15 @@ export class GameScene extends Phaser.Scene {
 
     this.physics.add.collider(this.car.sprite, this.walls);
 
+    // --- Cops ---
+    // Milestone 1: one cop spawned a few blocks away that pursues the player.
+    this.navGrid = new NavGrid();
+    this.cops = [];
+    this._spawnCop(WORLD_WIDTH / 2, WORLD_HEIGHT / 2 - 700);
+
+    // Debug graphics for AI steering targets
+    this.aiDebug = this.add.graphics().setDepth(50);
+
     // Camera follows with slight lag for a sense of speed
     this.cameras.main.startFollow(this.car.sprite, true, 0.1, 0.1);
     this.cameras.main.setZoom(1.0);
@@ -79,6 +84,16 @@ export class GameScene extends Phaser.Scene {
     this._setupInput();
     this._setupDebugOverlay();
     this._setupTunePanel();
+  }
+
+  _spawnCop(x, y) {
+    const cop = new CopCar(this, x, y, this.navGrid);
+    this.physics.add.collider(cop.sprite, this.walls);
+    this.physics.add.collider(cop.sprite, this.car.sprite);
+    // Cops bump off each other rather than stacking
+    for (const other of this.cops) this.physics.add.collider(cop.sprite, other.sprite);
+    this.cops.push(cop);
+    return cop;
   }
 
   _buildWorld() {
@@ -235,6 +250,19 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
 
     this.car.update(delta, controls);
 
+    // Cops pursue the player
+    for (const cop of this.cops) cop.update(delta, this.car.sprite);
+
+    // Debug: draw each cop's current steering target
+    this.aiDebug.clear();
+    this.aiDebug.lineStyle(1, 0xffaa00, 0.5);
+    for (const cop of this.cops) {
+      if (!cop.aiTarget) continue;
+      this.aiDebug.lineBetween(cop.sprite.x, cop.sprite.y, cop.aiTarget.x, cop.aiTarget.y);
+      this.aiDebug.fillStyle(0xffaa00, 0.8);
+      this.aiDebug.fillCircle(cop.aiTarget.x, cop.aiTarget.y, 5);
+    }
+
     // Zoom out as speed increases. Reference against natural terminal (~450) rather
     // than the hard cap so the full zoom range is visible during normal driving.
     const speed      = this.car.getSpeed();
@@ -254,7 +282,14 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
     const lines = [
       `FPS:   ${Math.round(this.game.loop.actualFps)}`,
       `Speed: ${Math.round(speed)} px/s`,
+      `Cops:  ${this.cops.length}`,
     ];
+    if (this.cops.length) {
+      const nearest = Math.min(...this.cops.map(c =>
+        Phaser.Math.Distance.Between(c.sprite.x, c.sprite.y, this.car.sprite.x, this.car.sprite.y)
+      ));
+      lines.push(`Nearest cop: ${Math.round(nearest)} px`);
+    }
     if (this.car.isDrifting) lines.push('[HANDBRAKE DRIFT]');
     lines.push('', 'WASD / Arrows — Drive', 'Space — Handbrake', 'Shift — Brake');
     this.debugText.setText(lines);
