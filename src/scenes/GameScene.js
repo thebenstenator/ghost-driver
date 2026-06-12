@@ -5,6 +5,7 @@ import { CopCar } from '../entities/CopCar.js';
 import { NavGrid } from '../ai/NavGrid.js';
 import { segmentClear } from '../ai/lineOfSight.js';
 import { Pursuit, PursuitState } from '../systems/Pursuit.js';
+import { BustMeter } from '../systems/BustMeter.js';
 import {
   WORLD_WIDTH, WORLD_HEIGHT,
   GRID_COLS, GRID_ROWS, BLOCK, ROAD, MARGIN, GRID_STEP,
@@ -86,6 +87,10 @@ export class GameScene extends Phaser.Scene {
 
     // The chase is already underway when the mission starts
     this.pursuit.begin(this.car.sprite.x, this.car.sprite.y);
+
+    // Lose condition
+    this.bust   = new BustMeter();
+    this.busted = false;
 
     // Debug graphics for AI steering targets + line of sight
     this.aiDebug = this.add.graphics().setDepth(50);
@@ -208,6 +213,7 @@ export class GameScene extends Phaser.Scene {
     this.cursors   = this.input.keyboard.createCursorKeys(); // includes .space
     this.wasd      = this.input.keyboard.addKeys('W,A,S,D');
     this.shiftKey  = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.SHIFT);
+    this.restartKey = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.R);
 
     // Cop telemetry: press C to toggle throttled console logging of cop state
     this.copLog       = false;
@@ -253,6 +259,36 @@ export class GameScene extends Phaser.Scene {
       fontStyle: 'bold',
       color: '#39ff14',
     }).setOrigin(0.5).setScrollFactor(0).setDepth(100).setAlpha(0);
+
+    // Bust meter bar (bottom centre) + its label
+    this.bustGfx = this.add.graphics().setScrollFactor(0).setDepth(100);
+    this.bustLabel = this.add.text(width / 2, this.scale.height - 52, 'BUST', {
+      fontFamily: 'monospace', fontSize: '12px', fontStyle: 'bold', color: '#ffffff',
+    }).setOrigin(0.5, 1).setScrollFactor(0).setDepth(100).setAlpha(0);
+
+    // BUSTED overlay
+    this.bustedText = this.add.text(width / 2, this.scale.height / 2,
+      'BUSTED\n\npress R to restart', {
+        fontFamily: 'monospace', fontSize: '56px', fontStyle: 'bold',
+        color: '#ff3b3b', align: 'center',
+      }).setOrigin(0.5).setScrollFactor(0).setDepth(101).setAlpha(0);
+  }
+
+  _drawBustBar() {
+    const g = this.bustGfx;
+    g.clear();
+    const v = this.bust.value;
+    if (v <= 0) { this.bustLabel.setAlpha(0); return; }
+
+    const { width, height } = this.scale;
+    const w = 300, h = 16, x = (width - w) / 2, y = height - 40;
+    const frac = v / 100;
+    const col = frac < 0.5 ? 0xffd23f : frac < 0.8 ? 0xff8c1a : 0xff3b3b;
+
+    g.fillStyle(0x000000, 0.5); g.fillRect(x - 2, y - 2, w + 4, h + 4);
+    g.fillStyle(col, 0.9);      g.fillRect(x, y, w * frac, h);
+    g.lineStyle(1, 0xffffff, 0.4); g.strokeRect(x, y, w, h);
+    this.bustLabel.setAlpha(0.9);
   }
 
   _flashGhost() {
@@ -330,6 +366,12 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
   }
 
   update(_time, delta) {
+    // Frozen after a bust — wait for restart
+    if (this.busted) {
+      if (Phaser.Input.Keyboard.JustDown(this.restartKey)) this.scene.restart();
+      return;
+    }
+
     const controls = {
       up:        this.cursors.up.isDown    || this.wasd.W.isDown,
       down:      this.cursors.down.isDown  || this.wasd.S.isDown,
@@ -344,8 +386,10 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
     // --- Line of sight: can any cop currently see the player? ---
     const px = this.car.sprite.x, py = this.car.sprite.y;
     let anyLOS = false;
+    let nearestCopDist = Infinity;
     for (const cop of this.cops) {
       const d = Phaser.Math.Distance.Between(cop.sprite.x, cop.sprite.y, px, py);
+      if (d < nearestCopDist) nearestCopDist = d;
       cop.hasLOS = d <= this.sightRange && segmentClear(cop.sprite.x, cop.sprite.y, px, py, this.losRects);
       if (cop.hasLOS) anyLOS = true;
     }
@@ -380,6 +424,21 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
       );
       if (allHome) this.pursuit.markIdle();
     }
+
+    // --- Bust meter (lose condition) ---
+    // Pinned = actively pursued, a cop right on you, and you're slow (boxed/stopped).
+    const playerSpeed = this.car.getSpeed();
+    const pinned = state === PursuitState.ACTIVE &&
+                   nearestCopDist < this.bust.pinDistance &&
+                   playerSpeed < this.bust.pinSpeed;
+    this.bust.update(pinned, delta / 1000);
+    if (this.bust.isBusted) {
+      this.busted = true;
+      this.bustedText.setAlpha(1);
+      this.physics.pause();
+      return;
+    }
+    this._drawBustBar();
 
     // Debug: line of sight (green=visible, red=blocked) + steering targets
     this.aiDebug.clear();
@@ -441,6 +500,7 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
       `Speed: ${Math.round(speed)} px/s`,
       `Cops:  ${this.cops.length}`,
       `State: ${state}`,
+      `Bust:  ${Math.round(this.bust.value)}%${this.bust.pinned ? ' PINNED' : ''}`,
     ];
 
     // Nearest cop + its AI state
@@ -461,7 +521,7 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
       }
     }
     if (this.car.isDrifting) lines.push('[HANDBRAKE DRIFT]');
-    lines.push('', 'WASD / Arrows — Drive', 'Space — Handbrake', 'Shift — Brake', 'C — Cop console log');
+    lines.push('', 'WASD / Arrows — Drive', 'Space — Handbrake', 'Shift — Brake', 'C — Cop console log', 'R — Restart');
     this.debugText.setText(lines);
 
     // Throttled console telemetry for the nearest cop
