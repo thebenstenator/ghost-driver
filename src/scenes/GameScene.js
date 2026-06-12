@@ -108,6 +108,11 @@ export class GameScene extends Phaser.Scene {
 
   _spawnCop(x, y) {
     const cop = new CopCar(this, x, y, this.navGrid, this.losRects);
+    // Floating debug label so each cop's AI state is visible in the world
+    cop.modeLabel = this.add.text(x, y, '', {
+      fontFamily: 'monospace', fontSize: '11px', color: '#ffffff',
+      backgroundColor: '#000000aa', padding: { x: 3, y: 1 },
+    }).setOrigin(0.5, 1).setDepth(60);
     this.physics.add.collider(cop.sprite, this.walls);
     this.physics.add.collider(cop.sprite, this.car.sprite);
     // Cops bump off each other rather than stacking
@@ -450,6 +455,12 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
         this.aiDebug.lineBetween(cop.sprite.x, cop.sprite.y, cop.aiTarget.x, cop.aiTarget.y);
         this.aiDebug.fillStyle(0xffaa00, 0.8);
         this.aiDebug.fillCircle(cop.aiTarget.x, cop.aiTarget.y, 5);
+      }
+      // Live per-cop mode label
+      if (cop.modeLabel && cop.debug) {
+        cop.modeLabel.setPosition(cop.sprite.x, cop.sprite.y - 34);
+        cop.modeLabel.setText(`${cop.debug.mode} ${Math.round(cop.debug.speed)}`);
+        cop.modeLabel.setColor(cop.hasLOS ? '#39ff14' : '#ff8c8c');
       }
     }
     // Last-known marker while searching
