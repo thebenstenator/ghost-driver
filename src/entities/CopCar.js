@@ -25,8 +25,16 @@ export class CopCar extends Vehicle {
     this.aiTarget = { x, y }; // current steering target, for debug draw
   }
 
-  // target: an object with .x / .y in world space (typically the player sprite)
+  // target: an object with .x / .y in world space (the player, or a last-known
+  // position). A null target means "stand down" — coast to a stop.
   update(delta, target) {
+    if (!target) {
+      super.update(delta, { up: false, down: false, left: false, right: false, handbrake: false, brake: true });
+      this.aiTarget = null;
+      this.debug = { mode: 'STANDDOWN', speed: this.getSpeed(), dist: 0, bend: 0,
+                     cornerLimit: 0, angleErr: 0, reverseTime: 0 };
+      return;
+    }
     const controls = this.ai.getControls(this, target, delta / 1000);
     super.update(delta, controls);
   }

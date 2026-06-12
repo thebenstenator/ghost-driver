@@ -3,6 +3,8 @@ import GUI from 'lil-gui';
 import { PlayerCar } from '../entities/PlayerCar.js';
 import { CopCar } from '../entities/CopCar.js';
 import { NavGrid } from '../ai/NavGrid.js';
+import { segmentClear } from '../ai/lineOfSight.js';
+import { Pursuit, PursuitState } from '../systems/Pursuit.js';
 import {
   WORLD_WIDTH, WORLD_HEIGHT,
   GRID_COLS, GRID_ROWS, BLOCK, ROAD, MARGIN, GRID_STEP,
@@ -68,14 +70,17 @@ export class GameScene extends Phaser.Scene {
 
     this.physics.add.collider(this.car.sprite, this.walls);
 
-    // --- Cops ---
-    // Milestone 1: one cop spawned a few blocks away that pursues the player.
-    this.navGrid = new NavGrid();
-    this.cops = [];
+    // --- Cops + pursuit ---
+    this.navGrid    = new NavGrid();
+    this.cops       = [];
+    this.sightRange = 650; // px — how far a cop can spot the player in clear line
+    this.pursuit    = new Pursuit(8); // 8s cooldown to ditch
     this._spawnCop(WORLD_WIDTH / 2, WORLD_HEIGHT / 2 - 700);
 
-    // Debug graphics for AI steering targets
+    // Debug graphics for AI steering targets + line of sight
     this.aiDebug = this.add.graphics().setDepth(50);
+
+    this._setupHud();
 
     // Camera follows with slight lag for a sense of speed
     this.cameras.main.startFollow(this.car.sprite, true, 0.1, 0.1);
@@ -112,6 +117,7 @@ export class GameScene extends Phaser.Scene {
     px.destroy();
 
     this.walls = this.physics.add.staticGroup();
+    this.losRects = []; // building footprints for line-of-sight checks
 
     BUILDINGS.forEach(({ x, y, w, h }) => {
       const cx = x + w / 2;
@@ -126,6 +132,8 @@ export class GameScene extends Phaser.Scene {
       const body = this.walls.create(cx, cy, '_px');
       body.setDisplaySize(w, h).refreshBody();
       body.setVisible(false);
+
+      this.losRects.push(new Phaser.Geom.Rectangle(x, y, w, h));
     });
 
     // Road lane dashes on the two center roads (visual only)
@@ -175,6 +183,38 @@ export class GameScene extends Phaser.Scene {
       backgroundColor: '#00000099',
       padding: { x: 6, y: 4 }
     }).setScrollFactor(0).setDepth(100);
+  }
+
+  _setupHud() {
+    const { width } = this.scale;
+    // Pursuit status (top centre)
+    this.statusText = this.add.text(width / 2, 24, '', {
+      fontFamily: 'monospace',
+      fontSize: '22px',
+      fontStyle: 'bold',
+      color: '#ffffff',
+    }).setOrigin(0.5, 0).setScrollFactor(0).setDepth(100);
+
+    // Large cooldown timer, shown only during the cooldown phase
+    this.cooldownText = this.add.text(width / 2, 54, '', {
+      fontFamily: 'monospace',
+      fontSize: '40px',
+      fontStyle: 'bold',
+      color: '#ffd23f',
+    }).setOrigin(0.5, 0).setScrollFactor(0).setDepth(100);
+
+    // Brief "GHOST" flash when a ditch completes
+    this.ghostText = this.add.text(width / 2, this.scale.height / 2, 'GHOST', {
+      fontFamily: 'monospace',
+      fontSize: '96px',
+      fontStyle: 'bold',
+      color: '#39ff14',
+    }).setOrigin(0.5).setScrollFactor(0).setDepth(100).setAlpha(0);
+  }
+
+  _flashGhost() {
+    this.ghostText.setAlpha(1).setScale(0.8);
+    this.tweens.add({ targets: this.ghostText, alpha: 0, scale: 1.4, duration: 1500, ease: 'Cubic.easeOut' });
   }
 
   _setupTunePanel() {
@@ -258,17 +298,45 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
 
     this.car.update(delta, controls);
 
-    // Cops pursue the player
-    for (const cop of this.cops) cop.update(delta, this.car.sprite);
-
-    // Debug: draw each cop's current steering target
-    this.aiDebug.clear();
-    this.aiDebug.lineStyle(1, 0xffaa00, 0.5);
+    // --- Line of sight: can any cop currently see the player? ---
+    const px = this.car.sprite.x, py = this.car.sprite.y;
+    let anyLOS = false;
     for (const cop of this.cops) {
-      if (!cop.aiTarget) continue;
-      this.aiDebug.lineBetween(cop.sprite.x, cop.sprite.y, cop.aiTarget.x, cop.aiTarget.y);
-      this.aiDebug.fillStyle(0xffaa00, 0.8);
-      this.aiDebug.fillCircle(cop.aiTarget.x, cop.aiTarget.y, 5);
+      const d = Phaser.Math.Distance.Between(cop.sprite.x, cop.sprite.y, px, py);
+      cop.hasLOS = d <= this.sightRange && segmentClear(cop.sprite.x, cop.sprite.y, px, py, this.losRects);
+      if (cop.hasLOS) anyLOS = true;
+    }
+
+    // --- Pursuit state machine ---
+    const state = this.pursuit.update(anyLOS, px, py, delta / 1000);
+    if (this.pursuit.justDitched) this._flashGhost();
+
+    // Cop target depends on pursuit state:
+    //  ACTIVE   → chase the player
+    //  COOLDOWN → converge on last-known position
+    //  DITCHED / IDLE → stand down
+    let copTarget = null;
+    if (state === PursuitState.ACTIVE)        copTarget = this.car.sprite;
+    else if (state === PursuitState.COOLDOWN) copTarget = this.pursuit.lastKnown;
+
+    for (const cop of this.cops) cop.update(delta, copTarget);
+
+    // Debug: line of sight (green=visible, red=blocked) + steering targets
+    this.aiDebug.clear();
+    for (const cop of this.cops) {
+      this.aiDebug.lineStyle(1, cop.hasLOS ? 0x39ff14 : 0xff3b3b, 0.35);
+      this.aiDebug.lineBetween(cop.sprite.x, cop.sprite.y, px, py);
+      if (cop.aiTarget) {
+        this.aiDebug.lineStyle(1, 0xffaa00, 0.5);
+        this.aiDebug.lineBetween(cop.sprite.x, cop.sprite.y, cop.aiTarget.x, cop.aiTarget.y);
+        this.aiDebug.fillStyle(0xffaa00, 0.8);
+        this.aiDebug.fillCircle(cop.aiTarget.x, cop.aiTarget.y, 5);
+      }
+    }
+    // Last-known marker during cooldown
+    if (state === PursuitState.COOLDOWN && this.pursuit.hasLastKnown) {
+      this.aiDebug.lineStyle(2, 0xffd23f, 0.8);
+      this.aiDebug.strokeCircle(this.pursuit.lastKnown.x, this.pursuit.lastKnown.y, 30);
     }
 
     // Zoom out as speed increases. Reference against natural terminal (~450) rather
@@ -286,11 +354,27 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
     );
 
 
+    // --- Pursuit HUD ---
+    if (state === PursuitState.ACTIVE) {
+      this.statusText.setText('● PURSUIT').setColor('#ff3b3b');
+      this.cooldownText.setText('');
+    } else if (state === PursuitState.COOLDOWN) {
+      this.statusText.setText('EVADING').setColor('#ffd23f');
+      this.cooldownText.setText(this.pursuit.cooldown.toFixed(1));
+    } else if (state === PursuitState.DITCHED) {
+      this.statusText.setText('DITCHED').setColor('#39ff14');
+      this.cooldownText.setText('');
+    } else {
+      this.statusText.setText('');
+      this.cooldownText.setText('');
+    }
+
     // Debug overlay
     const lines = [
       `FPS:   ${Math.round(this.game.loop.actualFps)}`,
       `Speed: ${Math.round(speed)} px/s`,
       `Cops:  ${this.cops.length}`,
+      `State: ${state}`,
     ];
 
     // Nearest cop + its AI state
