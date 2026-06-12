@@ -16,7 +16,12 @@ export class CopAI {
     this.nav = navGrid;
     this.steerDeadzone = 0.05; // rad — avoid left/right jitter when nearly aligned
     this.directRange   = 120;  // within this, aim straight at the player
-    this.lookahead     = 150;  // carrot distance ahead along the path (px)
+    this.lookahead     = 140;  // steering carrot distance ahead along the path (px)
+
+    // Corner speed governor: brake before bends so the car doesn't understeer wide
+    this.senseLookahead  = 340; // how far ahead the second carrot looks for curvature
+    this.maxApproachSpeed = 600; // speed cap on a straight (effectively none)
+    this.cornerMinSpeed   = 175; // speed cap through the sharpest (~90°+) corner
 
     // Per-cop state
     this._stuckTime   = 0; // how long we've been barely moving while pursuing
@@ -31,8 +36,9 @@ export class CopAI {
     const dist  = Phaser.Math.Distance.Between(cx, cy, target.x, target.y);
     const speed = cop.getSpeed();
 
-    // --- Choose a steering target ---
+    // --- Choose a steering target + sense the upcoming corner ---
     let aimX = target.x, aimY = target.y;
+    let cornerSpeedLimit = this.maxApproachSpeed;
     if (dist > this.directRange) {
       const copNode    = this.nav.nearestNode(cx, cy);
       const playerNode = this.nav.nearestNode(target.x, target.y);
@@ -42,8 +48,17 @@ export class CopAI {
       const pts = path.map(n => this.nav.pos(n));
       pts.push({ x: target.x, y: target.y });
 
-      const carrot = this._carrot(pts, cx, cy, this.lookahead);
-      aimX = carrot.x; aimY = carrot.y;
+      const near = this._carrot(pts, cx, cy, this.lookahead);
+      aimX = near.x; aimY = near.y;
+
+      // A farther carrot reveals where the road goes next; the angle between the
+      // two segments is the sharpness of the upcoming bend. Sharper → slower cap.
+      const far  = this._carrot(pts, cx, cy, this.senseLookahead);
+      const h1   = Math.atan2(near.y - cy, near.x - cx);
+      const h2   = Math.atan2(far.y - near.y, far.x - near.x);
+      const bend = Math.abs(Phaser.Math.Angle.Wrap(h2 - h1)); // 0..π
+      const t    = Math.min(bend / (Math.PI / 2), 1);         // 90°+ bend = full severity
+      cornerSpeedLimit = Phaser.Math.Linear(this.maxApproachSpeed, this.cornerMinSpeed, t);
     }
     cop.aiTarget = { x: aimX, y: aimY }; // exposed for debug draw
 
@@ -87,12 +102,14 @@ export class CopAI {
       // Close approach: bleed speed so we converge and bump rather than orbit.
       if (speed > 140)        controls.brake = true;
       else if (absErr < 1.3)  controls.up    = true;
+    } else if (speed > cornerSpeedLimit) {
+      // Going too fast for the bend ahead — brake to a safe entry speed so we
+      // can actually turn instead of understeering wide.
+      controls.brake = true;
     } else {
       // Open pursuit: accelerate when roughly aligned; creep forward when slow
       // so a car that's pointed wrong can still arc around (can't turn in place).
       if (absErr < 1.3 || speed < 110) controls.up = true;
-      // Scrub speed before a sharp turn so the car can rotate — reads as driving.
-      if (absErr > 0.8 && speed > 280) controls.brake = true;
     }
 
     return controls;
