@@ -21,7 +21,8 @@ export class CopAI {
     // Corner speed governor: brake before bends so the car doesn't understeer wide
     this.senseLookahead  = 400; // how far ahead the second carrot looks for curvature
     this.maxApproachSpeed = 600; // speed cap on a straight (effectively none)
-    this.cornerMinSpeed   = 130; // speed cap through the sharpest (~90°+) corner
+    this.cornerMinSpeed   = 200; // speed cap through the sharpest (~90°+) corner
+                                 // (raised since the cop now has interceptor grip)
     this.cornerClamp      = 1.1; // rad (~63°) — only clamp near-90° grid corners,
                                  // not the shallow off-grid bend toward the player
 
