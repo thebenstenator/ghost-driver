@@ -16,12 +16,12 @@ export class CopAI {
     this.nav = navGrid;
     this.steerDeadzone = 0.05; // rad — avoid left/right jitter when nearly aligned
     this.directRange   = 120;  // within this, aim straight at the player
-    this.lookahead     = 140;  // steering carrot distance ahead along the path (px)
+    this.lookahead     = 115;  // steering carrot distance ahead along the path (px)
 
     // Corner speed governor: brake before bends so the car doesn't understeer wide
-    this.senseLookahead  = 340; // how far ahead the second carrot looks for curvature
+    this.senseLookahead  = 400; // how far ahead the second carrot looks for curvature
     this.maxApproachSpeed = 600; // speed cap on a straight (effectively none)
-    this.cornerMinSpeed   = 175; // speed cap through the sharpest (~90°+) corner
+    this.cornerMinSpeed   = 130; // speed cap through the sharpest (~90°+) corner
 
     // Per-cop state
     this._stuckTime   = 0; // how long we've been barely moving while pursuing
@@ -89,7 +89,7 @@ export class CopAI {
     // Barely moving while not already on top of the player → we're wedged.
     if (dist > 80 && speed < 40) {
       this._stuckTime += dt;
-      if (this._stuckTime > 0.45) {
+      if (this._stuckTime > 0.22) {
         this._reverseTime = 0.7;
         this._stuckTime   = 0;
       }
