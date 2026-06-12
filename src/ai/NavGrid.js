@@ -78,4 +78,37 @@ export class NavGrid {
     }
     return path;
   }
+
+  // Node indices within maxDepth steps of `start`, in BFS (outward) order,
+  // excluding the start itself. Used to build a search sweep radiating from a
+  // last-known position.
+  nodesInRange(start, maxDepth) {
+    const visited = new Uint8Array(this.cols * this.rows);
+    const depth   = new Int32Array(this.cols * this.rows);
+    const queue   = [start];
+    visited[start] = 1;
+    const result = [];
+
+    while (queue.length) {
+      const cur = queue.shift();
+      if (cur !== start) result.push(cur);
+      if (depth[cur] >= maxDepth) continue;
+
+      const { i, j } = this.ij(cur);
+      const neighbours = [];
+      if (i > 0)             neighbours.push(this.index(i - 1, j));
+      if (i < this.cols - 1) neighbours.push(this.index(i + 1, j));
+      if (j > 0)             neighbours.push(this.index(i, j - 1));
+      if (j < this.rows - 1) neighbours.push(this.index(i, j + 1));
+
+      for (const n of neighbours) {
+        if (!visited[n]) {
+          visited[n] = 1;
+          depth[n] = depth[cur] + 1;
+          queue.push(n);
+        }
+      }
+    }
+    return result;
+  }
 }

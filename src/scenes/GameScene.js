@@ -74,7 +74,7 @@ export class GameScene extends Phaser.Scene {
     this.navGrid    = new NavGrid();
     this.cops       = [];
     this.sightRange = 650; // px — how far a cop can spot the player in clear line
-    this.pursuit    = new Pursuit(8); // 8s cooldown to ditch
+    this.pursuit    = new Pursuit(10); // seconds out of sight to complete a ditch
     this._spawnCop(WORLD_WIDTH / 2, WORLD_HEIGHT / 2 - 700);
 
     // Debug graphics for AI steering targets + line of sight
@@ -99,6 +99,39 @@ export class GameScene extends Phaser.Scene {
     for (const other of this.cops) this.physics.add.collider(cop.sprite, other.sprite);
     this.cops.push(cop);
     return cop;
+  }
+
+  // Where a cop should drive during the cooldown phase: first to the last-known
+  // position, then sweeping outward through nearby intersections to hunt for the
+  // player. Reaching the player's true location while searching re-acquires line
+  // of sight elsewhere in the loop and snaps back to ACTIVE.
+  _cooldownTarget(cop) {
+    const ARRIVE = 70; // px — close enough to count as "reached"
+    const lk = this.pursuit.lastKnown;
+
+    if (!cop.searching) {
+      const d = Phaser.Math.Distance.Between(cop.sprite.x, cop.sprite.y, lk.x, lk.y);
+      if (d > ARRIVE) return lk;          // still en route to last-known
+      cop.searching = true;               // arrived — begin the sweep
+      this._buildSearchRoute(cop, lk.x, lk.y);
+    }
+
+    // Advance through the sweep; rebuild a fresh sweep when the current one runs out
+    if (!cop.searchRoute || cop.searchIndex >= cop.searchRoute.length) {
+      this._buildSearchRoute(cop, cop.sprite.x, cop.sprite.y);
+    }
+    const wp = cop.searchRoute[cop.searchIndex];
+    if (Phaser.Math.Distance.Between(cop.sprite.x, cop.sprite.y, wp.x, wp.y) < ARRIVE) {
+      cop.searchIndex++;
+    }
+    return cop.searchRoute[Math.min(cop.searchIndex, cop.searchRoute.length - 1)];
+  }
+
+  _buildSearchRoute(cop, x, y) {
+    const start = this.navGrid.nearestNode(x, y);
+    const nodes = this.navGrid.nodesInRange(start, 3); // ~3 intersections outward
+    cop.searchRoute = nodes.map(n => this.navGrid.pos(n));
+    cop.searchIndex = 0;
   }
 
   _buildWorld() {
@@ -311,15 +344,22 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
     const state = this.pursuit.update(anyLOS, px, py, delta / 1000);
     if (this.pursuit.justDitched) this._flashGhost();
 
-    // Cop target depends on pursuit state:
-    //  ACTIVE   → chase the player
-    //  COOLDOWN → converge on last-known position
-    //  DITCHED / IDLE → stand down
-    let copTarget = null;
-    if (state === PursuitState.ACTIVE)        copTarget = this.car.sprite;
-    else if (state === PursuitState.COOLDOWN) copTarget = this.pursuit.lastKnown;
+    // On entering cooldown, reset each cop's search so they head to last-known first
+    if (state === PursuitState.COOLDOWN && this._prevState !== PursuitState.COOLDOWN) {
+      for (const cop of this.cops) { cop.searching = false; cop.searchRoute = null; cop.searchIndex = 0; }
+    }
+    this._prevState = state;
 
-    for (const cop of this.cops) cop.update(delta, copTarget);
+    // Per-cop target depends on pursuit state:
+    //  ACTIVE   → chase the player
+    //  COOLDOWN → converge on last-known position, then sweep-search outward
+    //  DITCHED / IDLE → stand down
+    for (const cop of this.cops) {
+      let target = null;
+      if (state === PursuitState.ACTIVE)        target = this.car.sprite;
+      else if (state === PursuitState.COOLDOWN) target = this._cooldownTarget(cop);
+      cop.update(delta, target);
+    }
 
     // Debug: line of sight (green=visible, red=blocked) + steering targets
     this.aiDebug.clear();
