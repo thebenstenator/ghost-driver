@@ -73,14 +73,19 @@ export class GameScene extends Phaser.Scene {
     // --- Cops + pursuit ---
     this.navGrid    = new NavGrid();
     this.cops       = [];
-    this.sightRange = 650; // px — how far a cop can spot the player in clear line
-    this.pursuit    = new Pursuit(10); // seconds out of sight to complete a ditch
+    this.sightRange = 650;             // px — cop spotting range in clear line
+    this.pursuit    = new Pursuit(10, 15); // 10s to ditch, then 15s of hot search
+    // Station the cops withdraw to once the heat cools (SE corner, for testing)
+    this.station    = this.navGrid.pos(this.navGrid.index(this.navGrid.cols - 1, this.navGrid.rows - 1));
 
     // Spawn a few cops approaching from different sides
     const cx = WORLD_WIDTH / 2, cy = WORLD_HEIGHT / 2;
     this._spawnCop(cx - 504, cy);        // west, 1 block
     this._spawnCop(cx + 504, cy);        // east, 1 block
     this._spawnCop(cx,        cy + 1008); // south, 2 blocks
+
+    // The chase is already underway when the mission starts
+    this.pursuit.begin(this.car.sprite.x, this.car.sprite.y);
 
     // Debug graphics for AI steering targets + line of sight
     this.aiDebug = this.add.graphics().setDepth(50);
@@ -349,21 +354,31 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
     const state = this.pursuit.update(anyLOS, px, py, delta / 1000);
     if (this.pursuit.justDitched) this._flashGhost();
 
-    // On entering cooldown, reset each cop's search so they head to last-known first
-    if (state === PursuitState.COOLDOWN && this._prevState !== PursuitState.COOLDOWN) {
+    // On entering SEARCH, reset each cop's search so they head to last-known first
+    if (state === PursuitState.SEARCH && this._prevState !== PursuitState.SEARCH) {
       for (const cop of this.cops) { cop.searching = false; cop.searchRoute = null; cop.searchIndex = 0; }
     }
     this._prevState = state;
 
     // Per-cop target depends on pursuit state:
-    //  ACTIVE   → chase the player
-    //  COOLDOWN → converge on last-known position, then sweep-search outward
-    //  DITCHED / IDLE → stand down
+    //  ACTIVE    → chase the player
+    //  SEARCH    → converge on last-known, then sweep-search outward (area stays hot)
+    //  RETURNING → drive back to the station
+    //  IDLE      → parked at the station (stand down)
     for (const cop of this.cops) {
       let target = null;
-      if (state === PursuitState.ACTIVE)        target = this.car.sprite;
-      else if (state === PursuitState.COOLDOWN) target = this._cooldownTarget(cop);
+      if      (state === PursuitState.ACTIVE)    target = this.car.sprite;
+      else if (state === PursuitState.SEARCH)    target = this._cooldownTarget(cop);
+      else if (state === PursuitState.RETURNING) target = this.station;
       cop.update(delta, target);
+    }
+
+    // Once every cop has reached the station, the area is fully clear
+    if (state === PursuitState.RETURNING) {
+      const allHome = this.cops.every(c =>
+        Phaser.Math.Distance.Between(c.sprite.x, c.sprite.y, this.station.x, this.station.y) < 90
+      );
+      if (allHome) this.pursuit.markIdle();
     }
 
     // Debug: line of sight (green=visible, red=blocked) + steering targets
@@ -378,11 +393,14 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
         this.aiDebug.fillCircle(cop.aiTarget.x, cop.aiTarget.y, 5);
       }
     }
-    // Last-known marker during cooldown
-    if (state === PursuitState.COOLDOWN && this.pursuit.hasLastKnown) {
+    // Last-known marker while searching
+    if (state === PursuitState.SEARCH && this.pursuit.hasLastKnown) {
       this.aiDebug.lineStyle(2, 0xffd23f, 0.8);
       this.aiDebug.strokeCircle(this.pursuit.lastKnown.x, this.pursuit.lastKnown.y, 30);
     }
+    // Station marker
+    this.aiDebug.lineStyle(2, 0x4a90ff, 0.6);
+    this.aiDebug.strokeRect(this.station.x - 24, this.station.y - 24, 48, 48);
 
     // Zoom out as speed increases. Reference against natural terminal (~450) rather
     // than the hard cap so the full zoom range is visible during normal driving.
@@ -403,14 +421,17 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
     if (state === PursuitState.ACTIVE) {
       this.statusText.setText('● PURSUIT').setColor('#ff3b3b');
       this.cooldownText.setText('');
-    } else if (state === PursuitState.COOLDOWN) {
+    } else if (state === PursuitState.SEARCH && !this.pursuit.ditched) {
       this.statusText.setText('EVADING').setColor('#ffd23f');
       this.cooldownText.setText(this.pursuit.cooldown.toFixed(1));
-    } else if (state === PursuitState.DITCHED) {
-      this.statusText.setText('DITCHED').setColor('#39ff14');
+    } else if (state === PursuitState.SEARCH && this.pursuit.ditched) {
+      this.statusText.setText('AREA HOT').setColor('#ff8c1a');
+      this.cooldownText.setText(this.pursuit.hot.toFixed(0));
+    } else if (state === PursuitState.RETURNING) {
+      this.statusText.setText('WITHDRAWING').setColor('#9aa0b5');
       this.cooldownText.setText('');
     } else {
-      this.statusText.setText('');
+      this.statusText.setText('CLEAR').setColor('#39ff14');
       this.cooldownText.setText('');
     }
 

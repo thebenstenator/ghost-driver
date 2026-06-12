@@ -1,51 +1,92 @@
 // Pursuit state machine — the heart of the ditch mechanic.
 //
-//   ACTIVE   : at least one cop has line of sight. Cops chase the player's real
-//              position; last-known position is continuously updated.
-//   COOLDOWN : no cop can see the player. Cops converge on the last-known
-//              position. A timer counts down; if it expires with no re-sighting,
-//              the player has ditched.
-//   DITCHED  : cooldown elapsed. Cops stand down.
+//   ACTIVE    : at least one cop has line of sight. Cops chase the player's real
+//               position; last-known position is continuously updated.
+//   SEARCH    : no cop can see the player. Cops converge on the last-known
+//               position and sweep outward. Two phases, tracked by `ditched`:
+//                 • pre-ditch  — cooldown timer counts down; if it expires with
+//                   no re-sighting, the player has ditched (you're "safe").
+//                 • post-ditch — the area stays HOT: cops keep searching for
+//                   `hotDuration` so you can't immediately return.
+//   RETURNING : the heat has cooled. Cops withdraw to the station.
+//   IDLE      : cops parked at the station. Area fully clear.
 //
-// Re-acquiring sight at any point snaps back to ACTIVE and refills the timer.
+// Re-acquiring sight in any non-active state snaps back to ACTIVE and recharges
+// every timer.
 export const PursuitState = {
-  IDLE:     'IDLE',
-  ACTIVE:   'ACTIVE',
-  COOLDOWN: 'COOLDOWN',
-  DITCHED:  'DITCHED',
+  IDLE:      'IDLE',
+  ACTIVE:    'ACTIVE',
+  SEARCH:    'SEARCH',
+  RETURNING: 'RETURNING',
 };
 
 export class Pursuit {
-  constructor(cooldownDuration = 8) {
+  constructor(cooldownDuration = 10, hotDuration = 15) {
     this.state            = PursuitState.IDLE;
-    this.cooldownDuration = cooldownDuration; // seconds
+    this.cooldownDuration = cooldownDuration; // seconds out of sight to ditch
+    this.hotDuration      = hotDuration;      // seconds the area stays hot after a ditch
     this.cooldown         = 0;
+    this.hot              = 0;
+    this.ditched          = false; // true once the cooldown has elapsed (area still hot)
     this.lastKnown        = { x: 0, y: 0 };
     this.hasLastKnown     = false;
     this.justDitched      = false; // true for the single frame the ditch completes
+  }
+
+  // Kick off a chase already in progress ("cops already coming").
+  begin(px, py) {
+    this.state        = PursuitState.ACTIVE;
+    this.lastKnown.x  = px;
+    this.lastKnown.y  = py;
+    this.hasLastKnown = true;
+    this.cooldown     = this.cooldownDuration;
+    this.hot          = this.hotDuration;
+    this.ditched      = false;
   }
 
   update(anyLOS, px, py, dt) {
     this.justDitched = false;
 
     if (anyLOS) {
-      // Seen — full pursuit, remember where they are, keep the timer charged.
+      // Seen — full pursuit. Remember position, recharge everything.
       this.state        = PursuitState.ACTIVE;
       this.lastKnown.x  = px;
       this.lastKnown.y  = py;
       this.hasLastKnown = true;
       this.cooldown     = this.cooldownDuration;
-    } else if (this.state === PursuitState.ACTIVE || this.state === PursuitState.COOLDOWN) {
-      // Lost sight — run down the cooldown.
-      if (this.state === PursuitState.ACTIVE) this.state = PursuitState.COOLDOWN;
-      this.cooldown -= dt;
-      if (this.cooldown <= 0) {
-        this.cooldown    = 0;
-        this.state       = PursuitState.DITCHED;
-        this.justDitched = true;
-      }
+      this.hot          = this.hotDuration;
+      this.ditched      = false;
+      return this.state;
+    }
+
+    switch (this.state) {
+      case PursuitState.ACTIVE:
+        this.state = PursuitState.SEARCH; // just lost sight
+        // fall through into SEARCH handling this frame
+      case PursuitState.SEARCH:
+        if (!this.ditched) {
+          this.cooldown -= dt;
+          if (this.cooldown <= 0) {
+            this.cooldown    = 0;
+            this.ditched     = true;
+            this.justDitched = true;
+          }
+        } else {
+          this.hot -= dt;
+          if (this.hot <= 0) {
+            this.hot   = 0;
+            this.state = PursuitState.RETURNING;
+          }
+        }
+        break;
+      // RETURNING / IDLE: no timers — the scene drives cops to the station and
+      // calls markIdle() once they've all arrived.
     }
 
     return this.state;
+  }
+
+  markIdle() {
+    if (this.state === PursuitState.RETURNING) this.state = PursuitState.IDLE;
   }
 }
