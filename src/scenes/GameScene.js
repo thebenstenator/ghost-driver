@@ -4,6 +4,7 @@ import { PlayerCar } from '../entities/PlayerCar.js';
 import { CopCar } from '../entities/CopCar.js';
 import { NavGrid } from '../ai/NavGrid.js';
 import { segmentClear } from '../ai/lineOfSight.js';
+import { PursuitDirector } from '../ai/PursuitDirector.js';
 import { Pursuit, PursuitState } from '../systems/Pursuit.js';
 import { BustMeter } from '../systems/BustMeter.js';
 import {
@@ -78,6 +79,7 @@ export class GameScene extends Phaser.Scene {
 
     // --- Cops + pursuit ---
     this.navGrid    = new NavGrid();
+    this.director   = new PursuitDirector(this.navGrid);
     this.cops       = [];
     this.sightRange = 900;             // px — cop spotting range in clear line
     this.sepRadius  = 80;              // separation: how close before cops repel
@@ -462,6 +464,7 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
       senseDist: a.senseDist, directRange: a.directRange,
       sepRadius: this.sepRadius, sepStrength: this.sepStrength,
       searchSpeed: this.searchSpeed,
+      flankDist: this.director.flankDist, interceptLead: this.director.interceptLead,
     };
 
     const gui = new GUI({ title: 'Cop Tuning', width: 300 });
@@ -489,9 +492,11 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
     corner.add(this.copTuning, 'directRange',      50,  400, 10).name('Direct-aim range').onChange(apply);
 
     const pack = gui.addFolder('Pack & Search');
-    pack.add(this.copTuning, 'sepRadius',   0, 250, 5).name('Separation radius').onChange(apply);
-    pack.add(this.copTuning, 'sepStrength', 0, 400, 5).name('Separation strength').onChange(apply);
-    pack.add(this.copTuning, 'searchSpeed', 80, 600, 10).name('Search speed cap').onChange(apply);
+    pack.add(this.copTuning, 'flankDist',     50,  400, 10).name('Flank distance').onChange(apply);
+    pack.add(this.copTuning, 'interceptLead', 0.2, 3.0, 0.1).name('Intercept lead (s)').onChange(apply);
+    pack.add(this.copTuning, 'sepRadius',     0,   250, 5).name('Separation radius').onChange(apply);
+    pack.add(this.copTuning, 'sepStrength',   0,   400, 5).name('Separation strength').onChange(apply);
+    pack.add(this.copTuning, 'searchSpeed',   80,  600, 10).name('Search speed cap').onChange(apply);
 
     gui.add({ copyStats: () => {
       const t = this.copTuning;
@@ -502,6 +507,8 @@ turnSpeedLow: ${t.turnSpeedLow}, turnSpeed: ${t.turnSpeed}, minSteerFactor: ${t.
 // --- Cop behaviour (CopAI) ---
 maxApproachSpeed: ${t.maxApproachSpeed}, cornerMinSpeed: ${t.cornerMinSpeed}, brakeDecel: ${t.brakeDecel},
 steerLookahead: ${t.steerLookahead}, senseDist: ${t.senseDist}, directRange: ${t.directRange},
+// --- Formation (PursuitDirector) ---
+flankDist: ${t.flankDist}, interceptLead: ${t.interceptLead},
 // --- Separation + search (GameScene) ---
 sepRadius: ${t.sepRadius}, sepStrength: ${t.sepStrength}, searchSpeed: ${t.searchSpeed}`);
     } }, 'copyStats').name('Copy Cop Stats → Console');
@@ -526,6 +533,8 @@ sepRadius: ${t.sepRadius}, sepStrength: ${t.sepStrength}, searchSpeed: ${t.searc
     this.sepRadius = t.sepRadius;
     this.sepStrength = t.sepStrength;
     this.searchSpeed = t.searchSpeed;
+    this.director.flankDist = t.flankDist;
+    this.director.interceptLead = t.interceptLead;
   }
 
   update(_time, delta) {
@@ -575,9 +584,14 @@ sepRadius: ${t.sepRadius}, sepStrength: ${t.sepStrength}, searchSpeed: ${t.searc
     //  SEARCH    → converge on last-known, then sweep-search outward (area stays hot)
     //  RETURNING → drive back to the station
     //  IDLE      → parked at the station (stand down)
+    // During an active chase the Director assigns each cop a role + target
+    // (chase / flank / intercept) so they spread into a formation instead of
+    // funnelling onto the same point.
+    if (state === PursuitState.ACTIVE) this.director.update(this.cops, this.car, delta / 1000);
+
     for (const cop of this.cops) {
       let target = null;
-      if      (state === PursuitState.ACTIVE)    target = { x: this.car.sprite.x, y: this.car.sprite.y };
+      if      (state === PursuitState.ACTIVE)    target = cop.dirTarget;
       else if (state === PursuitState.SEARCH)    target = this._cooldownTarget(cop);
       else if (state === PursuitState.RETURNING) target = this.station;
       if (target) target = this._separate(cop, target);
@@ -622,10 +636,11 @@ sepRadius: ${t.sepRadius}, sepStrength: ${t.sepStrength}, searchSpeed: ${t.searc
         this.aiDebug.fillStyle(0xffaa00, 0.8);
         this.aiDebug.fillCircle(cop.aiTarget.x, cop.aiTarget.y, 5);
       }
-      // Live per-cop mode label
+      // Live per-cop label: role (when chasing) + control mode + speed
       if (cop.modeLabel && cop.debug) {
+        const role = (state === PursuitState.ACTIVE && cop.role) ? cop.role + ' ' : '';
         cop.modeLabel.setPosition(cop.sprite.x, cop.sprite.y - 34);
-        cop.modeLabel.setText(`${cop.debug.mode} ${Math.round(cop.debug.speed)}`);
+        cop.modeLabel.setText(`${role}${cop.debug.mode} ${Math.round(cop.debug.speed)}`);
         cop.modeLabel.setColor(cop.hasLOS ? '#39ff14' : '#ff8c8c');
       }
     }
