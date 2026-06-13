@@ -87,7 +87,7 @@ export class GameScene extends Phaser.Scene {
     this.sepRadius  = 80;              // separation: how close before cops repel
     this.sepStrength = 150;            // separation: aim push strength
     this.searchSpeed = 250;            // cop speed cap while searching (clean corners)
-    this.pursuit    = new Pursuit(10, 15); // 10s to ditch, then 15s of hot search
+    this.pursuit    = new Pursuit(20, 30); // 20s to ditch, then 30s of hot search
     // Station the cops withdraw to once the heat cools (SE corner, for testing)
     this.station    = this.navGrid.pos(this.navGrid.index(this.navGrid.cols - 1, this.navGrid.rows - 1));
 
