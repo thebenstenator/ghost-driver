@@ -23,7 +23,9 @@ export class CopAI {
     this.directRange      = 130; // within this (or clear LOS) aim straight at the target
     this.arriveRadius     = 70;  // px to count a path node as reached
     this.maxApproachSpeed = 610; // top travel speed (capped further by CopCar.maxSpeed)
-    this.baseApproach     = 610; // catch-up rubber-band raises maxApproachSpeed above this
+    this.baseApproach     = 610; // base top travel speed
+    this.slowRadius       = 160; // start easing speed when this close to the FINAL target
+    this.slowFloor        = 0.35;// fraction of speed kept right on top of the target
     this.cornerMinSpeed   = 190; // speed through a 90°+ corner
     this.brakeDecel       = 320; // shapes how early speed eases down before a corner
     this.senseDist        = 700; // how far down the path to look for corners
@@ -66,6 +68,14 @@ export class CopAI {
       speed = lim.speed; nextTurn = lim.turn;
     } else {
       this._path = null; this._goalNode = -1; // re-plan fresh next time we lose sight
+    }
+
+    // Arrival easing: as the cop closes on its FINAL target, scale speed down so it
+    // settles onto it instead of blasting past and oscillating. Only bites inside
+    // slowRadius — far away (path-following) dist is large, so this is a no-op there.
+    if (dist < this.slowRadius) {
+      const t = Phaser.Math.Clamp(dist / this.slowRadius, this.slowFloor, 1);
+      speed *= t;
     }
 
     cop.debug = { mode, speed, dist, bend: nextTurn, cornerLimit: speed, angleErr: 0, reverseTime: 0 };

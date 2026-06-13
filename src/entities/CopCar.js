@@ -30,7 +30,7 @@ export class CopCar extends Vehicle {
 
     this.ai = new CopAI(navGrid, rects);
     this.aiTarget = { x, y };           // current aim point, for debug draw
-    this.baseMaxSpeed = this.maxSpeed;  // catch-up rubber-band raises maxSpeed above this when far
+    this.baseMaxSpeed = this.maxSpeed;  // tuning panel restores maxSpeed from this
   }
 
   // target: { x, y } in world space (player / last-known / station). null = stand down.
@@ -47,12 +47,17 @@ export class CopCar extends Vehicle {
     const { aim, speed } = this.ai.getControls(this, target);
     this.aiTarget = aim;
 
-    // Kinematic move: velocity straight at the aim, capped by our (catch-up) top speed.
+    // Kinematic move: velocity straight at the aim, capped by our top speed.
     const dx = aim.x - this.sprite.x, dy = aim.y - this.sprite.y;
-    const d  = Math.hypot(dx, dy) || 1;
-    const v  = Math.min(speed, this.maxSpeed);
-    this.vx = (dx / d) * v;
-    this.vy = (dy / d) * v;
+    const d  = Math.hypot(dx, dy);
+    let v    = Math.min(speed, this.maxSpeed);
+    // Deadzone: if we'd overstep the aim this frame, don't — sit on it instead of
+    // jittering across it. Kills the sub-pixel limit cycle on search waypoints.
+    const stepThisFrame = v * (delta / 1000);
+    if (d < 3 || stepThisFrame > d) v = 0;
+    const dn = d || 1;
+    this.vx = (dx / dn) * v;
+    this.vy = (dy / dn) * v;
     body.setVelocity(this.vx, this.vy);
 
     // Face travel direction (quick turn so it reads as cornering, not snapping).

@@ -654,19 +654,6 @@ sepRadius: ${t.sepRadius}, sepStrength: ${t.sepStrength}, searchSpeed: ${t.searc
       // Full speed while chasing OR hunting; capped only for sustained search / withdrawal.
       const slow = (state === PursuitState.SEARCH && !hunting) || state === PursuitState.RETURNING;
       cop.ai.speedCap = slow ? this.searchSpeed : Infinity;
-
-      // Catch-up rubber-band: a cop far from the player during a chase gets a
-      // temporary top-speed boost so stragglers rejoin instead of crawling back
-      // across the big map. Fades to zero by the time it's on-screen (~1200px).
-      if ((state === PursuitState.ACTIVE || hunting)) {
-        const dp = Phaser.Math.Distance.Between(cop.sprite.x, cop.sprite.y, px, py);
-        const boost = Phaser.Math.Clamp((dp - 1200) / 6, 0, 280);
-        cop.maxSpeed = cop.baseMaxSpeed + boost;
-        cop.ai.maxApproachSpeed = cop.ai.baseApproach + boost;
-      } else {
-        cop.maxSpeed = cop.baseMaxSpeed;
-        cop.ai.maxApproachSpeed = cop.ai.baseApproach;
-      }
       cop.update(delta, target);
     }
 
