@@ -46,9 +46,8 @@ export class MenuScene extends Phaser.Scene {
       fontFamily: 'monospace', fontSize: '18px', fontStyle: 'bold', color: '#ffd23f',
     }).setOrigin(0.5);
     const controls = [
-      'WASD / Arrows — Drive       Space — Handbrake       Shift — Brake',
-      'P — Pause        V — Cycle camera        C — Cop telemetry',
-      'R — Restart        M — Menu',
+      'WASD / Arrows — Drive        Space — Handbrake',
+      'Shift — Brake        P — Pause',
     ].join('\n');
     this.add.text(cx, 605, controls, {
       fontFamily: 'monospace', fontSize: '16px', color: '#c8c8d4',

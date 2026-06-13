@@ -29,6 +29,7 @@ export class Pursuit {
     this.hot              = 0;
     this.ditched          = false; // true once the cooldown has elapsed (area still hot)
     this.lastKnown        = { x: 0, y: 0 };
+    this.lastKnownDir     = 0; // player's travel direction when last seen (radians)
     this.hasLastKnown     = false;
     this.justDitched      = false; // true for the single frame the ditch completes
   }

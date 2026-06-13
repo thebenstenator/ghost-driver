@@ -162,8 +162,14 @@ export class GameScene extends Phaser.Scene {
     if (!cop.searching) {
       const d = Phaser.Math.Distance.Between(cop.sprite.x, cop.sprite.y, lk.x, lk.y);
       if (d > ARRIVE) return lk;          // still en route to last-known
-      cop.searching = true;               // arrived — begin the sweep
-      this._buildSearchRoute(cop, lk.x, lk.y);
+      cop.searching = true;               // arrived — begin searching
+      // One cop (slot 0) follows the player's last-known travel vector — chasing
+      // the direction they fled — while the others sweep the area in a circle.
+      if (cop.searchSlot === 0 && this.pursuit.hasLastKnown) {
+        this._buildTrackRoute(cop, lk.x, lk.y, this.pursuit.lastKnownDir);
+      } else {
+        this._buildSearchRoute(cop, lk.x, lk.y);
+      }
     }
 
     // Advance through the sweep; rebuild a fresh sweep (centred on the last-known,
@@ -195,6 +201,19 @@ export class GameScene extends Phaser.Scene {
     pts.sort((a, b) => a.key - b.key);
 
     cop.searchRoute = pts.map(s => s.p);
+    cop.searchIndex = 0;
+  }
+
+  // Route that follows the player's last-known travel vector: a line of nodes
+  // marching in `dir` from the last-known position, as if chasing where they fled.
+  _buildTrackRoute(cop, x, y, dir) {
+    const pts = [];
+    for (let d = 1; d <= 4; d++) {
+      const n = this.navGrid.nearestNode(x + Math.cos(dir) * d * GRID_STEP,
+                                         y + Math.sin(dir) * d * GRID_STEP);
+      pts.push(this.navGrid.pos(n));
+    }
+    cop.searchRoute = pts;
     cop.searchIndex = 0;
   }
 
@@ -590,6 +609,12 @@ sepRadius: ${t.sepRadius}, sepStrength: ${t.sepStrength}, searchSpeed: ${t.searc
     // --- Pursuit state machine ---
     const state = this.pursuit.update(anyLOS, px, py, delta / 1000);
     if (this.pursuit.justDitched) this._flashGhost();
+    // Remember which way the player was heading when last seen, for the search vector
+    if (anyLOS) {
+      this.pursuit.lastKnownDir = this.car.getSpeed() > 40
+        ? Math.atan2(this.car.vy, this.car.vx)
+        : this.car.facing;
+    }
 
     // On entering SEARCH, reset each cop's search so they head to last-known first
     if (state === PursuitState.SEARCH && this._prevState !== PursuitState.SEARCH) {
@@ -662,10 +687,18 @@ sepRadius: ${t.sepRadius}, sepStrength: ${t.sepStrength}, searchSpeed: ${t.searc
         cop.modeLabel.setColor(cop.hasLOS ? '#39ff14' : '#ff8c8c');
       }
     }
-    // Last-known marker while searching
+    // Last-known marker + escape-vector arrow while searching
     if (state === PursuitState.SEARCH && this.pursuit.hasLastKnown) {
+      const lk = this.pursuit.lastKnown, dir = this.pursuit.lastKnownDir;
       this.aiDebug.lineStyle(2, 0xffd23f, 0.8);
-      this.aiDebug.strokeCircle(this.pursuit.lastKnown.x, this.pursuit.lastKnown.y, 30);
+      this.aiDebug.strokeCircle(lk.x, lk.y, 30);
+      // arrow in the direction the player was last heading
+      const ex = lk.x + Math.cos(dir) * 90, ey = lk.y + Math.sin(dir) * 90;
+      this.aiDebug.lineStyle(3, 0xffd23f, 0.9);
+      this.aiDebug.lineBetween(lk.x, lk.y, ex, ey);
+      const ah = 0.5;
+      this.aiDebug.lineBetween(ex, ey, ex - Math.cos(dir - ah) * 16, ey - Math.sin(dir - ah) * 16);
+      this.aiDebug.lineBetween(ex, ey, ex - Math.cos(dir + ah) * 16, ey - Math.sin(dir + ah) * 16);
     }
     // Station marker
     this.aiDebug.lineStyle(2, 0x4a90ff, 0.6);
