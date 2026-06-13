@@ -27,11 +27,13 @@ export class CopCar extends Vehicle {
       stats: {
         maxSpeed:     590, // just under the player's 600 — catchable on a long straight
         acceleration: 420, // out-accelerates the player's 345
-        // Interceptor grip — high enough to corner crisply (hold the line) at
-        // speed instead of washing wide into buildings.
-        gripLow:      0.26, // player 0.14
-        gripHigh:     0.18, // player 0.03 — much more traction at speed
-        gripSpeedRef: 480,  // player 350 — grip stays high to higher speed
+        // Near-kinematic grip — velocity tracks facing almost instantly, so there
+        // is no drift lag to wash the cop wide into a building. This is what lets
+        // the path-follower thread the tight grid. (Player is 0.14/0.03 — the cop
+        // is deliberately planted/on-rails; the player is the one who drifts.)
+        gripLow:      0.6,  // player 0.14
+        gripHigh:     0.5,  // player 0.03 — stays grippy at speed
+        gripSpeedRef: 480,
         turnSpeedLow: 2.5,  // player 2.2
         turnSpeed:    1.72, // player 1.2 — turns harder at speed
         // Near-full steering authority at any speed so the path-follower can
