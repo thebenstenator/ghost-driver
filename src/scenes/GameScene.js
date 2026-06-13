@@ -508,10 +508,9 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
     const c = this.cops[0], a = c.ai;
 
     // Single source of truth for the panel; changes are pushed to every cop.
+    // (Cops are kinematic now — grip/turn/accel no longer apply.)
     this.copTuning = {
-      maxSpeed: c.baseMaxSpeed, acceleration: c.acceleration,
-      gripLow: c.gripLow, gripHigh: c.gripHigh, gripSpeedRef: c.gripSpeedRef,
-      turnSpeedLow: c.turnSpeedLow, turnSpeed: c.turnSpeed, minSteerFactor: c.minSteerFactor,
+      maxSpeed: c.baseMaxSpeed,
       cornerMinSpeed: a.cornerMinSpeed, maxApproachSpeed: a.baseApproach,
       brakeDecel: a.brakeDecel, arriveRadius: a.arriveRadius,
       senseDist: a.senseDist, directRange: a.directRange,
@@ -525,19 +524,8 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
     gui.close();
     const apply = () => this._applyCopTuning();
 
-    const drive = gui.addFolder('Handling');
-    drive.add(this.copTuning, 'maxSpeed',       100, 1200, 10).name('Max Speed').onChange(apply);
-    drive.add(this.copTuning, 'acceleration',   10, 1500,  5).name('Acceleration').onChange(apply);
-    drive.add(this.copTuning, 'turnSpeedLow',   0.5, 8.0, 0.05).name('Turn Speed low').onChange(apply);
-    drive.add(this.copTuning, 'turnSpeed',      0.5, 8.0, 0.05).name('Turn Speed high').onChange(apply);
-    drive.add(this.copTuning, 'minSteerFactor', 0,   1.0, 0.05).name('Low-speed steer floor').onChange(apply);
-
-    const grip = gui.addFolder('Grip');
-    grip.add(this.copTuning, 'gripLow',      0.02,  0.6, 0.01).name('Grip (low speed)').onChange(apply);
-    grip.add(this.copTuning, 'gripHigh',     0.005, 0.2, 0.005).name('Grip (high speed)').onChange(apply);
-    grip.add(this.copTuning, 'gripSpeedRef', 50,    600, 5).name('High-speed grip at').onChange(apply);
-
-    const corner = gui.addFolder('Driving AI');
+    const corner = gui.addFolder('Driving');
+    corner.add(this.copTuning, 'maxSpeed',         100, 1200, 10).name('Max Speed').onChange(apply);
     corner.add(this.copTuning, 'maxApproachSpeed', 200, 800, 10).name('Straight speed').onChange(apply);
     corner.add(this.copTuning, 'cornerMinSpeed',   80,  500, 5).name('Corner min speed').onChange(apply);
     corner.add(this.copTuning, 'brakeDecel',       100, 800, 10).name('Brake planning').onChange(apply);
@@ -554,13 +542,9 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
 
     gui.add({ copyStats: () => {
       const t = this.copTuning;
-      console.log(`// --- Cop handling (CopCar stats) ---
-maxSpeed: ${t.maxSpeed}, acceleration: ${t.acceleration},
-gripLow: ${t.gripLow}, gripHigh: ${t.gripHigh}, gripSpeedRef: ${t.gripSpeedRef},
-turnSpeedLow: ${t.turnSpeedLow}, turnSpeed: ${t.turnSpeed}, minSteerFactor: ${t.minSteerFactor},
-// --- Cop behaviour (CopAI) ---
-maxApproachSpeed: ${t.maxApproachSpeed}, cornerMinSpeed: ${t.cornerMinSpeed}, brakeDecel: ${t.brakeDecel},
-arriveRadius: ${t.arriveRadius}, senseDist: ${t.senseDist}, directRange: ${t.directRange},
+      console.log(`// --- Cop driving (CopCar / CopAI) ---
+maxSpeed: ${t.maxSpeed}, maxApproachSpeed: ${t.maxApproachSpeed}, cornerMinSpeed: ${t.cornerMinSpeed},
+brakeDecel: ${t.brakeDecel}, arriveRadius: ${t.arriveRadius}, senseDist: ${t.senseDist}, directRange: ${t.directRange},
 // --- Formation (PursuitDirector) ---
 flankDist: ${t.flankDist}, interceptLead: ${t.interceptLead},
 // --- Separation + search (GameScene) ---
@@ -576,9 +560,7 @@ sepRadius: ${t.sepRadius}, sepStrength: ${t.sepStrength}, searchSpeed: ${t.searc
   _applyCopTuning() {
     const t = this.copTuning;
     for (const cop of this.cops) {
-      cop.baseMaxSpeed = t.maxSpeed; cop.acceleration = t.acceleration;
-      cop.gripLow = t.gripLow; cop.gripHigh = t.gripHigh; cop.gripSpeedRef = t.gripSpeedRef;
-      cop.turnSpeedLow = t.turnSpeedLow; cop.turnSpeed = t.turnSpeed; cop.minSteerFactor = t.minSteerFactor;
+      cop.baseMaxSpeed = t.maxSpeed;
       const a = cop.ai;
       a.cornerMinSpeed = t.cornerMinSpeed; a.baseApproach = t.maxApproachSpeed;
       a.brakeDecel = t.brakeDecel; a.arriveRadius = t.arriveRadius;
