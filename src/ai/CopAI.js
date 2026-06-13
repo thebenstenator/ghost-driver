@@ -1,266 +1,172 @@
 import Phaser from 'phaser';
 import { segmentClear } from './lineOfSight.js';
 
-// Drives a cop Vehicle toward the player along the road network.
+// Path-following cop controller — one clean control law, not a mode cascade.
 //
-// Behaviours (milestone 1):
-//  - Pathfind over the NavGrid (BFS) to a polyline of road intersections, then
-//    follow it with a lookahead "carrot" (pure-pursuit path following). This
-//    keeps the cop on the streets and rounds corners instead of cutting across
-//    building footprints toward a single far node.
-//  - Stuck detection + reverse recovery: if it wedges on a building it backs off
-//    while turning so it re-approaches at a new angle.
-//  - Approach control: as it closes on the player it bleeds speed so it makes
-//    contact instead of orbiting at speed.
+//  • Steering (pure pursuit): aim at a lookahead point on the road path and steer
+//    toward it. Cops run a high minSteerFactor so steering never dies at low speed
+//    — a car that can always turn cannot deadlock, which removes the need for the
+//    old reverse-recovery / U-turn / stuck special cases.
+//
+//  • Speed: a single desiredSpeed from LOOK-AHEAD BRAKING over the actual path
+//    geometry. We know each upcoming corner's angle and distance, so we compute
+//    the fastest speed that still lets us brake to a safe speed for every corner
+//    ahead, capped per pursuit state. Then just accelerate or brake toward it.
+//
+// Because steering is computed from the cop's REAL position relative to the path
+// (not an assumed racing line), being shoved off-line self-corrects instead of
+// crashing. A tiny failsafe handles a genuine physics wedge (nosed into a wall).
 export class CopAI {
   constructor(navGrid, rects = null) {
-    this.rects = rects; // building footprints, for the "don't aim through a wall" safety net
-    // ── COP BEHAVIOUR TUNING ─────────────────────────────────────────────────
-    // These constants control how the cop *decides* to drive (cornering
-    // aggression, approach/ram, stuck recovery). Cop *handling* (speed, grip,
-    // steering) lives in CopCar's stats override. Tune here for behaviour,
-    // there for the car itself.
-    // ─────────────────────────────────────────────────────────────────────────
-    this.nav = navGrid;
-    this.steerDeadzone = 0.05; // rad — avoid left/right jitter when nearly aligned
-    this.directRange   = 120;  // within this, aim straight at the player
-    this.lookahead     = 115;  // steering carrot distance ahead along the path (px)
+    this.nav   = navGrid;
+    this.rects = rects; // building footprints for the "don't steer through a wall" net
 
-    // Corner speed governor: brake before bends so the car doesn't understeer wide
-    this.senseLookahead  = 400; // how far ahead the second carrot looks for curvature
-    this.maxApproachSpeed = 600; // speed cap on a straight (effectively none)
-    this.cornerMinSpeed   = 190; // speed cap through the sharpest (~90°+) corner
-    this.turnHoldSpeed    = 130; // speed held while turning hard / U-turning
-    this.speedCap         = Infinity; // hard speed ceiling (lowered during search)
-    this.cornerClamp      = 1.1; // rad (~63°) — only clamp near-90° grid corners,
-                                 // not the shallow off-grid bend toward the player
+    // --- Tunables ---
+    this.steerLookahead   = 100; // px ahead on the path to steer toward
+    this.steerDeadzone    = 0.05;
+    this.directRange      = 120; // within this, aim straight at the target
+    this.maxApproachSpeed = 600; // speed on a straight (physics caps lower)
+    this.cornerMinSpeed   = 190; // speed through a 90°+ corner
+    this.brakeDecel       = 320; // assumed braking power for the slow-down curve
+    this.speedMargin      = 20;  // hysteresis band around desiredSpeed
+    this.senseDist        = 700; // how far down the path to look for corners
+    this.speedCap         = Infinity; // external cap (lowered during search/withdraw)
 
-    // Cached route — recomputed only when the goal changes or the timer lapses,
-    // so the cop commits to one path instead of flip-flopping between equal-cost
-    // grid routes every frame (which makes it thrash and stall).
-    this._pathPts   = null;
-    this._goalNode  = -1;
+    // Cached route (recomputed on goal change or every interval — avoids per-frame
+    // flip-flop between equal-cost grid paths).
+    this._pathPts  = null;
+    this._goalNode = -1;
     this._pathTimer = 0;
-    this.pathRecomputeInterval = 0.5; // seconds
+    this.pathRecomputeInterval = 0.5;
 
-    // Per-cop state
-    this._reverseTime  = 0;     // remaining time in a reverse-recovery maneuver
-    this._escapeDir    = 1;     // which way to steer while backing out (alternates)
-    this._stuckCount   = 0;     // consecutive stuck triggers without escaping
-    this._anchorX      = 0;     // where we first got stuck this cycle
-    this._anchorY      = 0;
-    this._anchorInit   = false;
-    this._graceTime    = 0;     // post-reverse window where stuck detection is suspended
-    this._sampleTimer  = 0;     // time accumulated toward the next displacement check
-    this._sampleX      = 0;     // position at the start of the current window
-    this._sampleY      = 0;
-    this._sampleInit   = false;
-
-    // Stuck = barely moved over a window while still pursuing. The window is long
-    // enough (and the distance high enough) that a car accelerating from a stop
-    // clears it easily — only a genuinely pinned car stays under it.
-    this.stuckWindow = 0.6; // seconds between displacement checks
-    this.stuckDist   = 20;  // px — moved less than this in a window → wedged
-    this.graceDur    = 0.5; // seconds after a reverse before stuck can re-arm
-    this.escapeReset = 160; // px from the wedge before we consider ourselves free
+    // Failsafe for a genuine physics wedge only
+    this._sampleTimer = 0; this._sampleX = 0; this._sampleY = 0; this._sampleInit = false;
+    this._reverseTime = 0;
   }
 
-  // Returns { up, down, left, right, handbrake, brake }
   getControls(cop, target, dt) {
     const controls = { up: false, down: false, left: false, right: false, handbrake: false, brake: false };
-
     const cx = cop.sprite.x, cy = cop.sprite.y;
-    const dist  = Phaser.Math.Distance.Between(cx, cy, target.x, target.y);
     const speed = cop.getSpeed();
-
-    // --- Choose a steering target + sense the upcoming corner ---
-    let aimX = target.x, aimY = target.y;
-    let cornerSpeedLimit = this.maxApproachSpeed;
-    let bend = 0;
+    const dist  = Phaser.Math.Distance.Between(cx, cy, target.x, target.y);
     this._pathTimer -= dt;
-    if (dist > this.directRange) {
-      const copNode    = this.nav.nearestNode(cx, cy);
-      const playerNode = this.nav.nearestNode(target.x, target.y);
 
-      // Recompute the route only when the goal moves or the cache expires —
-      // otherwise reuse it, so the cop sticks to one path frame-to-frame.
-      if (!this._pathPts || playerNode !== this._goalNode || this._pathTimer <= 0) {
-        const path     = this.nav.findPath(copNode, playerNode);
+    // --- Pick a steering aim + a speed limit ---
+    let aimX = target.x, aimY = target.y;
+    let limit = Math.min(this.maxApproachSpeed, this.speedCap);
+    let nextTurn = 0;
+
+    if (dist > this.directRange) {
+      const copNode  = this.nav.nearestNode(cx, cy);
+      const goalNode = this.nav.nearestNode(target.x, target.y);
+      if (!this._pathPts || goalNode !== this._goalNode || this._pathTimer <= 0) {
+        const path = this.nav.findPath(copNode, goalNode);
         this._pathPts  = path.map(n => this.nav.pos(n));
-        this._goalNode = playerNode;
+        this._goalNode = goalNode;
         this._pathTimer = this.pathRecomputeInterval;
       }
-
-      // Polyline of intersection positions, ending at the player's real position
       const pts = this._pathPts.concat({ x: target.x, y: target.y });
 
-      const near = this._carrot(pts, cx, cy, this.lookahead);
-      aimX = near.x; aimY = near.y;
+      const carrot = this._carrot(pts, cx, cy, this.steerLookahead);
+      aimX = carrot.x; aimY = carrot.y;
 
-      // A farther carrot reveals where the road goes next; the angle between the
-      // two segments is the sharpness of the upcoming bend. Sharper → slower cap.
-      const far  = this._carrot(pts, cx, cy, this.senseLookahead);
-      const h1   = Math.atan2(near.y - cy, near.x - cx);
-      const h2   = Math.atan2(far.y - near.y, far.x - near.x);
-      bend       = Math.abs(Phaser.Math.Angle.Wrap(h2 - h1)); // 0..π
-      const t    = Math.min(bend / (Math.PI / 2), 1);         // 90°+ bend = full severity
-      cornerSpeedLimit = Phaser.Math.Linear(this.maxApproachSpeed, this.cornerMinSpeed, t);
+      const lim = this._speedLimit(pts, cx, cy, limit);
+      limit = lim.speed; nextTurn = lim.turn;
 
-      // Safety net: never steer in a straight line through a building. If the aim
-      // point is blocked, fall back to the cop's own nearest road node, which is
-      // always reachable along the road it's currently on.
+      // Safety net: never steer the straight line through a building.
       if (this.rects && !segmentClear(cx, cy, aimX, aimY, this.rects)) {
         const np = this.nav.pos(copNode);
         aimX = np.x; aimY = np.y;
       }
     }
-    cop.aiTarget = { x: aimX, y: aimY }; // exposed for debug draw
+    cop.aiTarget = { x: aimX, y: aimY };
 
-    // --- Steering (toward the aim point) ---
+    // --- Steering (pure pursuit toward the aim point) ---
     const desired  = Math.atan2(aimY - cy, aimX - cx);
     const angleErr = Phaser.Math.Angle.Wrap(desired - cop.facing);
-    const absErr   = Math.abs(angleErr);
-
     if (angleErr > this.steerDeadzone)       controls.right = true;
     else if (angleErr < -this.steerDeadzone) controls.left  = true;
 
-    // --- Reverse recovery (in progress) ---
-    // Back out while turning hard in one consistent direction so we trace a wide
-    // arc and actually relocate (not just nudge off and re-wedge). The direction
-    // alternates each attempt and the duration escalates (see below), so a stuck
-    // cop is guaranteed to break free rather than oscillating forever.
+    // --- Failsafe: genuine wedge (barely moving, not at target) → brief reverse ---
     if (this._reverseTime > 0) {
       this._reverseTime -= dt;
-      if (this._reverseTime <= 0) this._graceTime = this.graceDur; // let it rebuild speed
-      controls.down  = true;
-      controls.left  = this._escapeDir < 0;
-      controls.right = this._escapeDir > 0;
+      controls.down = true; // keep the wheel turned toward target while backing out
       this._sampleX = cx; this._sampleY = cy; this._sampleTimer = 0;
-      cop.debug = { mode: 'REVERSE', speed, dist, bend, cornerLimit: cornerSpeedLimit,
-                    angleErr, reverseTime: this._reverseTime, stuckCount: this._stuckCount };
+      cop.debug = { mode: 'REVERSE', speed, dist, bend: nextTurn, cornerLimit: limit, angleErr, reverseTime: this._reverseTime };
       return controls;
     }
-
-    // Once we've moved well clear of where we got stuck, reset the escalation.
-    if (this._anchorInit &&
-        Phaser.Math.Distance.Between(cx, cy, this._anchorX, this._anchorY) > this.escapeReset) {
-      this._anchorInit = false;
-      this._stuckCount = 0;
-    }
-
-    // --- Stuck detection (displacement-based) ---
-    // "Stuck" = barely moved over the window while still pursuing (NOT merely
-    // slow — a car accelerating from a stop, or creeping through an alley, is
-    // displacing). Suspended briefly after a reverse so the cop can rebuild speed
-    // before we re-check. Each consecutive trigger escalates the recovery.
-    if (this._graceTime > 0) {
-      this._graceTime -= dt;
+    if (!this._sampleInit) { this._sampleX = cx; this._sampleY = cy; this._sampleInit = true; }
+    this._sampleTimer += dt;
+    if (this._sampleTimer >= 0.7) {
+      const moved = Phaser.Math.Distance.Between(cx, cy, this._sampleX, this._sampleY);
+      if (dist > 80 && moved < 15) this._reverseTime = 0.5;
       this._sampleX = cx; this._sampleY = cy; this._sampleTimer = 0;
-    } else {
-      if (!this._sampleInit) {
-        this._sampleX = cx; this._sampleY = cy; this._sampleInit = true;
-      }
-      this._sampleTimer += dt;
-      if (this._sampleTimer >= this.stuckWindow) {
-        const moved = Phaser.Math.Distance.Between(cx, cy, this._sampleX, this._sampleY);
-        if (dist > 80 && moved < this.stuckDist) {
-          if (!this._anchorInit) { this._anchorX = cx; this._anchorY = cy; this._anchorInit = true; }
-          this._stuckCount++;
-          this._escapeDir   = (this._stuckCount % 2 === 0) ? 1 : -1; // alternate each attempt
-          this._reverseTime = Math.min(0.5 + (this._stuckCount - 1) * 0.3, 1.4); // escalate duration
-        } else {
-          // Made progress this window — clear any escalation.
-          this._stuckCount = 0;
-          this._anchorInit = false;
-        }
-        this._sampleX = cx; this._sampleY = cy; this._sampleTimer = 0;
-      }
     }
 
-    // --- Throttle ---
+    // --- Throttle toward desiredSpeed ---
     let mode;
-    const cap = Math.min(cornerSpeedLimit, this.speedCap);
-    if (speed > cap) {
-      // Over the bend's safe entry speed OR our search cap — brake first, before
-      // anything else, so a low search cap also prevents ramming/overshooting a
-      // waypoint at close range.
-      controls.brake = true;
-      mode = 'CORNER-BRAKE';
-    } else if (dist < 130) {
-      // Close approach. If we're lined up on the player, floor it and ram —
-      // don't bleed speed. Only brake when we're off-angle and fast, where
-      // keeping speed would overshoot into an orbit instead of converging.
-      if (absErr < 0.5)       { controls.up    = true; mode = 'RAM'; }
-      else if (speed > 140)   { controls.brake = true; mode = 'APPROACH-BRAKE'; }
-      else if (absErr < 1.3)  { controls.up    = true; mode = 'APPROACH'; }
-      else                      mode = 'APPROACH-COAST';
-    } else if (absErr <= 1.3) {
-      // Roughly aligned — drive.
-      controls.up = true; mode = 'PURSUE';
-    } else if (absErr > 2.0) {
-      // Target is BEHIND us — a U-turn. Reverse while steering toward it: backing
-      // up swings the nose around AND pulls us off any wall we've nosed into,
-      // whereas creeping forward just drives away (often straight into a building)
-      // and at low speed there isn't enough steering authority to come around.
-      controls.down = true; mode = 'TURN-REVERSE';
-    } else {
-      // Target off to the side (hard turn). HOLD a moderate turn speed rather than
-      // coasting: steering authority scales with speed (speedFactor ~ speed/60),
-      // so coasting to a stall kills the turn and it can never come around.
-      const TURN_SPEED = this.turnHoldSpeed;
-      if (speed > TURN_SPEED + 40)      { controls.brake = true; mode = 'TURN-BRAKE'; }
-      else if (speed < TURN_SPEED - 20) { controls.up = true;    mode = 'TURN'; }
-      else                                mode = 'TURN-COAST';
-    }
+    if (speed > limit + this.speedMargin)      { controls.brake = true; mode = 'BRAKE'; }
+    else if (speed < limit - this.speedMargin) { controls.up    = true; mode = (limit >= this.maxApproachSpeed - 1 ? 'PURSUE' : 'ACCEL'); }
+    else                                         { mode = 'CRUISE'; }
 
-    cop.debug = { mode, speed, dist, bend, cornerLimit: cornerSpeedLimit, angleErr, reverseTime: 0 };
+    cop.debug = { mode, speed, dist, bend: nextTurn, cornerLimit: limit, angleErr, reverseTime: 0 };
     return controls;
   }
 
-  // Pure-pursuit carrot: find the closest point on the polyline to (x,y), then
-  // walk `lookahead` px forward along the polyline and return that point.
-  _carrot(pts, x, y, lookahead) {
-    // 1) closest point across all segments
-    let bestSeg = 0, bestPx = pts[0].x, bestPy = pts[0].y, bestD2 = Infinity;
+  // Safe speed for a corner of the given turn angle: straight → max, 90°+ → min.
+  _cornerSpeed(turn) {
+    const t = Math.min(turn / (Math.PI / 2), 1);
+    return Phaser.Math.Linear(this.maxApproachSpeed, this.cornerMinSpeed, t);
+  }
+
+  // Look-ahead braking: the fastest speed now that still lets us brake to a safe
+  // speed for every corner ahead within senseDist. Based on the path's real
+  // corner angles + distances, so it slows the right amount, early enough.
+  _speedLimit(pts, x, y, baseCap) {
+    const { seg } = this._closest(pts, x, y);
+    let limit = baseCap, sharpest = 0;
+    let acc = Phaser.Math.Distance.Between(x, y, pts[seg + 1].x, pts[seg + 1].y);
+    for (let i = seg + 1; i < pts.length - 1; i++) {
+      const a = pts[i - 1], b = pts[i], c = pts[i + 1];
+      const turn = Math.abs(Phaser.Math.Angle.Wrap(
+        Math.atan2(c.y - b.y, c.x - b.x) - Math.atan2(b.y - a.y, b.x - a.x)));
+      const vC = this._cornerSpeed(turn);
+      const allowed = Math.sqrt(vC * vC + 2 * this.brakeDecel * Math.max(acc, 0));
+      if (allowed < limit) limit = allowed;
+      if (turn > sharpest) sharpest = turn;
+      acc += Phaser.Math.Distance.Between(b.x, b.y, c.x, c.y);
+      if (acc > this.senseDist) break;
+    }
+    return { speed: limit, turn: sharpest };
+  }
+
+  // Closest point on the polyline to (x,y): segment index + point.
+  _closest(pts, x, y) {
+    let seg = 0, px = pts[0].x, py = pts[0].y, best = Infinity;
     for (let i = 0; i < pts.length - 1; i++) {
       const a = pts[i], b = pts[i + 1];
       const abx = b.x - a.x, aby = b.y - a.y;
       const len2 = abx * abx + aby * aby || 1e-6;
       let t = ((x - a.x) * abx + (y - a.y) * aby) / len2;
       t = Math.max(0, Math.min(1, t));
-      const px = a.x + abx * t, py = a.y + aby * t;
-      const dx = x - px, dy = y - py;
-      const d2 = dx * dx + dy * dy;
-      if (d2 < bestD2) { bestD2 = d2; bestSeg = i; bestPx = px; bestPy = py; }
+      const qx = a.x + abx * t, qy = a.y + aby * t;
+      const dx = x - qx, dy = y - qy, dd = dx * dx + dy * dy;
+      if (dd < best) { best = dd; seg = i; px = qx; py = qy; }
     }
+    return { seg, px, py };
+  }
 
-    // 2) walk forward `lookahead` from that point, but stop at a sharp turn so
-    //    the carrot never reaches past a corner (which would aim straight across
-    //    the building on the inside of the bend). The cop drives to the corner,
-    //    then the carrot advances onto the next street.
-    let remain = lookahead;
-    let curx = bestPx, cury = bestPy;
-    for (let i = bestSeg; i < pts.length - 1; i++) {
-      const a = pts[i], b = pts[i + 1];
+  // Point `lookahead` px forward along the polyline from the closest point.
+  _carrot(pts, x, y, lookahead) {
+    const c = this._closest(pts, x, y);
+    let remain = lookahead, curx = c.px, cury = c.py;
+    for (let i = c.seg; i < pts.length - 1; i++) {
+      const b = pts[i + 1];
       const dx = b.x - curx, dy = b.y - cury;
       const segLen = Math.hypot(dx, dy);
-      if (segLen >= remain) {
-        const f = remain / segLen;
-        return { x: curx + dx * f, y: cury + dy * f };
-      }
-      remain -= segLen;
-      curx = b.x; cury = b.y;
-      // If the path turns sharply at vertex b, clamp the carrot there.
-      if (i + 2 < pts.length) {
-        const c = pts[i + 2];
-        const inAng  = Math.atan2(b.y - a.y, b.x - a.x);
-        const outAng = Math.atan2(c.y - b.y, c.x - b.x);
-        if (Math.abs(Phaser.Math.Angle.Wrap(outAng - inAng)) > this.cornerClamp) {
-          return { x: b.x, y: b.y };
-        }
-      }
+      if (segLen >= remain) { const f = remain / segLen; return { x: curx + dx * f, y: cury + dy * f }; }
+      remain -= segLen; curx = b.x; cury = b.y;
     }
-    // ran past the end of the path → aim at the final point (the player)
     return { x: pts[pts.length - 1].x, y: pts[pts.length - 1].y };
   }
 }

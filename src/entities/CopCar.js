@@ -35,9 +35,10 @@ export class CopCar extends Vehicle {
         gripSpeedRef: 430,  // player 350 — grip stays high a bit longer
         turnSpeedLow: 2.5,  // player 2.2
         turnSpeed:    1.72, // player 1.2 — turns harder at speed
-        // Keep most of its steering authority even at a near-stall so it can
-        // always rotate out of a deadlock (player is 0 — can't pivot in place).
-        minSteerFactor: 0.6,
+        // Near-full steering authority at any speed so the path-follower can
+        // always turn (player is 0 — can't pivot in place). This is what makes
+        // the controller deadlock-proof.
+        minSteerFactor: 0.8,
       },
     });
 

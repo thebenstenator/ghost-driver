@@ -430,9 +430,9 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
       maxSpeed: c.maxSpeed, acceleration: c.acceleration,
       gripLow: c.gripLow, gripHigh: c.gripHigh, gripSpeedRef: c.gripSpeedRef,
       turnSpeedLow: c.turnSpeedLow, turnSpeed: c.turnSpeed, minSteerFactor: c.minSteerFactor,
-      cornerMinSpeed: a.cornerMinSpeed, turnHoldSpeed: a.turnHoldSpeed,
-      senseLookahead: a.senseLookahead, cornerClamp: a.cornerClamp,
-      lookahead: a.lookahead, directRange: a.directRange,
+      cornerMinSpeed: a.cornerMinSpeed, maxApproachSpeed: a.maxApproachSpeed,
+      brakeDecel: a.brakeDecel, steerLookahead: a.steerLookahead,
+      senseDist: a.senseDist, directRange: a.directRange,
       sepRadius: this.sepRadius, sepStrength: this.sepStrength,
       searchSpeed: this.searchSpeed,
     };
@@ -453,13 +453,13 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
     grip.add(this.copTuning, 'gripHigh',     0.005, 0.2, 0.005).name('Grip (high speed)').onChange(apply);
     grip.add(this.copTuning, 'gripSpeedRef', 50,    600, 5).name('High-speed grip at').onChange(apply);
 
-    const corner = gui.addFolder('Cornering AI');
-    corner.add(this.copTuning, 'cornerMinSpeed', 80,  500, 5).name('Corner min speed').onChange(apply);
-    corner.add(this.copTuning, 'turnHoldSpeed',  60,  300, 5).name('U-turn hold speed').onChange(apply);
-    corner.add(this.copTuning, 'senseLookahead', 100, 700, 10).name('Corner sense ahead').onChange(apply);
-    corner.add(this.copTuning, 'lookahead',      50,  300, 5).name('Steering lookahead').onChange(apply);
-    corner.add(this.copTuning, 'cornerClamp',    0.5, 2.5, 0.05).name('Corner clamp (rad)').onChange(apply);
-    corner.add(this.copTuning, 'directRange',    50,  400, 10).name('Direct-aim range').onChange(apply);
+    const corner = gui.addFolder('Driving AI');
+    corner.add(this.copTuning, 'maxApproachSpeed', 200, 800, 10).name('Straight speed').onChange(apply);
+    corner.add(this.copTuning, 'cornerMinSpeed',   80,  500, 5).name('Corner min speed').onChange(apply);
+    corner.add(this.copTuning, 'brakeDecel',       100, 800, 10).name('Brake planning').onChange(apply);
+    corner.add(this.copTuning, 'steerLookahead',   40,  250, 5).name('Steering lookahead').onChange(apply);
+    corner.add(this.copTuning, 'senseDist',        200, 1000, 20).name('Corner sense ahead').onChange(apply);
+    corner.add(this.copTuning, 'directRange',      50,  400, 10).name('Direct-aim range').onChange(apply);
 
     const pack = gui.addFolder('Pack & Search');
     pack.add(this.copTuning, 'sepRadius',   0, 250, 5).name('Separation radius').onChange(apply);
@@ -473,10 +473,10 @@ maxSpeed: ${t.maxSpeed}, acceleration: ${t.acceleration},
 gripLow: ${t.gripLow}, gripHigh: ${t.gripHigh}, gripSpeedRef: ${t.gripSpeedRef},
 turnSpeedLow: ${t.turnSpeedLow}, turnSpeed: ${t.turnSpeed}, minSteerFactor: ${t.minSteerFactor},
 // --- Cop behaviour (CopAI) ---
-cornerMinSpeed: ${t.cornerMinSpeed}, turnHoldSpeed: ${t.turnHoldSpeed},
-senseLookahead: ${t.senseLookahead}, lookahead: ${t.lookahead}, cornerClamp: ${t.cornerClamp}, directRange: ${t.directRange},
-// --- Separation (GameScene) ---
-sepRadius: ${t.sepRadius}, sepStrength: ${t.sepStrength}`);
+maxApproachSpeed: ${t.maxApproachSpeed}, cornerMinSpeed: ${t.cornerMinSpeed}, brakeDecel: ${t.brakeDecel},
+steerLookahead: ${t.steerLookahead}, senseDist: ${t.senseDist}, directRange: ${t.directRange},
+// --- Separation + search (GameScene) ---
+sepRadius: ${t.sepRadius}, sepStrength: ${t.sepStrength}, searchSpeed: ${t.searchSpeed}`);
     } }, 'copyStats').name('Copy Cop Stats → Console');
 
     gui.domElement.style.position = 'fixed';
@@ -492,9 +492,9 @@ sepRadius: ${t.sepRadius}, sepStrength: ${t.sepStrength}`);
       cop.gripLow = t.gripLow; cop.gripHigh = t.gripHigh; cop.gripSpeedRef = t.gripSpeedRef;
       cop.turnSpeedLow = t.turnSpeedLow; cop.turnSpeed = t.turnSpeed; cop.minSteerFactor = t.minSteerFactor;
       const a = cop.ai;
-      a.cornerMinSpeed = t.cornerMinSpeed; a.turnHoldSpeed = t.turnHoldSpeed;
-      a.senseLookahead = t.senseLookahead; a.cornerClamp = t.cornerClamp;
-      a.lookahead = t.lookahead; a.directRange = t.directRange;
+      a.cornerMinSpeed = t.cornerMinSpeed; a.maxApproachSpeed = t.maxApproachSpeed;
+      a.brakeDecel = t.brakeDecel; a.steerLookahead = t.steerLookahead;
+      a.senseDist = t.senseDist; a.directRange = t.directRange;
     }
     this.sepRadius = t.sepRadius;
     this.sepStrength = t.sepStrength;
