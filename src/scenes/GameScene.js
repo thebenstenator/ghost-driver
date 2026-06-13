@@ -84,6 +84,9 @@ export class GameScene extends Phaser.Scene {
     this.director   = new PursuitDirector(this.navGrid);
     this.cops       = [];
     this.sightRange = 900;             // px — cop spotting range in clear line
+    this.proximityRange = 250;         // px — sensed regardless of line of sight (can't lose someone beside you)
+    this.awareGrace = 0.6;             // s — stay aware this long after last perceiving (memory)
+    this.huntMaxLead = 800;            // px — cap how far ahead of last-known the hunt marker leads
     this.sepRadius  = 80;              // separation: how close before cops repel
     this.sepStrength = 150;            // separation: aim push strength
     this.searchSpeed = 250;            // cop speed cap while searching (clean corners)
@@ -232,8 +235,11 @@ export class GameScene extends Phaser.Scene {
     const spd = Math.max(p.lastKnownSpeed, 120);
     const dir = p.lastKnownDir;
     const M = 150;
-    const rx = Phaser.Math.Clamp(p.lastKnown.x + Math.cos(dir) * spd * elapsed, M, WORLD_WIDTH - M);
-    const ry = Phaser.Math.Clamp(p.lastKnown.y + Math.sin(dir) * spd * elapsed, M, WORLD_HEIGHT - M);
+    // Leash the lead so the marker stays near where the player actually was,
+    // instead of rocketing to the map edge over a long hunt.
+    const lead = Math.min(spd * elapsed, this.huntMaxLead);
+    const rx = Phaser.Math.Clamp(p.lastKnown.x + Math.cos(dir) * lead, M, WORLD_WIDTH - M);
+    const ry = Phaser.Math.Clamp(p.lastKnown.y + Math.sin(dir) * lead, M, WORLD_HEIGHT - M);
     // Snap onto the road network, but only to a node AHEAD of the last-known
     // position along the travel direction — so the marker never lands behind
     // where the player was heading.
@@ -633,22 +639,31 @@ sepRadius: ${t.sepRadius}, sepStrength: ${t.sepStrength}, searchSpeed: ${t.searc
 
     this.car.update(delta, controls);
 
-    // --- Line of sight: can any cop currently see the player? ---
+    // --- Perception: a cop is AWARE of the player if it has a clear sight line
+    // within range, OR the player is within close proximity (omnidirectional —
+    // you can't lose someone beside you). Awareness persists for awareGrace after
+    // the last perception, so a momentary ray break (corner clip, spin-out) does
+    // not drop the chase. ---
     const px = this.car.sprite.x, py = this.car.sprite.y;
-    let anyLOS = false;
+    const dt = delta / 1000;
+    let anyAware = false;
     let nearestCopDist = Infinity;
     for (const cop of this.cops) {
       const d = Phaser.Math.Distance.Between(cop.sprite.x, cop.sprite.y, px, py);
       if (d < nearestCopDist) nearestCopDist = d;
-      cop.hasLOS = d <= this.sightRange && segmentClear(cop.sprite.x, cop.sprite.y, px, py, this.losRects);
-      if (cop.hasLOS) anyLOS = true;
+      const sees = d <= this.proximityRange ||
+        (d <= this.sightRange && segmentClear(cop.sprite.x, cop.sprite.y, px, py, this.losRects));
+      cop.awareTimer = sees ? this.awareGrace : Math.max(0, (cop.awareTimer || 0) - dt);
+      cop.hasLOS = sees;                  // instantaneous, for debug colouring
+      cop.aware  = cop.awareTimer > 0;    // includes the memory grace
+      if (cop.aware) anyAware = true;
     }
 
-    // --- Pursuit state machine ---
-    const state = this.pursuit.update(anyLOS, px, py, delta / 1000);
+    // --- Pursuit state machine (driven by awareness, not a single-frame ray) ---
+    const state = this.pursuit.update(anyAware, px, py, dt);
     if (this.pursuit.justDitched) this._flashGhost();
     // Remember how the player was moving when last seen (for hunt prediction + search vector)
-    if (anyLOS) {
+    if (anyAware) {
       this.pursuit.lastKnownDir = this.car.getSpeed() > 40
         ? Math.atan2(this.car.vy, this.car.vx)
         : this.car.facing;
