@@ -25,11 +25,15 @@ export class Pursuit {
     this.state            = PursuitState.IDLE;
     this.cooldownDuration = cooldownDuration; // seconds out of sight to ditch
     this.hotDuration      = hotDuration;      // seconds the area stays hot after a ditch
+    this.huntDuration     = 4;  // seconds after losing sight that cops still CHARGE
+                                // the predicted position before downshifting to a slow search
     this.cooldown         = 0;
     this.hot              = 0;
     this.ditched          = false; // true once the cooldown has elapsed (area still hot)
+    this.hunting          = false; // true during the hunt window (recently lost sight)
     this.lastKnown        = { x: 0, y: 0 };
-    this.lastKnownDir     = 0; // player's travel direction when last seen (radians)
+    this.lastKnownDir     = 0;   // player's travel direction when last seen (radians)
+    this.lastKnownSpeed   = 300; // player's speed when last seen (px/s)
     this.hasLastKnown     = false;
     this.justDitched      = false; // true for the single frame the ditch completes
   }
@@ -57,6 +61,7 @@ export class Pursuit {
       this.cooldown     = this.cooldownDuration;
       this.hot          = this.hotDuration;
       this.ditched      = false;
+      this.hunting      = false;
       return this.state;
     }
 
@@ -83,6 +88,11 @@ export class Pursuit {
       // RETURNING / IDLE: no timers — the scene drives cops to the station and
       // calls markIdle() once they've all arrived.
     }
+
+    // HUNT window: recently lost sight (pre-ditch, within huntDuration) — cops
+    // still charge the predicted position at full speed before downshifting.
+    this.hunting = this.state === PursuitState.SEARCH && !this.ditched &&
+                   (this.cooldownDuration - this.cooldown) < this.huntDuration;
 
     return this.state;
   }

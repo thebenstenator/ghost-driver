@@ -11,13 +11,17 @@ import { GRID_COLS, GRID_ROWS, GRID_STEP, ROAD, MARGIN } from '../config.js';
 // included — they're just narrower roads).
 export class NavGrid {
   constructor() {
-    this.cols = GRID_COLS + 1; // n blocks → n+1 road lines
-    this.rows = GRID_ROWS + 1;
+    // Interior road lines only. The full grid has n+1 road lines (i = 0..n), but
+    // i=0 and i=n are the thin margin strips jammed against the world edge — if a
+    // cop targets one it pins against the boundary. Use the interior lines
+    // (i = 1..n-1) so every nav node sits on a real through-street.
+    this.cols = GRID_COLS - 1;
+    this.rows = GRID_ROWS - 1;
 
     this.xs = [];
-    for (let i = 0; i < this.cols; i++) this.xs.push(MARGIN + i * GRID_STEP - ROAD / 2);
+    for (let i = 1; i < GRID_COLS; i++) this.xs.push(MARGIN + i * GRID_STEP - ROAD / 2);
     this.ys = [];
-    for (let j = 0; j < this.rows; j++) this.ys.push(MARGIN + j * GRID_STEP - ROAD / 2);
+    for (let j = 1; j < GRID_ROWS; j++) this.ys.push(MARGIN + j * GRID_STEP - ROAD / 2);
   }
 
   index(i, j) { return j * this.cols + i; }

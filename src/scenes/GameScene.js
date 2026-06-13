@@ -223,6 +223,33 @@ export class GameScene extends Phaser.Scene {
     cop.searchIndex = 0;
   }
 
+  // A "ghost" player the Director hunts during the HUNT phase: dead-reckon the
+  // last-known position forward along the escape vector at the last-known speed.
+  // Shaped like a PlayerCar so the Director can flank/intercept around it.
+  _predictedTarget() {
+    const p = this.pursuit;
+    const elapsed = p.cooldownDuration - p.cooldown; // time since sight was lost
+    const spd = Math.max(p.lastKnownSpeed, 120);
+    const dir = p.lastKnownDir;
+    const M = 150;
+    const x = Phaser.Math.Clamp(p.lastKnown.x + Math.cos(dir) * spd * elapsed, M, WORLD_WIDTH - M);
+    const y = Phaser.Math.Clamp(p.lastKnown.y + Math.sin(dir) * spd * elapsed, M, WORLD_HEIGHT - M);
+    return {
+      sprite: { x, y }, facing: dir,
+      vx: Math.cos(dir) * spd, vy: Math.sin(dir) * spd,
+      getSpeed: () => spd,
+    };
+  }
+
+  // Keep a cop's target inside the navigable interior so nothing pins it on the edge.
+  _clampWorld(t) {
+    const M = 110;
+    return {
+      x: Phaser.Math.Clamp(t.x, M, WORLD_WIDTH - M),
+      y: Phaser.Math.Clamp(t.y, M, WORLD_HEIGHT - M),
+    };
+  }
+
   // Boids-style separation: nudge a cop's aim point away from nearby cops so
   // they spread out and surround the target instead of piling onto one point
   // and jamming each other.
@@ -615,11 +642,12 @@ sepRadius: ${t.sepRadius}, sepStrength: ${t.sepStrength}, searchSpeed: ${t.searc
     // --- Pursuit state machine ---
     const state = this.pursuit.update(anyLOS, px, py, delta / 1000);
     if (this.pursuit.justDitched) this._flashGhost();
-    // Remember which way the player was heading when last seen, for the search vector
+    // Remember how the player was moving when last seen (for hunt prediction + search vector)
     if (anyLOS) {
       this.pursuit.lastKnownDir = this.car.getSpeed() > 40
         ? Math.atan2(this.car.vy, this.car.vx)
         : this.car.facing;
+      this.pursuit.lastKnownSpeed = this.car.getSpeed();
     }
 
     // On entering SEARCH, reset each cop's search so they head to last-known first
@@ -633,20 +661,26 @@ sepRadius: ${t.sepRadius}, sepStrength: ${t.sepStrength}, searchSpeed: ${t.searc
     //  SEARCH    → converge on last-known, then sweep-search outward (area stays hot)
     //  RETURNING → drive back to the station
     //  IDLE      → parked at the station (stand down)
-    // During an active chase the Director assigns each cop a role + target
-    // (chase / flank / intercept) so they spread into a formation instead of
-    // funnelling onto the same point.
-    if (state === PursuitState.ACTIVE) this.director.update(this.cops, this.car, delta / 1000);
+    // Director assigns each cop a role + target (chase / flank / intercept).
+    //  ACTIVE → formation around the real player.
+    //  HUNT   → formation around the PREDICTED position (last-known + escape vector),
+    //           still full speed: they just lost sight and keep charging.
+    const hunting = state === PursuitState.SEARCH && this.pursuit.hunting;
+    if (state === PursuitState.ACTIVE) {
+      this.director.update(this.cops, this.car, delta / 1000);
+    } else if (hunting) {
+      this._huntGhost = this._predictedTarget();
+      this.director.update(this.cops, this._huntGhost, delta / 1000);
+    }
 
     for (const cop of this.cops) {
       let target = null;
-      if      (state === PursuitState.ACTIVE)    target = cop.dirTarget;
-      else if (state === PursuitState.SEARCH)    target = this._cooldownTarget(cop);
-      else if (state === PursuitState.RETURNING) target = this.station;
-      if (target) target = this._separate(cop, target);
-      // Cap speed while searching or withdrawing so cops corner cleanly instead
-      // of overshooting (full speed is only for an active chase).
-      const slow = state === PursuitState.SEARCH || state === PursuitState.RETURNING;
+      if      (state === PursuitState.ACTIVE || hunting) target = cop.dirTarget;
+      else if (state === PursuitState.SEARCH)            target = this._cooldownTarget(cop);
+      else if (state === PursuitState.RETURNING)         target = this.station;
+      if (target) target = this._clampWorld(this._separate(cop, target));
+      // Full speed while chasing OR hunting; capped only for sustained search / withdrawal.
+      const slow = (state === PursuitState.SEARCH && !hunting) || state === PursuitState.RETURNING;
       cop.ai.speedCap = slow ? this.searchSpeed : Infinity;
       cop.update(delta, target);
     }
@@ -706,6 +740,11 @@ sepRadius: ${t.sepRadius}, sepStrength: ${t.sepStrength}, searchSpeed: ${t.searc
       this.aiDebug.lineBetween(ex, ey, ex - Math.cos(dir - ah) * 16, ey - Math.sin(dir - ah) * 16);
       this.aiDebug.lineBetween(ex, ey, ex - Math.cos(dir + ah) * 16, ey - Math.sin(dir + ah) * 16);
     }
+    // Predicted-position marker while hunting (where the pack is charging)
+    if (hunting && this._huntGhost) {
+      this.aiDebug.lineStyle(2, 0xff6688, 0.9);
+      this.aiDebug.strokeCircle(this._huntGhost.sprite.x, this._huntGhost.sprite.y, 24);
+    }
     // Station marker
     this.aiDebug.lineStyle(2, 0x4a90ff, 0.6);
     this.aiDebug.strokeRect(this.station.x - 24, this.station.y - 24, 48, 48);
@@ -730,7 +769,8 @@ sepRadius: ${t.sepRadius}, sepStrength: ${t.sepStrength}, searchSpeed: ${t.searc
     if (!this.cops.length) {
       this.statusText.setText('FREE DRIVE').setColor('#9aa0b5');
       this.cooldownText.setText('');
-    } else if (state === PursuitState.ACTIVE) {
+    } else if (state === PursuitState.ACTIVE || hunting) {
+      // Hunting = they just lost sight and are still charging — read as pursuit.
       this.statusText.setText('● PURSUIT').setColor('#ff3b3b');
       this.cooldownText.setText('');
     } else if (state === PursuitState.SEARCH && !this.pursuit.ditched) {
