@@ -22,10 +22,11 @@ export class CopAI {
     this.rects = rects; // building footprints for the "don't steer through a wall" net
 
     // --- Tunables ---
-    this.steerLookahead   = 100; // px ahead on the path to steer toward
+    this.steerLookahead   = 140; // MAX px ahead on the path (used on straights);
+                                 // shortens with speed so corners are hugged tight
     this.steerDeadzone    = 0.05;
     this.directRange      = 120; // within this, aim straight at the target
-    this.maxApproachSpeed = 600; // speed on a straight (physics caps lower)
+    this.maxApproachSpeed = 610; // speed on a straight (physics caps lower)
     this.cornerMinSpeed   = 190; // speed through a 90°+ corner
     this.brakeDecel       = 320; // assumed braking power for the slow-down curve
     this.speedMargin      = 20;  // hysteresis band around desiredSpeed
@@ -67,7 +68,10 @@ export class CopAI {
       }
       const pts = this._pathPts.concat({ x: target.x, y: target.y });
 
-      const carrot = this._carrot(pts, cx, cy, this.steerLookahead);
+      // Speed-proportional lookahead: short when slow (hugs tight corners),
+      // long when fast (smooth straights). ~0.3s of travel, clamped.
+      const la = Phaser.Math.Clamp(speed * 0.3, 50, this.steerLookahead);
+      const carrot = this._carrot(pts, cx, cy, la);
       aimX = carrot.x; aimY = carrot.y;
 
       const lim = this._speedLimit(pts, cx, cy, limit);

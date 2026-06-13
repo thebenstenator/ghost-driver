@@ -79,7 +79,7 @@ export class GameScene extends Phaser.Scene {
     // --- Cops + pursuit ---
     this.navGrid    = new NavGrid();
     this.cops       = [];
-    this.sightRange = 800;             // px — cop spotting range in clear line
+    this.sightRange = 900;             // px — cop spotting range in clear line
     this.sepRadius  = 80;              // separation: how close before cops repel
     this.sepStrength = 150;            // separation: aim push strength
     this.searchSpeed = 250;            // cop speed cap while searching (clean corners)
