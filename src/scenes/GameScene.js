@@ -60,6 +60,11 @@ export class GameScene extends Phaser.Scene {
     super({ key: 'GameScene' });
   }
 
+  init(data) {
+    // First load starts paused; restarts (R) pass autostart so they drop into play
+    this._autostart = !!(data && data.autostart);
+  }
+
   create() {
     this.physics.world.setBounds(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
     this.cameras.main.setBounds(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
@@ -108,6 +113,10 @@ export class GameScene extends Phaser.Scene {
     this._setupDebugOverlay();
     this._setupTunePanel();
     this._setupCopTunePanel();
+
+    // Start paused on first load; a restart (R) drops straight into play.
+    this.paused = false;
+    if (!this._autostart) this._togglePause();
   }
 
   _spawnCop(x, y) {
@@ -258,7 +267,11 @@ export class GameScene extends Phaser.Scene {
     this.cursors   = this.input.keyboard.createCursorKeys(); // includes .space
     this.wasd      = this.input.keyboard.addKeys('W,A,S,D');
     this.shiftKey  = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.SHIFT);
-    this.restartKey = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.R);
+
+    // Restart any time; new run drops straight into play (not paused)
+    this.input.keyboard.on('keydown-R', () => this.scene.restart({ autostart: true }));
+    // Pause toggle
+    this.input.keyboard.on('keydown-P', () => this._togglePause());
 
     // Cop telemetry: press C to toggle throttled console logging of cop state
     this.copLog       = false;
@@ -328,6 +341,20 @@ export class GameScene extends Phaser.Scene {
         fontFamily: 'monospace', fontSize: '56px', fontStyle: 'bold',
         color: '#ff3b3b', align: 'center',
       }).setOrigin(0.5).setScrollFactor(0).setDepth(101).setAlpha(0);
+
+    // PAUSED overlay
+    this.pausedText = this.add.text(width / 2, this.scale.height / 2,
+      'PAUSED\n\npress P to play', {
+        fontFamily: 'monospace', fontSize: '56px', fontStyle: 'bold',
+        color: '#ffffff', align: 'center',
+      }).setOrigin(0.5).setScrollFactor(0).setDepth(101).setAlpha(0);
+  }
+
+  _togglePause() {
+    if (this.busted) return;
+    this.paused = !this.paused;
+    if (this.paused) { this.physics.pause(); this.pausedText.setAlpha(1); }
+    else             { this.physics.resume(); this.pausedText.setAlpha(0); }
   }
 
   _drawBustBar() {
@@ -502,11 +529,9 @@ sepRadius: ${t.sepRadius}, sepStrength: ${t.sepStrength}, searchSpeed: ${t.searc
   }
 
   update(_time, delta) {
-    // Frozen after a bust — wait for restart
-    if (this.busted) {
-      if (Phaser.Input.Keyboard.JustDown(this.restartKey)) this.scene.restart();
-      return;
-    }
+    // Frozen after a bust (R restarts) or while paused (P resumes) — both keys
+    // are handled by their keydown listeners, so just hold here.
+    if (this.busted || this.paused) return;
 
     // While spectating a cop (camera not on the player), freeze the car so the
     // observer can't accidentally drive or re-trigger anything.
@@ -676,7 +701,7 @@ sepRadius: ${t.sepRadius}, sepStrength: ${t.sepStrength}, searchSpeed: ${t.searc
       }
     }
     if (this.car.isDrifting) lines.push('[HANDBRAKE DRIFT]');
-    lines.push('', 'WASD / Arrows — Drive', 'Space — Handbrake', 'Shift — Brake', 'C — Cop console log', 'V — Cycle camera', 'R — Restart');
+    lines.push('', 'WASD / Arrows — Drive', 'Space — Handbrake', 'Shift — Brake', 'P — Pause', 'C — Cop console log', 'V — Cycle camera', 'R — Restart');
     this.debugText.setText(lines);
 
     // Throttled console telemetry for every cop
