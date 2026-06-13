@@ -75,7 +75,7 @@ export class CopAI {
       const carrot = this._carrot(pts, cx, cy, la);
       aimX = carrot.x; aimY = carrot.y;
 
-      const lim = this._speedLimit(pts, cx, cy, limit);
+      const lim = this._speedLimit(pts, cx, cy, limit, speed);
       limit = lim.speed; nextTurn = lim.turn;
 
       // Safety net: never steer the straight line through a building.
@@ -127,7 +127,11 @@ export class CopAI {
   // Look-ahead braking: the fastest speed now that still lets us brake to a safe
   // speed for every corner ahead within senseDist. Based on the path's real
   // corner angles + distances, so it slows the right amount, early enough.
-  _speedLimit(pts, x, y, baseCap) {
+  _speedLimit(pts, x, y, baseCap, speed) {
+    // Look far enough ahead to actually brake from the CURRENT speed: braking
+    // distance is v²/(2·decel), so a fast (e.g. catch-up-boosted) cop scans
+    // further and starts slowing in time instead of overshooting the corner.
+    const lookDist = Math.max(this.senseDist, (speed * speed) / (2 * this.brakeDecel) + 120);
     const { seg } = this._closest(pts, x, y);
     let limit = baseCap, sharpest = 0;
     let acc = Phaser.Math.Distance.Between(x, y, pts[seg + 1].x, pts[seg + 1].y);
@@ -140,7 +144,7 @@ export class CopAI {
       if (allowed < limit) limit = allowed;
       if (turn > sharpest) sharpest = turn;
       acc += Phaser.Math.Distance.Between(b.x, b.y, c.x, c.y);
-      if (acc > this.senseDist) break;
+      if (acc > lookDist) break;
     }
     return { speed: limit, turn: sharpest };
   }
