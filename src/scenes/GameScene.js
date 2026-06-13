@@ -74,7 +74,7 @@ export class GameScene extends Phaser.Scene {
     // --- Cops + pursuit ---
     this.navGrid    = new NavGrid();
     this.cops       = [];
-    this.sightRange = 650;             // px — cop spotting range in clear line
+    this.sightRange = 800;             // px — cop spotting range in clear line
     this.sepRadius  = 80;              // separation: how close before cops repel
     this.sepStrength = 150;            // separation: aim push strength
     this.searchSpeed = 250;            // cop speed cap while searching (clean corners)
@@ -141,9 +141,10 @@ export class GameScene extends Phaser.Scene {
       this._buildSearchRoute(cop, lk.x, lk.y);
     }
 
-    // Advance through the sweep; rebuild a fresh sweep when the current one runs out
+    // Advance through the sweep; rebuild a fresh sweep (centred on the last-known,
+    // so the patrol stays around where the player vanished) when it runs out.
     if (!cop.searchRoute || cop.searchIndex >= cop.searchRoute.length) {
-      this._buildSearchRoute(cop, cop.sprite.x, cop.sprite.y);
+      this._buildSearchRoute(cop, lk.x, lk.y);
     }
     const wp = cop.searchRoute[cop.searchIndex];
     if (Phaser.Math.Distance.Between(cop.sprite.x, cop.sprite.y, wp.x, wp.y) < ARRIVE) {
@@ -154,22 +155,21 @@ export class GameScene extends Phaser.Scene {
 
   _buildSearchRoute(cop, x, y) {
     const start = this.navGrid.nearestNode(x, y);
-    const nodes = this.navGrid.nodesInRange(start, 3); // ~3 intersections outward
+    const nodes = this.navGrid.nodesInRange(start, 2); // nearby intersections
 
-    // Each cop favours its own angular sector around the search centre, so the
-    // pack fans out to cover different streets instead of sweeping the same ones.
-    const n = Math.max(1, this.cops.length);
-    const prefAngle = (cop.searchSlot || 0) * (2 * Math.PI / n);
-    const scored = nodes.map(idx => {
+    // Order the nodes into a CIRCULAR sweep by angle around the centre, starting
+    // at this cop's sector. The cop patrols around the area (no backtracking to
+    // the centre), and different cops start at different angles so they spread.
+    const n    = Math.max(1, this.cops.length);
+    const base = (cop.searchSlot || 0) * (2 * Math.PI / n);
+    const pts = nodes.map(idx => {
       const p   = this.navGrid.pos(idx);
-      const dx  = p.x - x, dy = p.y - y;
-      const ring = Math.round(Math.hypot(dx, dy) / 250); // expand outward ring by ring
-      const angDiff = Math.abs(Phaser.Math.Angle.Wrap(Math.atan2(dy, dx) - prefAngle));
-      return { p, ring, angDiff };
+      const rel = Phaser.Math.Angle.Wrap(Math.atan2(p.y - y, p.x - x) - base);
+      return { p, key: rel < 0 ? rel + 2 * Math.PI : rel }; // 0..2π sweeping from base
     });
-    scored.sort((a, b) => (a.ring - b.ring) || (a.angDiff - b.angDiff));
+    pts.sort((a, b) => a.key - b.key);
 
-    cop.searchRoute = scored.map(s => s.p);
+    cop.searchRoute = pts.map(s => s.p);
     cop.searchIndex = 0;
   }
 

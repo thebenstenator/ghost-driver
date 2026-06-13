@@ -179,7 +179,14 @@ export class CopAI {
 
     // --- Throttle ---
     let mode;
-    if (dist < 130) {
+    const cap = Math.min(cornerSpeedLimit, this.speedCap);
+    if (speed > cap) {
+      // Over the bend's safe entry speed OR our search cap — brake first, before
+      // anything else, so a low search cap also prevents ramming/overshooting a
+      // waypoint at close range.
+      controls.brake = true;
+      mode = 'CORNER-BRAKE';
+    } else if (dist < 130) {
       // Close approach. If we're lined up on the player, floor it and ram —
       // don't bleed speed. Only brake when we're off-angle and fast, where
       // keeping speed would overshoot into an orbit instead of converging.
@@ -187,11 +194,6 @@ export class CopAI {
       else if (speed > 140)   { controls.brake = true; mode = 'APPROACH-BRAKE'; }
       else if (absErr < 1.3)  { controls.up    = true; mode = 'APPROACH'; }
       else                      mode = 'APPROACH-COAST';
-    } else if (speed > Math.min(cornerSpeedLimit, this.speedCap)) {
-      // Going too fast for the bend ahead (or over our search speed cap) — brake
-      // so we can actually turn instead of understeering wide.
-      controls.brake = true;
-      mode = 'CORNER-BRAKE';
     } else if (absErr <= 1.3) {
       // Roughly aligned — drive.
       controls.up = true; mode = 'PURSUE';
