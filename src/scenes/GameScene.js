@@ -161,21 +161,16 @@ export class GameScene extends Phaser.Scene {
 
     if (!cop.searching) {
       const d = Phaser.Math.Distance.Between(cop.sprite.x, cop.sprite.y, lk.x, lk.y);
-      if (d > ARRIVE) return lk;          // still en route to last-known
-      cop.searching = true;               // arrived — begin searching
-      // One cop (slot 0) follows the player's last-known travel vector — chasing
-      // the direction they fled — while the others sweep the area in a circle.
-      if (cop.searchSlot === 0 && this.pursuit.hasLastKnown) {
-        this._buildTrackRoute(cop, lk.x, lk.y, this.pursuit.lastKnownDir);
-      } else {
-        this._buildSearchRoute(cop, lk.x, lk.y);
-      }
+      // Only head back to the last-known if we're more than ~a block away; if
+      // we're already in the area, start searching right here.
+      if (d > GRID_STEP) return lk;
+      cop.searching = true;
+      this._startSearch(cop);
     }
 
-    // Advance through the sweep; rebuild a fresh sweep (centred on the last-known,
-    // so the patrol stays around where the player vanished) when it runs out.
+    // Rebuild a fresh sweep from the current spot/heading when the route runs out.
     if (!cop.searchRoute || cop.searchIndex >= cop.searchRoute.length) {
-      this._buildSearchRoute(cop, lk.x, lk.y);
+      this._startSearch(cop);
     }
     const wp = cop.searchRoute[cop.searchIndex];
     if (Phaser.Math.Distance.Between(cop.sprite.x, cop.sprite.y, wp.x, wp.y) < ARRIVE) {
@@ -184,15 +179,15 @@ export class GameScene extends Phaser.Scene {
     return cop.searchRoute[Math.min(cop.searchIndex, cop.searchRoute.length - 1)];
   }
 
-  _buildSearchRoute(cop, x, y) {
+  _buildSearchRoute(cop, x, y, baseAngle = null) {
     const start = this.navGrid.nearestNode(x, y);
     const nodes = this.navGrid.nodesInRange(start, 2); // nearby intersections
 
     // Order the nodes into a CIRCULAR sweep by angle around the centre, starting
-    // at this cop's sector. The cop patrols around the area (no backtracking to
-    // the centre), and different cops start at different angles so they spread.
+    // at baseAngle (the cop's current heading when searching from where it is) or,
+    // failing that, its sector so different cops spread.
     const n    = Math.max(1, this.cops.length);
-    const base = (cop.searchSlot || 0) * (2 * Math.PI / n);
+    const base = (baseAngle !== null) ? baseAngle : (cop.searchSlot || 0) * (2 * Math.PI / n);
     const pts = nodes.map(idx => {
       const p   = this.navGrid.pos(idx);
       const rel = Phaser.Math.Angle.Wrap(Math.atan2(p.y - y, p.x - x) - base);
@@ -204,8 +199,19 @@ export class GameScene extends Phaser.Scene {
     cop.searchIndex = 0;
   }
 
+  // Begin (or rebuild) a search from the cop's CURRENT position: slot-0 follows
+  // the player's escape vector; the rest sweep outward starting in their heading.
+  _startSearch(cop) {
+    const sx = cop.sprite.x, sy = cop.sprite.y;
+    if (cop.searchSlot === 0 && this.pursuit.hasLastKnown) {
+      this._buildTrackRoute(cop, sx, sy, this.pursuit.lastKnownDir);
+    } else {
+      this._buildSearchRoute(cop, sx, sy, cop.facing);
+    }
+  }
+
   // Route that follows the player's last-known travel vector: a line of nodes
-  // marching in `dir` from the last-known position, as if chasing where they fled.
+  // marching in `dir` from the start position, as if chasing where they fled.
   _buildTrackRoute(cop, x, y, dir) {
     const pts = [];
     for (let d = 1; d <= 4; d++) {
