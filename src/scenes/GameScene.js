@@ -62,6 +62,8 @@ export class GameScene extends Phaser.Scene {
   }
 
   init(data) {
+    // Cop count chosen in the menu (default 3 if launched directly)
+    this.copCount = (data && Number.isInteger(data.copCount)) ? data.copCount : 3;
     // First load starts paused; restarts (R) pass autostart so they drop into play
     this._autostart = !!(data && data.autostart);
   }
@@ -89,14 +91,19 @@ export class GameScene extends Phaser.Scene {
     // Station the cops withdraw to once the heat cools (SE corner, for testing)
     this.station    = this.navGrid.pos(this.navGrid.index(this.navGrid.cols - 1, this.navGrid.rows - 1));
 
-    // Spawn a few cops approaching from different sides
+    // Spawn the chosen number of cops, approaching from different sides
     const cx = WORLD_WIDTH / 2, cy = WORLD_HEIGHT / 2;
-    this._spawnCop(cx - 504, cy);        // west, 1 block
-    this._spawnCop(cx + 504, cy);        // east, 1 block
-    this._spawnCop(cx,        cy + 1008); // south, 2 blocks
+    const spawnPts = [
+      { x: cx - 504, y: cy },         // west
+      { x: cx + 504, y: cy },         // east
+      { x: cx,        y: cy + 1008 }, // south
+    ];
+    for (let i = 0; i < this.copCount && i < spawnPts.length; i++) {
+      this._spawnCop(spawnPts[i].x, spawnPts[i].y);
+    }
 
-    // The chase is already underway when the mission starts
-    this.pursuit.begin(this.car.sprite.x, this.car.sprite.y);
+    // The chase is already underway when the mission starts (if there are cops)
+    if (this.cops.length) this.pursuit.begin(this.car.sprite.x, this.car.sprite.y);
 
     // Lose condition
     this.bust   = new BustMeter();
@@ -116,7 +123,14 @@ export class GameScene extends Phaser.Scene {
     this._setupTunePanel();
     this._setupCopTunePanel();
 
-    // Start paused on first load; a restart (R) drops straight into play.
+    // Tear down the DOM tuning panels when the scene restarts / returns to menu,
+    // otherwise they stack up duplicates on every R / menu cycle.
+    this.events.once('shutdown', () => {
+      if (this.gui)    this.gui.destroy();
+      if (this.copGui) this.copGui.destroy();
+    });
+
+    // Start paused on first load; launching from the menu (autostart) plays now.
     this.paused = false;
     if (!this._autostart) this._togglePause();
   }
@@ -270,8 +284,10 @@ export class GameScene extends Phaser.Scene {
     this.wasd      = this.input.keyboard.addKeys('W,A,S,D');
     this.shiftKey  = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.SHIFT);
 
-    // Restart any time; new run drops straight into play (not paused)
-    this.input.keyboard.on('keydown-R', () => this.scene.restart({ autostart: true }));
+    // Restart any time (same cop count); new run drops straight into play
+    this.input.keyboard.on('keydown-R', () => this.scene.restart({ copCount: this.copCount, autostart: true }));
+    // Back to the menu
+    this.input.keyboard.on('keydown-M', () => this.scene.start('MenuScene'));
     // Pause toggle
     this.input.keyboard.on('keydown-P', () => this._togglePause());
 
@@ -384,6 +400,7 @@ export class GameScene extends Phaser.Scene {
   _setupTunePanel() {
     const car = this.car;
     const gui = new GUI({ title: 'Car Tuning', width: 280 });
+    this.gui = gui;
     gui.close();
 
     const engine = gui.addFolder('Engine');
@@ -468,6 +485,7 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
     };
 
     const gui = new GUI({ title: 'Cop Tuning', width: 300 });
+    this.copGui = gui;
     gui.close();
     const apply = () => this._applyCopTuning();
 
@@ -670,7 +688,10 @@ sepRadius: ${t.sepRadius}, sepStrength: ${t.sepStrength}, searchSpeed: ${t.searc
 
 
     // --- Pursuit HUD ---
-    if (state === PursuitState.ACTIVE) {
+    if (!this.cops.length) {
+      this.statusText.setText('FREE DRIVE').setColor('#9aa0b5');
+      this.cooldownText.setText('');
+    } else if (state === PursuitState.ACTIVE) {
       this.statusText.setText('● PURSUIT').setColor('#ff3b3b');
       this.cooldownText.setText('');
     } else if (state === PursuitState.SEARCH && !this.pursuit.ditched) {
@@ -716,7 +737,7 @@ sepRadius: ${t.sepRadius}, sepStrength: ${t.sepStrength}, searchSpeed: ${t.searc
       }
     }
     if (this.car.isDrifting) lines.push('[HANDBRAKE DRIFT]');
-    lines.push('', 'WASD / Arrows — Drive', 'Space — Handbrake', 'Shift — Brake', 'P — Pause', 'C — Cop console log', 'V — Cycle camera', 'R — Restart');
+    lines.push('', 'WASD / Arrows — Drive', 'Space — Handbrake', 'Shift — Brake', 'P — Pause', 'C — Cop console log', 'V — Cycle camera', 'R — Restart', 'M — Menu');
     this.debugText.setText(lines);
 
     // Throttled console telemetry for every cop
