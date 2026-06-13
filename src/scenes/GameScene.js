@@ -556,8 +556,10 @@ sepRadius: ${t.sepRadius}, sepStrength: ${t.sepStrength}`);
       else if (state === PursuitState.SEARCH)    target = this._cooldownTarget(cop);
       else if (state === PursuitState.RETURNING) target = this.station;
       if (target) target = this._separate(cop, target);
-      // Cap speed while searching so cops corner cleanly instead of overshooting
-      cop.ai.speedCap = (state === PursuitState.SEARCH) ? this.searchSpeed : Infinity;
+      // Cap speed while searching or withdrawing so cops corner cleanly instead
+      // of overshooting (full speed is only for an active chase).
+      const slow = state === PursuitState.SEARCH || state === PursuitState.RETURNING;
+      cop.ai.speedCap = slow ? this.searchSpeed : Infinity;
       cop.update(delta, target);
     }
 
