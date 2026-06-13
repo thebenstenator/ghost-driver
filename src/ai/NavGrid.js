@@ -42,6 +42,24 @@ export class NavGrid {
     return this.index(bi, bj);
   }
 
+  // Nearest node to (px,py) that lies AHEAD of origin (ox,oy) along direction
+  // `dir` — i.e. its offset from the origin has a positive component along dir.
+  // Used so the hunt prediction snaps forward of where the player was last seen,
+  // never to a node behind their travel direction. Falls back to nearestNode.
+  nearestNodeAhead(px, py, ox, oy, dir) {
+    const dx = Math.cos(dir), dy = Math.sin(dir);
+    let best = -1, bestD = Infinity;
+    for (let j = 0; j < this.rows; j++) {
+      for (let i = 0; i < this.cols; i++) {
+        const nx = this.xs[i], ny = this.ys[j];
+        if ((nx - ox) * dx + (ny - oy) * dy < 0) continue; // behind the origin
+        const d = (nx - px) * (nx - px) + (ny - py) * (ny - py);
+        if (d < bestD) { bestD = d; best = this.index(i, j); }
+      }
+    }
+    return best >= 0 ? best : this.nearestNode(px, py);
+  }
+
   // BFS shortest path (in node count) from start to goal. Returns an array of
   // node indices including both endpoints, or [start] if already there.
   findPath(start, goal) {

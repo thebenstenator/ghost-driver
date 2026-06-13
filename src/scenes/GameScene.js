@@ -234,9 +234,11 @@ export class GameScene extends Phaser.Scene {
     const M = 150;
     const rx = Phaser.Math.Clamp(p.lastKnown.x + Math.cos(dir) * spd * elapsed, M, WORLD_WIDTH - M);
     const ry = Phaser.Math.Clamp(p.lastKnown.y + Math.sin(dir) * spd * elapsed, M, WORLD_HEIGHT - M);
-    // Snap onto the road network — the player is on a road, so the prediction
-    // should be too (keeps the marker/target out of building interiors).
-    const snap = this.navGrid.pos(this.navGrid.nearestNode(rx, ry));
+    // Snap onto the road network, but only to a node AHEAD of the last-known
+    // position along the travel direction — so the marker never lands behind
+    // where the player was heading.
+    const snap = this.navGrid.pos(
+      this.navGrid.nearestNodeAhead(rx, ry, p.lastKnown.x, p.lastKnown.y, dir));
     return {
       sprite: { x: snap.x, y: snap.y }, facing: dir,
       vx: Math.cos(dir) * spd, vy: Math.sin(dir) * spd,
