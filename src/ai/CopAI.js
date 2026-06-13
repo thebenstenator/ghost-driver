@@ -32,6 +32,8 @@ export class CopAI {
     this.brakeDecel       = 320; // assumed braking power for the slow-down curve
     this.speedMargin      = 20;  // hysteresis band around desiredSpeed
     this.senseDist        = 700; // how far down the path to look for corners
+    this.cornerClamp      = 0.9; // rad (~51°) — carrot won't round a turn sharper than
+                                 // this until the cop reaches it (drive into the junction first)
     this.speedCap         = Infinity; // external cap (lowered during search/withdraw)
 
     // Cached route (recomputed on goal change or every interval — avoids per-frame
@@ -175,6 +177,15 @@ export class CopAI {
       const segLen = Math.hypot(dx, dy);
       if (segLen >= remain) { const f = remain / segLen; return { x: curx + dx * f, y: cury + dy * f }; }
       remain -= segLen; curx = b.x; cury = b.y;
+      // Stop the carrot at a sharp corner so the cop drives into the junction
+      // before turning — instead of cutting across the inside building.
+      if (i + 2 < pts.length) {
+        const inAng  = Math.atan2(b.y - pts[i].y, b.x - pts[i].x);
+        const outAng = Math.atan2(pts[i + 2].y - b.y, pts[i + 2].x - b.x);
+        if (Math.abs(Phaser.Math.Angle.Wrap(outAng - inAng)) > this.cornerClamp) {
+          return { x: b.x, y: b.y };
+        }
+      }
     }
     return { x: pts[pts.length - 1].x, y: pts[pts.length - 1].y };
   }

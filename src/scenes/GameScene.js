@@ -87,6 +87,7 @@ export class GameScene extends Phaser.Scene {
     this.proximityRange = 250;         // px — sensed regardless of line of sight (can't lose someone beside you)
     this.awareGrace = 0.6;             // s — stay aware this long after last perceiving (memory)
     this.huntMaxLead = 800;            // px — cap how far ahead of last-known the hunt marker leads
+    this.huntLklTime = 3;              // s — converge on the last-known first; only then lead the marker forward
     this.sepRadius  = 80;              // separation: how close before cops repel
     this.sepStrength = 150;            // separation: aim push strength
     this.searchSpeed = 250;            // cop speed cap while searching (clean corners)
@@ -235,16 +236,20 @@ export class GameScene extends Phaser.Scene {
     const spd = Math.max(p.lastKnownSpeed, 120);
     const dir = p.lastKnownDir;
     const M = 150;
-    // Leash the lead so the marker stays near where the player actually was,
-    // instead of rocketing to the map edge over a long hunt.
-    const lead = Math.min(spd * elapsed, this.huntMaxLead);
-    const rx = Phaser.Math.Clamp(p.lastKnown.x + Math.cos(dir) * lead, M, WORLD_WIDTH - M);
-    const ry = Phaser.Math.Clamp(p.lastKnown.y + Math.sin(dir) * lead, M, WORLD_HEIGHT - M);
-    // Snap onto the road network, but only to a node AHEAD of the last-known
-    // position along the travel direction — so the marker never lands behind
-    // where the player was heading.
-    const snap = this.navGrid.pos(
-      this.navGrid.nearestNodeAhead(rx, ry, p.lastKnown.x, p.lastKnown.y, dir));
+    // Two phases: for the first huntLklTime seconds hold at the last-known itself
+    // (check there first — the player may have stopped or doubled back). After
+    // that, lead the marker forward along the escape vector (leashed) to follow
+    // the trail. This is the "LKL before marker" priority.
+    const lead = Phaser.Math.Clamp((elapsed - this.huntLklTime) * spd, 0, this.huntMaxLead);
+    let nodeIdx;
+    if (lead < 30) {
+      nodeIdx = this.navGrid.nearestNode(p.lastKnown.x, p.lastKnown.y);
+    } else {
+      const rx = Phaser.Math.Clamp(p.lastKnown.x + Math.cos(dir) * lead, M, WORLD_WIDTH - M);
+      const ry = Phaser.Math.Clamp(p.lastKnown.y + Math.sin(dir) * lead, M, WORLD_HEIGHT - M);
+      nodeIdx = this.navGrid.nearestNodeAhead(rx, ry, p.lastKnown.x, p.lastKnown.y, dir);
+    }
+    const snap = this.navGrid.pos(nodeIdx);
     return {
       sprite: { x: snap.x, y: snap.y }, facing: dir,
       vx: Math.cos(dir) * spd, vy: Math.sin(dir) * spd,
