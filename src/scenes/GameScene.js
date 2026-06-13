@@ -513,7 +513,7 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
       gripLow: c.gripLow, gripHigh: c.gripHigh, gripSpeedRef: c.gripSpeedRef,
       turnSpeedLow: c.turnSpeedLow, turnSpeed: c.turnSpeed, minSteerFactor: c.minSteerFactor,
       cornerMinSpeed: a.cornerMinSpeed, maxApproachSpeed: a.baseApproach,
-      brakeDecel: a.brakeDecel, steerLookahead: a.steerLookahead,
+      brakeDecel: a.brakeDecel, arriveRadius: a.arriveRadius,
       senseDist: a.senseDist, directRange: a.directRange,
       sepRadius: this.sepRadius, sepStrength: this.sepStrength,
       searchSpeed: this.searchSpeed,
@@ -541,7 +541,7 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
     corner.add(this.copTuning, 'maxApproachSpeed', 200, 800, 10).name('Straight speed').onChange(apply);
     corner.add(this.copTuning, 'cornerMinSpeed',   80,  500, 5).name('Corner min speed').onChange(apply);
     corner.add(this.copTuning, 'brakeDecel',       100, 800, 10).name('Brake planning').onChange(apply);
-    corner.add(this.copTuning, 'steerLookahead',   40,  250, 5).name('Steering lookahead').onChange(apply);
+    corner.add(this.copTuning, 'arriveRadius',     30,  150, 5).name('Node arrive radius').onChange(apply);
     corner.add(this.copTuning, 'senseDist',        200, 1000, 20).name('Corner sense ahead').onChange(apply);
     corner.add(this.copTuning, 'directRange',      50,  400, 10).name('Direct-aim range').onChange(apply);
 
@@ -560,7 +560,7 @@ gripLow: ${t.gripLow}, gripHigh: ${t.gripHigh}, gripSpeedRef: ${t.gripSpeedRef},
 turnSpeedLow: ${t.turnSpeedLow}, turnSpeed: ${t.turnSpeed}, minSteerFactor: ${t.minSteerFactor},
 // --- Cop behaviour (CopAI) ---
 maxApproachSpeed: ${t.maxApproachSpeed}, cornerMinSpeed: ${t.cornerMinSpeed}, brakeDecel: ${t.brakeDecel},
-steerLookahead: ${t.steerLookahead}, senseDist: ${t.senseDist}, directRange: ${t.directRange},
+arriveRadius: ${t.arriveRadius}, senseDist: ${t.senseDist}, directRange: ${t.directRange},
 // --- Formation (PursuitDirector) ---
 flankDist: ${t.flankDist}, interceptLead: ${t.interceptLead},
 // --- Separation + search (GameScene) ---
@@ -581,7 +581,7 @@ sepRadius: ${t.sepRadius}, sepStrength: ${t.sepStrength}, searchSpeed: ${t.searc
       cop.turnSpeedLow = t.turnSpeedLow; cop.turnSpeed = t.turnSpeed; cop.minSteerFactor = t.minSteerFactor;
       const a = cop.ai;
       a.cornerMinSpeed = t.cornerMinSpeed; a.baseApproach = t.maxApproachSpeed;
-      a.brakeDecel = t.brakeDecel; a.steerLookahead = t.steerLookahead;
+      a.brakeDecel = t.brakeDecel; a.arriveRadius = t.arriveRadius;
       a.senseDist = t.senseDist; a.directRange = t.directRange;
     }
     this.sepRadius = t.sepRadius;
