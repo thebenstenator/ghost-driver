@@ -232,10 +232,13 @@ export class GameScene extends Phaser.Scene {
     const spd = Math.max(p.lastKnownSpeed, 120);
     const dir = p.lastKnownDir;
     const M = 150;
-    const x = Phaser.Math.Clamp(p.lastKnown.x + Math.cos(dir) * spd * elapsed, M, WORLD_WIDTH - M);
-    const y = Phaser.Math.Clamp(p.lastKnown.y + Math.sin(dir) * spd * elapsed, M, WORLD_HEIGHT - M);
+    const rx = Phaser.Math.Clamp(p.lastKnown.x + Math.cos(dir) * spd * elapsed, M, WORLD_WIDTH - M);
+    const ry = Phaser.Math.Clamp(p.lastKnown.y + Math.sin(dir) * spd * elapsed, M, WORLD_HEIGHT - M);
+    // Snap onto the road network — the player is on a road, so the prediction
+    // should be too (keeps the marker/target out of building interiors).
+    const snap = this.navGrid.pos(this.navGrid.nearestNode(rx, ry));
     return {
-      sprite: { x, y }, facing: dir,
+      sprite: { x: snap.x, y: snap.y }, facing: dir,
       vx: Math.cos(dir) * spd, vy: Math.sin(dir) * spd,
       getSpeed: () => spd,
     };
@@ -525,10 +528,10 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
 
     // Single source of truth for the panel; changes are pushed to every cop.
     this.copTuning = {
-      maxSpeed: c.maxSpeed, acceleration: c.acceleration,
+      maxSpeed: c.baseMaxSpeed, acceleration: c.acceleration,
       gripLow: c.gripLow, gripHigh: c.gripHigh, gripSpeedRef: c.gripSpeedRef,
       turnSpeedLow: c.turnSpeedLow, turnSpeed: c.turnSpeed, minSteerFactor: c.minSteerFactor,
-      cornerMinSpeed: a.cornerMinSpeed, maxApproachSpeed: a.maxApproachSpeed,
+      cornerMinSpeed: a.cornerMinSpeed, maxApproachSpeed: a.baseApproach,
       brakeDecel: a.brakeDecel, steerLookahead: a.steerLookahead,
       senseDist: a.senseDist, directRange: a.directRange,
       sepRadius: this.sepRadius, sepStrength: this.sepStrength,
@@ -592,11 +595,11 @@ sepRadius: ${t.sepRadius}, sepStrength: ${t.sepStrength}, searchSpeed: ${t.searc
   _applyCopTuning() {
     const t = this.copTuning;
     for (const cop of this.cops) {
-      cop.maxSpeed = t.maxSpeed; cop.acceleration = t.acceleration;
+      cop.baseMaxSpeed = t.maxSpeed; cop.acceleration = t.acceleration;
       cop.gripLow = t.gripLow; cop.gripHigh = t.gripHigh; cop.gripSpeedRef = t.gripSpeedRef;
       cop.turnSpeedLow = t.turnSpeedLow; cop.turnSpeed = t.turnSpeed; cop.minSteerFactor = t.minSteerFactor;
       const a = cop.ai;
-      a.cornerMinSpeed = t.cornerMinSpeed; a.maxApproachSpeed = t.maxApproachSpeed;
+      a.cornerMinSpeed = t.cornerMinSpeed; a.baseApproach = t.maxApproachSpeed;
       a.brakeDecel = t.brakeDecel; a.steerLookahead = t.steerLookahead;
       a.senseDist = t.senseDist; a.directRange = t.directRange;
     }
@@ -682,6 +685,19 @@ sepRadius: ${t.sepRadius}, sepStrength: ${t.sepStrength}, searchSpeed: ${t.searc
       // Full speed while chasing OR hunting; capped only for sustained search / withdrawal.
       const slow = (state === PursuitState.SEARCH && !hunting) || state === PursuitState.RETURNING;
       cop.ai.speedCap = slow ? this.searchSpeed : Infinity;
+
+      // Catch-up rubber-band: a cop far from the player during a chase gets a
+      // temporary top-speed boost so stragglers rejoin instead of crawling back
+      // across the big map. Fades to zero by the time it's on-screen (~1200px).
+      if ((state === PursuitState.ACTIVE || hunting)) {
+        const dp = Phaser.Math.Distance.Between(cop.sprite.x, cop.sprite.y, px, py);
+        const boost = Phaser.Math.Clamp((dp - 1200) / 6, 0, 280);
+        cop.maxSpeed = cop.baseMaxSpeed + boost;
+        cop.ai.maxApproachSpeed = cop.ai.baseApproach + boost;
+      } else {
+        cop.maxSpeed = cop.baseMaxSpeed;
+        cop.ai.maxApproachSpeed = cop.ai.baseApproach;
+      }
       cop.update(delta, target);
     }
 

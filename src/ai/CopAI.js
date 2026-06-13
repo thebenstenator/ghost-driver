@@ -27,6 +27,7 @@ export class CopAI {
     this.steerDeadzone    = 0.05;
     this.directRange      = 120; // within this, aim straight at the target
     this.maxApproachSpeed = 610; // speed on a straight (physics caps lower)
+    this.baseApproach     = 610; // catch-up rubber-band raises maxApproachSpeed above this when far
     this.cornerMinSpeed   = 190; // speed through a 90°+ corner
     this.brakeDecel       = 320; // assumed braking power for the slow-down curve
     this.speedMargin      = 20;  // hysteresis band around desiredSpeed

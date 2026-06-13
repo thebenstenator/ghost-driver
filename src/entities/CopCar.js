@@ -43,6 +43,7 @@ export class CopCar extends Vehicle {
 
     this.ai = new CopAI(navGrid, rects);
     this.aiTarget = { x, y }; // current steering target, for debug draw
+    this.baseMaxSpeed = this.maxSpeed; // catch-up rubber-band raises maxSpeed above this when far
   }
 
   // target: an object with .x / .y in world space (the player, or a last-known

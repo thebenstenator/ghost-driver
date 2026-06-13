@@ -25,7 +25,7 @@ export class Pursuit {
     this.state            = PursuitState.IDLE;
     this.cooldownDuration = cooldownDuration; // seconds out of sight to ditch
     this.hotDuration      = hotDuration;      // seconds the area stays hot after a ditch
-    this.huntDuration     = 4;  // seconds after losing sight that cops still CHARGE
+    this.huntDuration     = 10; // seconds after losing sight that cops still CHARGE
                                 // the predicted position before downshifting to a slow search
     this.cooldown         = 0;
     this.hot              = 0;
