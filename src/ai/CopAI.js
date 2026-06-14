@@ -20,8 +20,13 @@ export class CopAI {
     this.nav   = navGrid;
     this.rects = rects;
 
-    this.directRange      = 130; // within this (or clear LOS) aim straight at the target
-    this.arriveRadius     = 70;  // px to count a path node as reached
+    this.directRange      = 55;  // aim straight at the target only with clear LOS, OR when
+                                 // this close (≈ same road segment). Keep small: a large value
+                                 // lets the cop beeline THROUGH a corner building toward a
+                                 // player just around it.
+    this.arriveRadius     = 42;  // px to count a path node as reached. Small so the cop
+                                 // gets to the corner before it starts turning to the next
+                                 // node (large values let it cut the inside of the corner).
     this.maxApproachSpeed = 610; // top travel speed (capped further by CopCar.maxSpeed)
     this.baseApproach     = 610; // base top travel speed
     this.slowRadius       = 160; // start easing speed when this close to a STATIONARY target
@@ -32,7 +37,8 @@ export class CopAI {
                                  // speed-matched "cruise" — but DON'T drive at their centre and
                                  // bulldoze them through a wall.
     this.standoff         = 36;  // px short of the player the chasing cop aims for (≈ bumpers)
-    this.cornerMinSpeed   = 190; // speed through a 90°+ corner
+    this.cornerMinSpeed   = 140; // speed through a 90°+ corner (must be slow enough that
+                                 // CopCar's turn radius fits the corner without clipping)
     this.brakeDecel       = 320; // shapes how early speed eases down before a corner
     this.senseDist        = 700; // how far down the path to look for corners
     this.speedCap         = Infinity; // external cap (lowered during search/withdraw)

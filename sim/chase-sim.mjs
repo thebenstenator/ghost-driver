@@ -57,6 +57,18 @@ const nav   = new NavGrid();
 const rects = BUILDINGS.map(b => new Phaser.Geom.Rectangle(b.x, b.y, b.w, b.h));
 const node  = (i, j) => nav.pos(nav.index(i, j)); // road-intersection world pos
 
+// How far a point is *inside* a building (0 = on a road). Lets the sim flag a cop
+// that understeers across a corner into a wall — the collision the sim is blind to.
+function buildingDepth(x, y) {
+  let depth = 0;
+  for (const b of BUILDINGS) {
+    if (x > b.x && x < b.x + b.w && y > b.y && y < b.y + b.h) {
+      depth = Math.max(depth, Math.min(x - b.x, b.x + b.w - x, y - b.y, b.y + b.h - y));
+    }
+  }
+  return depth;
+}
+
 // ── Idealized evader ────────────────────────────────────────────────────────
 // A kinematic stand-in for a *skilled* player: real position (so line-of-sight
 // geometry is exact) but a clean speed profile — holds `straight` on open road,
@@ -136,6 +148,7 @@ function run(name, route, skill, copSpeed = 590, copBackPx = 700, seconds = 26) 
   let caughtAt = null, noSightStreak = 0, maxNoSight = 0;
   let awareTimer = AWARE_GRACE; // sight memory
   let lostFor = 0;              // seconds since truly aware (drives hunt -> search)
+  let maxClip = 0, clipFrames = 0; // cop-into-building tracking (steering quality)
 
   for (let step = 0; step < seconds / dt; step++) {
     const t = step * dt;
@@ -168,6 +181,9 @@ function run(name, route, skill, copSpeed = 590, copBackPx = 700, seconds = 26) 
     cop.update(dt * 1000, target);
     integrate(cop, dt);
 
+    const clip = buildingDepth(cop.sprite.x, cop.sprite.y);
+    if (clip > 0) { clipFrames++; maxClip = Math.max(maxClip, clip); }
+
     const gap = Phaser.Math.Distance.Between(cop.sprite.x, cop.sprite.y, ev.sprite.x, ev.sprite.y);
     // Only a real catch if the evader is still actively fleeing (not stopped at a corner).
     if (gap < CATCH && ev.getSpeed() > 150 && caughtAt === null) caughtAt = t;
@@ -176,11 +192,12 @@ function run(name, route, skill, copSpeed = 590, copBackPx = 700, seconds = 26) 
     }
   }
 
-  report(name, samples, caughtAt, maxNoSight);
+  const clipPct = Math.round(100 * clipFrames / (seconds / dt));
+  report(name, samples, caughtAt, maxNoSight, { maxClip, clipPct });
 }
 
 // ── Reporting ───────────────────────────────────────────────────────────────
-function report(name, s, caughtAt, maxNoSight) {
+function report(name, s, caughtAt, maxNoSight, clip) {
   const gaps = s.map(x => x.gap);
   const min = Math.min(...gaps), max = Math.max(...gaps);
   const start = gaps[0], end = gaps[gaps.length - 1];
@@ -205,6 +222,9 @@ function report(name, s, caughtAt, maxNoSight) {
   console.log(`    start ${start.toFixed(0)}  min ${min.toFixed(0)}  max ${max.toFixed(0)}  end ${end.toFixed(0)} (px)`);
   console.log(`    avg speed  evader ${avgPs.toFixed(0)}  cop ${avgCs.toFixed(0)} (px/s)   in sight ${seenPct}% of run`);
   console.log(`    longest out-of-sight ${maxNoSight.toFixed(1)}s   ->  ${verdict}`);
+  const clipNote = clip.clipPct === 0 ? 'clean (cop never clipped a building)'
+                                      : `CLIPPED buildings ${clip.clipPct}% of frames, max ${clip.maxClip.toFixed(0)}px deep`;
+  console.log(`    steering: ${clipNote}`);
 }
 
 // ── Routes (looping lists of road intersections) ────────────────────────────

@@ -38,6 +38,10 @@ function RotateTo(currentAngle, targetAngle, lerp = 0.05) {
   return currentAngle;
 }
 
+function RadToDeg(radians) {
+  return radians * (180 / Math.PI);
+}
+
 function Between(x1, y1, x2, y2) {
   const dx = x1 - x2, dy = y1 - y2;
   return Math.sqrt(dx * dx + dy * dy);
@@ -95,6 +99,7 @@ const Phaser = {
   Math: {
     Clamp,
     Linear,
+    RadToDeg,
     Distance: { Between },
     Angle: { Wrap, RotateTo },
   },
