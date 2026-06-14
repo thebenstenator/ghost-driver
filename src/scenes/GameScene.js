@@ -50,13 +50,15 @@ export class GameScene extends Phaser.Scene {
     this.sepRadius  = 80;              // separation: how close before cops repel
     this.sepStrength = 150;            // separation: aim push strength
     this.searchSpeed = 250;            // cop speed cap while searching (clean corners)
-    this.searchDepth = 2;              // how many blocks out from last-known the search sweeps
+    this.searchDepth = 2;              // STARTING search radius (blocks out from last-known)
+    this.searchMaxDepth = 6;           // search grows out to this many blocks as ground is checked
     this.coverageTTL = 6;              // s a searched node stays "covered" before it's worth re-checking
     // Shared search-coverage map: time (search clock) each nav node was last SEEN
     // by any cop. Cops paint what they can see and head for the least-covered
     // node, so they divide the area instead of re-checking the same streets.
     this.coverage    = new Float32Array(this.navGrid.cols * this.navGrid.rows).fill(-1e9);
     this._searchClock = 0;
+    this._searchRadius = this.searchDepth; // current (expanding) radius this episode
     this.pursuit    = new Pursuit(20, 30); // 20s to ditch, then 30s of hot search
     // Station the cops withdraw to once the heat cools (SE corner, for testing)
     this.station    = this.navGrid.pos(this.navGrid.index(this.navGrid.cols - 1, this.navGrid.rows - 1));
@@ -121,12 +123,12 @@ export class GameScene extends Phaser.Scene {
     return cop;
   }
 
-  // The candidate nodes for a search: the last-known node + everything within
-  // `searchDepth` blocks of it.
+  // The candidate nodes for a search: the last-known node + everything within the
+  // current (expanding) search radius of it.
   _searchArea() {
     const lk = this.pursuit.lastKnown;
     const lkNode = this.navGrid.nearestNode(lk.x, lk.y);
-    return [lkNode, ...this.navGrid.nodesInRange(lkNode, this.searchDepth)];
+    return [lkNode, ...this.navGrid.nodesInRange(lkNode, this._searchRadius)];
   }
 
   // Paint coverage: mark every search node this cop can actually SEE (within sight
@@ -176,9 +178,11 @@ export class GameScene extends Phaser.Scene {
       const fwd    = Math.abs(Phaser.Math.Angle.Wrap(Math.atan2(p.y - cop.sprite.y, p.x - cop.sprite.x) - cop.facing));
       const sector = Math.abs(Phaser.Math.Angle.Wrap(Math.atan2(p.y - lk.y, p.x - lk.x) - base));
       if (d < 1) continue; // skip the node we're sitting on
-      let cost = 0.25 * d + 90 * fwd + 25 * sector;
-      if (recency < this.coverageTTL) cost += 1e6;                 // covered recently — avoid
-      else                            cost -= Math.min(recency, 30) * 5; // else prefer stalest
+      let cost = 0.25 * d + 90 * fwd + 25 * sector - Math.min(recency, 30) * 2;
+      const neverSeen = this.coverage[idx] <= -1e8;
+      if (recency < this.coverageTTL) cost += 1e6;   // freshly covered — avoid
+      else if (!neverSeen)            cost += 3000;  // seen but stale — re-check only if no frontier left
+      // never-seen nodes (the expanding frontier) get no penalty, so they win
       if (this.cops.some(o => o !== cop && o._searchNode === idx)) cost += 8000; // claimed by another cop
       if (cost < bestCost) { bestCost = cost; best = idx; }
     }
@@ -480,7 +484,7 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
       brakeDecel: a.brakeDecel, arriveRadius: a.arriveRadius,
       senseDist: a.senseDist, directRange: a.directRange, chaseRange: a.chaseRange, reactionTime: a.reactionTime,
       sepRadius: this.sepRadius, sepStrength: this.sepStrength,
-      searchSpeed: this.searchSpeed, searchDepth: this.searchDepth, coverageTTL: this.coverageTTL,
+      searchSpeed: this.searchSpeed, searchDepth: this.searchDepth, searchMaxDepth: this.searchMaxDepth, coverageTTL: this.coverageTTL,
       flankDist: this.director.flankDist, interceptLead: this.director.interceptLead,
     };
 
@@ -517,8 +521,9 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
     pack.add(this.copTuning, 'sepRadius',     0,   250, 5).name('Separation radius').onChange(apply);
     pack.add(this.copTuning, 'sepStrength',   0,   400, 5).name('Separation strength').onChange(apply);
     pack.add(this.copTuning, 'searchSpeed',   80,  600, 10).name('Search speed cap').onChange(apply);
-    pack.add(this.copTuning, 'searchDepth',   1,   5,   1).name('Search radius (blocks)').onChange(apply);
-    pack.add(this.copTuning, 'coverageTTL',   1,   20,  1).name('Search memory (s)').onChange(apply);
+    pack.add(this.copTuning, 'searchDepth',    1,  6,  1).name('Search start (blocks)').onChange(apply);
+    pack.add(this.copTuning, 'searchMaxDepth', 1,  10, 1).name('Search max (blocks)').onChange(apply);
+    pack.add(this.copTuning, 'coverageTTL',    1,  20, 1).name('Search memory (s)').onChange(apply);
 
     gui.add({ copyStats: () => {
       const t = this.copTuning;
@@ -532,12 +537,12 @@ arriveRadius: ${t.arriveRadius}, senseDist: ${t.senseDist}, directRange: ${t.dir
 // --- Formation (PursuitDirector) ---
 flankDist: ${t.flankDist}, interceptLead: ${t.interceptLead},
 // --- Separation + search (GameScene) ---
-sepRadius: ${t.sepRadius}, sepStrength: ${t.sepStrength}, searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, coverageTTL: ${t.coverageTTL}`);
+sepRadius: ${t.sepRadius}, sepStrength: ${t.sepStrength}, searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${t.searchMaxDepth}, coverageTTL: ${t.coverageTTL}`);
     } }, 'copyStats').name('Copy Cop Stats → Console');
 
     // Persist across refresh. Key bumped to v5 when the search was reworked +
     // the Search radius dial added, so stale saves don't mask the new defaults.
-    this._persistPanel(gui, 'gd_copTuning6');
+    this._persistPanel(gui, 'gd_copTuning7');
 
     gui.domElement.style.position = 'fixed';
     gui.domElement.style.top  = '8px';
@@ -578,6 +583,7 @@ sepRadius: ${t.sepRadius}, sepStrength: ${t.sepStrength}, searchSpeed: ${t.searc
     this.sepStrength = t.sepStrength;
     this.searchSpeed = t.searchSpeed;
     this.searchDepth = t.searchDepth;
+    this.searchMaxDepth = t.searchMaxDepth;
     this.coverageTTL = t.coverageTTL;
     this.director.flankDist = t.flankDist;
     this.director.interceptLead = t.interceptLead;
@@ -638,10 +644,11 @@ sepRadius: ${t.sepRadius}, sepStrength: ${t.sepStrength}, searchSpeed: ${t.searc
       this.pursuit.lastKnownSpeed = this.car.getSpeed();
     }
 
-    // On entering SEARCH, start a fresh coverage map + clock for this episode.
+    // On entering SEARCH, start a fresh coverage map + clock + radius for this episode.
     if (state === PursuitState.SEARCH && this._prevState !== PursuitState.SEARCH) {
       this.coverage.fill(-1e9);
       this._searchClock = 0;
+      this._searchRadius = this.searchDepth;
       for (const cop of this.cops) cop._searchNode = null;
     }
     this._prevState = state;
@@ -666,6 +673,12 @@ sepRadius: ${t.sepRadius}, sepStrength: ${t.sepStrength}, searchSpeed: ${t.searc
       this._searchClock += dt;
       const area = this._searchArea();
       for (const cop of this.cops) this._paintCoverage(cop, area);
+      // EXPAND: once most of the current radius has been seen, grow it a ring so
+      // the cops spiral outward instead of re-checking the same area forever.
+      if (this._searchRadius < this.searchMaxDepth) {
+        const seen = area.reduce((c, idx) => c + (this.coverage[idx] > -1e8 ? 1 : 0), 0);
+        if (seen >= area.length * 0.7) this._searchRadius++;
+      }
     }
 
     for (const cop of this.cops) {
