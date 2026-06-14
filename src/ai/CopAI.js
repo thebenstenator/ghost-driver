@@ -26,7 +26,7 @@ export class CopAI {
     this.arriveRadius     = 70;  // px to count a path node as reached
     this.maxApproachSpeed = 610; // speed on a straight (physics caps lower)
     this.baseApproach     = 610; // catch-up rubber-band raises maxApproachSpeed above this when far
-    this.cornerMinSpeed   = 190; // speed through a 90°+ corner
+    this.cornerMinSpeed   = 395; // speed through a 90°+ corner (tuned high — aggressive corners)
     this.brakeDecel       = 320; // assumed braking power for the slow-down curve
     this.speedMargin      = 20;  // hysteresis band around desiredSpeed
     this.senseDist        = 700; // how far down the path to look for corners

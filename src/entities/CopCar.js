@@ -32,7 +32,7 @@ export class CopCar extends Vehicle {
         // the path-follower thread the tight grid. (Player is 0.14/0.03 — the cop
         // is deliberately planted/on-rails; the player is the one who drifts.)
         gripLow:      0.6,  // player 0.14
-        gripHigh:     0.5,  // player 0.03 — stays grippy at speed
+        gripHigh:     0.2,  // player 0.03 — looser at speed so it slides through fast corners
         gripSpeedRef: 480,
         turnSpeedLow: 2.5,  // player 2.2
         turnSpeed:    1.72, // player 1.2 — turns harder at speed
