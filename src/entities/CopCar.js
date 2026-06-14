@@ -47,7 +47,10 @@ export class CopCar extends Vehicle {
     this.baseMaxSpeed = this.maxSpeed;  // tuning panel restores maxSpeed from this
 
     // ── Steering-kinematic motion params ──
-    this.accel       = 750;  // px/s² ramp up to target speed (pull away from a stop)
+    this.accel       = 280;  // px/s² ramp up to target speed. Kept close to the player's
+                             // effective ~225 (the player is drag-limited; the cop is not)
+                             // so the cop doesn't out-drag you out of every corner. Higher
+                             // values make it surge onto your bumper after each slowdown.
     this.brakeDecel  = 1400; // px/s² ramp down (slow for corners / standoff)
     this.turnRadius  = 52;   // px — min cornering radius; bigger = wider arcs at speed
     this.maxTurnRate = 5.5;  // rad/s cap (so it can't pivot instantly at high speed)

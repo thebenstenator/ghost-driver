@@ -18,6 +18,7 @@
 import Phaser from 'phaser';
 import { NavGrid } from '../src/ai/NavGrid.js';
 import { CopCar } from '../src/entities/CopCar.js';
+import { PlayerCar } from '../src/entities/PlayerCar.js';
 import { segmentClear } from '../src/ai/lineOfSight.js';
 import { BUILDINGS } from '../src/world/city.js';
 import { WORLD_WIDTH, WORLD_HEIGHT } from '../src/config.js';
@@ -107,9 +108,13 @@ function stepEvader(ev, route, wpRef, dt, straight, corner) {
   const near = Phaser.Math.Distance.Between(ev.sprite.x, ev.sprite.y, tgt.x, tgt.y) < 220;
   let desired = near ? Phaser.Math.Linear(straight, corner, t) : straight;
 
-  // Ease current speed toward desired, head straight at the waypoint.
+  // Accelerate toward desired like the real (drag-limited) car: ~225 px/s² up,
+  // brakes harder. This makes the post-corner re-acceleration battle faithful —
+  // the whole point of comparing it to the cop's (much higher) acceleration.
   const cur = ev.getSpeed();
-  const spd = Phaser.Math.Linear(cur, desired, Math.min(1, dt * 4));
+  const EV_ACCEL = 225, EV_BRAKE = 650;
+  const spd = desired > cur ? Math.min(desired, cur + EV_ACCEL * dt)
+                            : Math.max(desired, cur - EV_BRAKE * dt);
   const dx = tgt.x - ev.sprite.x, dy = tgt.y - ev.sprite.y, d = Math.hypot(dx, dy) || 1;
   ev.vx = (dx / d) * spd; ev.vy = (dy / d) * spd;
   ev.facing = Math.atan2(dy, dx);
@@ -129,7 +134,7 @@ function canSee(cop, player) {
 
 // ── One scenario ────────────────────────────────────────────────────────────
 // skill = { straight, corner } evader speeds (px/s). copSpeed overrides cop top speed.
-function run(name, route, skill, copSpeed = 590, copBackPx = 700, seconds = 26) {
+function run(name, route, skill, copSpeed = 590, copBackPx = 700, seconds = 26, copAccel = null) {
   const h0 = Math.atan2(route[1].y - route[0].y, route[1].x - route[0].x);
   const ev = makeEvader(route[0].x, route[0].y, h0);
   ev.vx = Math.cos(h0) * skill.straight; ev.vy = Math.sin(h0) * skill.straight;
@@ -140,6 +145,7 @@ function run(name, route, skill, copSpeed = 590, copBackPx = 700, seconds = 26) 
   cop.facing = h0;
   cop.maxSpeed = cop.baseMaxSpeed = copSpeed;
   cop.ai.maxApproachSpeed = cop.ai.baseApproach = copSpeed + 20;
+  if (copAccel !== null) cop.accel = copAccel;
 
   const dt = 1 / 60;
   const wpRef = { v: 1 };
@@ -149,6 +155,8 @@ function run(name, route, skill, copSpeed = 590, copBackPx = 700, seconds = 26) 
   let awareTimer = AWARE_GRACE; // sight memory
   let lostFor = 0;              // seconds since truly aware (drives hunt -> search)
   let maxClip = 0, clipFrames = 0; // cop-into-building tracking (steering quality)
+  let prevSpeed = 0, maxAccel = 0, snaps = 0; // cop accel tracking (find instant-accel snaps)
+  let prevAware = true;
 
   for (let step = 0; step < seconds / dt; step++) {
     const t = step * dt;
@@ -181,6 +189,15 @@ function run(name, route, skill, copSpeed = 590, copBackPx = 700, seconds = 26) 
     cop.update(dt * 1000, target);
     integrate(cop, dt);
 
+    // Measure the cop's actual acceleration this frame. A jump faster than its
+    // accel setting (with margin) = a genuine speed snap. Flag it, especially on
+    // the aware<->hunt/search transition the player reported as "instant again".
+    const a = (cop.speed - prevSpeed) / dt;
+    if (a > maxAccel) maxAccel = a;
+    if (a > cop.accel * 1.5 + 50) snaps++;
+    prevSpeed = cop.speed;
+    prevAware = aware;
+
     const clip = buildingDepth(cop.sprite.x, cop.sprite.y);
     if (clip > 0) { clipFrames++; maxClip = Math.max(maxClip, clip); }
 
@@ -193,7 +210,7 @@ function run(name, route, skill, copSpeed = 590, copBackPx = 700, seconds = 26) 
   }
 
   const clipPct = Math.round(100 * clipFrames / (seconds / dt));
-  report(name, samples, caughtAt, maxNoSight, { maxClip, clipPct });
+  report(name, samples, caughtAt, maxNoSight, { maxClip, clipPct, maxAccel, snaps, copAccel: cop.accel });
 }
 
 // ── Reporting ───────────────────────────────────────────────────────────────
@@ -225,6 +242,7 @@ function report(name, s, caughtAt, maxNoSight, clip) {
   const clipNote = clip.clipPct === 0 ? 'clean (cop never clipped a building)'
                                       : `CLIPPED buildings ${clip.clipPct}% of frames, max ${clip.maxClip.toFixed(0)}px deep`;
   console.log(`    steering: ${clipNote}`);
+  console.log(`    accel: setting ${clip.copAccel}  observed max ${clip.maxAccel.toFixed(0)} px/s²  snaps ${clip.snaps}`);
 }
 
 // ── Routes (looping lists of road intersections) ────────────────────────────
@@ -250,14 +268,42 @@ const losBreak = [node(1, 5), node(3, 5), node(5, 5), node(5, 7), node(3, 7), no
 // theoretical — drag pulls real top speed to ~440), sheds a lot in 90° turns.
 // NOTE: the cop is NOT drag-affected, so its maxSpeed IS its real top speed —
 // compare cop speeds to this 440, not to the player's nominal 600.
-const SKILL = { straight: 440, corner: 190 };
+const SKILL = { straight: 450, corner: 190 };
+
+// ── Probe the player's REAL acceleration + top speed ────────────────────────
+// Drive the real PlayerCar flat-out (no steering, no position needed — speed
+// evolves purely from velocity) to measure the drag-limited top speed and how
+// long it takes to get there. Grounds cop tuning in measured reality.
+function probePlayer() {
+  const p = new PlayerCar(scene, 3000, 3000);
+  p.facing = 0;
+  const dt = 1 / 60, flat = { up: true, down: false, left: false, right: false, handbrake: false, brake: false };
+  let top = 0, t63 = null, t90 = null;
+  for (let step = 0; step < 15 / dt; step++) {
+    p.update(dt * 1000, flat);
+    const s = p.getSpeed();
+    top = Math.max(top, s);
+    if (t63 === null && s >= 0.63 * 600) t63 = step * dt; // rough time-constant marker
+  }
+  // second pass for time to 90% of the measured top
+  const p2 = new PlayerCar(scene, 3000, 3000); p2.facing = 0;
+  for (let step = 0; step < 15 / dt; step++) {
+    p2.update(dt * 1000, flat);
+    if (t90 === null && p2.getSpeed() >= 0.9 * top) { t90 = step * dt; break; }
+  }
+  console.log(`PLAYER probe: real top speed ${top.toFixed(0)} px/s, time to 90% (~${(0.9*top).toFixed(0)}) = ${t90?.toFixed(1)}s`);
+  return { top, t90 };
+}
+probePlayer();
 
 console.log('Ghost Driver — headless chase sim');
 console.log(`(real CopAI vs idealized evader straight ${SKILL.straight} / corner ${SKILL.corner}; gap px over ~26s)`);
 
-for (const copSpeed of [460, 420, 380]) {
-  console.log(`\n############ COP TOP SPEED ${copSpeed} (player straights ${SKILL.straight}) ############`);
-  run('OPEN ROAD (perimeter loop)', loop, SKILL, copSpeed, 700, 40);
-  run('CORNERS (zigzag)', corners, SKILL, copSpeed, 700, 40);
-  run('LOS BREAK (juke a block)', losBreak, SKILL, copSpeed, 700, 40);
+// Sweep cop ACCELERATION (top speed fixed at 420, just under the player's 450).
+// The player's effective accel is ~225 px/s²; find where the corner battle is fair.
+for (const copAccel of [750, 350, 200]) {
+  console.log(`\n############ COP ACCEL ${copAccel} px/s²  (player ~225; cop top 420 vs player 450) ############`);
+  run('OPEN ROAD (perimeter loop)', loop, SKILL, 420, 700, 40, copAccel);
+  run('CORNERS (zigzag)', corners, SKILL, 420, 700, 40, copAccel);
+  run('LOS BREAK (juke a block)', losBreak, SKILL, 420, 700, 40, copAccel);
 }

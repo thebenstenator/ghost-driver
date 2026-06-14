@@ -529,8 +529,11 @@ sepRadius: ${t.sepRadius}, sepStrength: ${t.sepStrength}, searchSpeed: ${t.searc
     gui.domElement.style.zIndex = '9999';
   }
 
-  // Wire a lil-gui panel to localStorage: restore on open, save on change.
+  // Wire a lil-gui panel to localStorage: restore on open, save on change, and a
+  // Reset button that clears the saved values and restores the code defaults
+  // (important after a defaults change — a stale save would otherwise mask it).
   _persistPanel(gui, key) {
+    const defaults = gui.save(); // snapshot the code defaults BEFORE applying any save
     try {
       const saved = localStorage.getItem(key);
       if (saved) gui.load(JSON.parse(saved));
@@ -538,6 +541,10 @@ sepRadius: ${t.sepRadius}, sepStrength: ${t.sepStrength}, searchSpeed: ${t.searc
     gui.onChange(() => {
       try { localStorage.setItem(key, JSON.stringify(gui.save())); } catch (e) { /* ignore */ }
     });
+    gui.add({ reset: () => {
+      gui.load(defaults);                            // restore + apply code defaults
+      try { localStorage.removeItem(key); } catch (e) { /* ignore */ }
+    } }, 'reset').name('⟲ Reset to defaults');
   }
 
   _applyCopTuning() {
