@@ -536,9 +536,9 @@ flankDist: ${t.flankDist}, interceptLead: ${t.interceptLead},
 sepRadius: ${t.sepRadius}, sepStrength: ${t.sepStrength}, searchSpeed: ${t.searchSpeed}`);
     } }, 'copyStats').name('Copy Cop Stats → Console');
 
-    // Persist across refresh. Key bumped to v2: reverting to physics cops changed
-    // the panel's shape, so old kinematic saves are ignored (clean defaults).
-    this._persistPanel(gui, 'gd_copTuning2');
+    // Persist across refresh. Key bumped to v3 when cop Max Speed default changed
+    // (430), so a stale saved 590 doesn't keep overriding the new default.
+    this._persistPanel(gui, 'gd_copTuning3');
 
     gui.domElement.style.position = 'fixed';
     gui.domElement.style.top  = '8px';

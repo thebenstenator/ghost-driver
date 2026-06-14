@@ -25,8 +25,13 @@ export class CopCar extends Vehicle {
       tint: 0xffffff,   // flat white silhouette so cops pop against the dark map
       tintFill: true,
       stats: {
-        maxSpeed:     590, // just under the player's 600 — catchable on a long straight
-        acceleration: 420, // out-accelerates the player's 345
+        // The player's nominal 600 is never reached — drag caps their REAL top
+        // speed at ~450. The cop's higher accel would settle it at ~479 (FASTER
+        // than the player) unless we cap below 450. So 430 makes the cap actually
+        // bite: cop tops out at 430 < player's real 450, so you pull away on
+        // straights while it stays a threat in corners. The real top-speed dial.
+        maxSpeed:     430,
+        acceleration: 420, // out-accelerates the player's 345 (brisk, but capped above)
         // Near-kinematic grip — velocity tracks facing almost instantly, so there
         // is no drift lag to wash the cop wide into a building. This is what lets
         // the path-follower thread the tight grid. (Player is 0.14/0.03 — the cop
