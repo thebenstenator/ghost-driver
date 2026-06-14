@@ -153,24 +153,30 @@ export class GameScene extends Phaser.Scene {
     const lk = this.pursuit.lastKnown;
     const area = this._searchArea();
 
-    // Stick with the current target until reached or someone else has covered it.
+    // COMMIT to the current target until we PHYSICALLY reach it. Don't abandon it
+    // just because we now SEE it (that was the dithering bug: spotting the node a
+    // block ahead marked it covered, so the cop re-picked and never committed to a
+    // turn). Drive through the intersection, THEN choose the next node.
     if (cop._searchNode != null && area.includes(cop._searchNode)) {
       const p = this.navGrid.pos(cop._searchNode);
-      const reached = Phaser.Math.Distance.Between(cop.sprite.x, cop.sprite.y, p.x, p.y) < ARRIVE;
-      const covered = (this._searchClock - this.coverage[cop._searchNode]) < this.coverageTTL;
-      if (!reached && !covered) return p;
+      if (Phaser.Math.Distance.Between(cop.sprite.x, cop.sprite.y, p.x, p.y) >= ARRIVE) return p;
     }
 
-    // Pick the best uncovered node: nearest + in this cop's sector, not claimed.
+    // Pick the next node: uncovered ground first, then prefer CONTINUING in the
+    // direction we're already facing (so we flow down a street instead of turning
+    // back at each intersection), with a mild per-cop sector spread, and avoid a
+    // node another cop is already going to.
     const n    = Math.max(1, this.cops.length);
     const base = this.pursuit.lastKnownDir + (cop.searchSlot || 0) * (2 * Math.PI / n);
     let best = area[0], bestCost = Infinity;
     for (const idx of area) {
       const p = this.navGrid.pos(idx);
       const recency = this._searchClock - this.coverage[idx];
-      const d   = Phaser.Math.Distance.Between(cop.sprite.x, cop.sprite.y, p.x, p.y);
-      const ang = Math.abs(Phaser.Math.Angle.Wrap(Math.atan2(p.y - lk.y, p.x - lk.x) - base));
-      let cost = 0.3 * d + 70 * ang;
+      const d      = Phaser.Math.Distance.Between(cop.sprite.x, cop.sprite.y, p.x, p.y);
+      const fwd    = Math.abs(Phaser.Math.Angle.Wrap(Math.atan2(p.y - cop.sprite.y, p.x - cop.sprite.x) - cop.facing));
+      const sector = Math.abs(Phaser.Math.Angle.Wrap(Math.atan2(p.y - lk.y, p.x - lk.x) - base));
+      if (d < 1) continue; // skip the node we're sitting on
+      let cost = 0.25 * d + 90 * fwd + 25 * sector;
       if (recency < this.coverageTTL) cost += 1e6;                 // covered recently — avoid
       else                            cost -= Math.min(recency, 30) * 5; // else prefer stalest
       if (this.cops.some(o => o !== cop && o._searchNode === idx)) cost += 8000; // claimed by another cop
