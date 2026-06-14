@@ -24,11 +24,14 @@ export class CopAI {
     this.arriveRadius     = 70;  // px to count a path node as reached
     this.maxApproachSpeed = 610; // top travel speed (capped further by CopCar.maxSpeed)
     this.baseApproach     = 610; // base top travel speed
-    this.slowRadius       = 160; // start easing speed when this close to the FINAL target
-    this.slowFloor        = 0.35;// fraction of speed kept right on top of the target
-    this.arriveEase       = true;// ease onto STATIONARY targets (search pts, station). The
-                                 // scene turns this OFF while chasing the player so the cop
-                                 // rams instead of settling into a speed-matched "cruise".
+    this.slowRadius       = 160; // start easing speed when this close to a STATIONARY target
+    this.slowFloor        = 0.35;// fraction of speed kept right on top of a stationary target
+    this.arriveEase       = true;// true: ease onto STATIONARY targets (search pts, station).
+                                 // false (set while chasing the player): charge to the player's
+                                 // BUMPER (standoff) at full speed instead of settling into a
+                                 // speed-matched "cruise" — but DON'T drive at their centre and
+                                 // bulldoze them through a wall.
+    this.standoff         = 36;  // px short of the player the chasing cop aims for (≈ bumpers)
     this.cornerMinSpeed   = 190; // speed through a 90°+ corner
     this.brakeDecel       = 320; // shapes how early speed eases down before a corner
     this.senseDist        = 700; // how far down the path to look for corners
@@ -71,18 +74,27 @@ export class CopAI {
       speed = lim.speed; nextTurn = lim.turn;
     } else {
       this._path = null; this._goalNode = -1; // re-plan fresh next time we lose sight
+
+      if (this.arriveEase) {
+        // Stationary target (search point / station): ease speed down as we close
+        // so we settle onto it instead of blasting past and oscillating.
+        if (dist < this.slowRadius) {
+          const t = Phaser.Math.Clamp(dist / this.slowRadius, this.slowFloor, 1);
+          speed *= t;
+        }
+      } else {
+        // Chasing the player: aim for their BUMPER, not their centre. Full speed
+        // right up to the standoff point (CopCar's deadzone then stops us there),
+        // so we pin/ram without trying to occupy their body and shove them through
+        // a building. Once at the bumper we tailgate as they move.
+        const back = Math.min(this.standoff, dist);
+        const ux = (target.x - cx) / (dist || 1), uy = (target.y - cy) / (dist || 1);
+        aim = { x: target.x - ux * back, y: target.y - uy * back };
+      }
     }
 
-    // Arrival easing: as the cop closes on a STATIONARY final target, scale speed
-    // down so it settles instead of blasting past and oscillating. Disabled while
-    // chasing the player (arriveEase=false) — there the cop should ram, not settle
-    // into a speed-matched cruise. No-op far away (path-following) since dist is big.
-    if (this.arriveEase && dist < this.slowRadius) {
-      const t = Phaser.Math.Clamp(dist / this.slowRadius, this.slowFloor, 1);
-      speed *= t;
-    }
-
-    cop.debug = { mode, speed, dist, bend: nextTurn, cornerLimit: speed, angleErr: 0, reverseTime: 0 };
+    const moveSpeed = Math.min(speed, cop.maxSpeed); // what we'll actually travel at
+    cop.debug = { mode, speed: moveSpeed, dist, bend: nextTurn, cornerLimit: moveSpeed, angleErr: 0, reverseTime: 0 };
     return { aim, speed };
   }
 
