@@ -26,6 +26,9 @@ export class CopAI {
     this.baseApproach     = 610; // base top travel speed
     this.slowRadius       = 160; // start easing speed when this close to the FINAL target
     this.slowFloor        = 0.35;// fraction of speed kept right on top of the target
+    this.arriveEase       = true;// ease onto STATIONARY targets (search pts, station). The
+                                 // scene turns this OFF while chasing the player so the cop
+                                 // rams instead of settling into a speed-matched "cruise".
     this.cornerMinSpeed   = 190; // speed through a 90°+ corner
     this.brakeDecel       = 320; // shapes how early speed eases down before a corner
     this.senseDist        = 700; // how far down the path to look for corners
@@ -70,10 +73,11 @@ export class CopAI {
       this._path = null; this._goalNode = -1; // re-plan fresh next time we lose sight
     }
 
-    // Arrival easing: as the cop closes on its FINAL target, scale speed down so it
-    // settles onto it instead of blasting past and oscillating. Only bites inside
-    // slowRadius — far away (path-following) dist is large, so this is a no-op there.
-    if (dist < this.slowRadius) {
+    // Arrival easing: as the cop closes on a STATIONARY final target, scale speed
+    // down so it settles instead of blasting past and oscillating. Disabled while
+    // chasing the player (arriveEase=false) — there the cop should ram, not settle
+    // into a speed-matched cruise. No-op far away (path-following) since dist is big.
+    if (this.arriveEase && dist < this.slowRadius) {
       const t = Phaser.Math.Clamp(dist / this.slowRadius, this.slowFloor, 1);
       speed *= t;
     }

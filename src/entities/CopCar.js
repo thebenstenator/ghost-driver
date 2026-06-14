@@ -24,7 +24,12 @@ export class CopCar extends Vehicle {
       tint: 0xffffff,   // flat white silhouette so cops pop against the dark map
       tintFill: true,
       stats: {
-        maxSpeed: 590, // top travel speed (just under the player's 600)
+        // Top travel speed. Deliberately BELOW the player's 600: the chase sim
+        // showed an equal/faster cop can never be ditched (it always reels you in
+        // through corners), while a slightly slower cop turns OPEN ROAD into a real
+        // escape valve — you ditch by keeping your speed up on straights, and get
+        // caught when you bog down in corners. This is the master difficulty dial.
+        maxSpeed: 565,
       },
     });
 
