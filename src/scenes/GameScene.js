@@ -53,6 +53,8 @@ export class GameScene extends Phaser.Scene {
     this.searchDepth = 2;              // STARTING search radius (blocks out from last-known)
     this.searchMaxDepth = 6;           // search grows out to this many blocks as ground is checked
     this.coverageTTL = 6;              // s a searched node stays "covered" before it's worth re-checking
+    this.searchDirBias = 55;           // how strongly the search leans toward the last-known escape
+                                       // direction (cops fan across the FORWARD arc, not full circle)
     // Shared search-coverage map: time (search clock) each nav node was last SEEN
     // by any cop. Cops paint what they can see and head for the least-covered
     // node, so they divide the area instead of re-checking the same streets.
@@ -168,17 +170,21 @@ export class GameScene extends Phaser.Scene {
     // direction we're already facing (so we flow down a street instead of turning
     // back at each intersection), with a mild per-cop sector spread, and avoid a
     // node another cop is already going to.
-    const n    = Math.max(1, this.cops.length);
-    const base = this.pursuit.lastKnownDir + (cop.searchSlot || 0) * (2 * Math.PI / n);
+    // Each cop's preferred direction: the escape vector, fanned across the FORWARD
+    // arc so multiple cops split the likely area (1 cop -> straight down the escape
+    // vector; N cops -> spread over ~180° centred on it) rather than one going the
+    // opposite way. This makes the whole search prefer where you probably went.
+    const n      = Math.max(1, this.cops.length);
+    const fanDir = this.pursuit.lastKnownDir + ((cop.searchSlot || 0) - (n - 1) / 2) / n * Math.PI;
     let best = area[0], bestCost = Infinity;
     for (const idx of area) {
       const p = this.navGrid.pos(idx);
       const recency = this._searchClock - this.coverage[idx];
-      const d      = Phaser.Math.Distance.Between(cop.sprite.x, cop.sprite.y, p.x, p.y);
-      const fwd    = Math.abs(Phaser.Math.Angle.Wrap(Math.atan2(p.y - cop.sprite.y, p.x - cop.sprite.x) - cop.facing));
-      const sector = Math.abs(Phaser.Math.Angle.Wrap(Math.atan2(p.y - lk.y, p.x - lk.x) - base));
+      const d   = Phaser.Math.Distance.Between(cop.sprite.x, cop.sprite.y, p.x, p.y);
+      const fwd = Math.abs(Phaser.Math.Angle.Wrap(Math.atan2(p.y - cop.sprite.y, p.x - cop.sprite.x) - cop.facing));
+      const dir = Math.abs(Phaser.Math.Angle.Wrap(Math.atan2(p.y - lk.y, p.x - lk.x) - fanDir));
       if (d < 1) continue; // skip the node we're sitting on
-      let cost = 0.25 * d + 90 * fwd + 25 * sector - Math.min(recency, 30) * 2;
+      let cost = 0.25 * d + 90 * fwd + this.searchDirBias * dir - Math.min(recency, 30) * 2;
       const neverSeen = this.coverage[idx] <= -1e8;
       if (recency < this.coverageTTL) cost += 1e6;   // freshly covered — avoid
       else if (!neverSeen)            cost += 3000;  // seen but stale — re-check only if no frontier left
@@ -484,7 +490,8 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
       brakeDecel: a.brakeDecel, arriveRadius: a.arriveRadius,
       senseDist: a.senseDist, directRange: a.directRange, chaseRange: a.chaseRange, reactionTime: a.reactionTime,
       sepRadius: this.sepRadius, sepStrength: this.sepStrength,
-      searchSpeed: this.searchSpeed, searchDepth: this.searchDepth, searchMaxDepth: this.searchMaxDepth, coverageTTL: this.coverageTTL,
+      searchSpeed: this.searchSpeed, searchDepth: this.searchDepth, searchMaxDepth: this.searchMaxDepth,
+      coverageTTL: this.coverageTTL, searchDirBias: this.searchDirBias,
       flankDist: this.director.flankDist, interceptLead: this.director.interceptLead,
     };
 
@@ -524,6 +531,7 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
     pack.add(this.copTuning, 'searchDepth',    1,  6,  1).name('Search start (blocks)').onChange(apply);
     pack.add(this.copTuning, 'searchMaxDepth', 1,  10, 1).name('Search max (blocks)').onChange(apply);
     pack.add(this.copTuning, 'coverageTTL',    1,  20, 1).name('Search memory (s)').onChange(apply);
+    pack.add(this.copTuning, 'searchDirBias',  0,  150, 5).name('Escape-dir bias').onChange(apply);
 
     gui.add({ copyStats: () => {
       const t = this.copTuning;
@@ -537,7 +545,7 @@ arriveRadius: ${t.arriveRadius}, senseDist: ${t.senseDist}, directRange: ${t.dir
 // --- Formation (PursuitDirector) ---
 flankDist: ${t.flankDist}, interceptLead: ${t.interceptLead},
 // --- Separation + search (GameScene) ---
-sepRadius: ${t.sepRadius}, sepStrength: ${t.sepStrength}, searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${t.searchMaxDepth}, coverageTTL: ${t.coverageTTL}`);
+sepRadius: ${t.sepRadius}, sepStrength: ${t.sepStrength}, searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${t.searchMaxDepth}, coverageTTL: ${t.coverageTTL}, searchDirBias: ${t.searchDirBias}`);
     } }, 'copyStats').name('Copy Cop Stats → Console');
 
     // Persist across refresh. Key bumped to v5 when the search was reworked +
@@ -585,6 +593,7 @@ sepRadius: ${t.sepRadius}, sepStrength: ${t.sepStrength}, searchSpeed: ${t.searc
     this.searchDepth = t.searchDepth;
     this.searchMaxDepth = t.searchMaxDepth;
     this.coverageTTL = t.coverageTTL;
+    this.searchDirBias = t.searchDirBias;
     this.director.flankDist = t.flankDist;
     this.director.interceptLead = t.interceptLead;
   }
