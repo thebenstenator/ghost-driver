@@ -449,6 +449,9 @@ this.entryKickDuration = ${s.entryKickDuration};
 this.entryKickCooldown = ${s.entryKickCooldown};`);
     } }, 'copyStats').name('Copy Stats → Console');
 
+    // Persist across refresh (binds directly to the car, so load sets car fields).
+    this._persistPanel(gui, 'gd_carTuning');
+
     gui.domElement.style.position = 'fixed';
     gui.domElement.style.top   = '8px';
     gui.domElement.style.right = '8px';
@@ -468,6 +471,8 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
     // (Cops are kinematic now — grip/turn/accel no longer apply.)
     this.copTuning = {
       maxSpeed: c.baseMaxSpeed,
+      motionAccel: c.accel, motionBrake: c.brakeDecel,
+      turnRadius: c.turnRadius, maxTurnRate: c.maxTurnRate,
       cornerMinSpeed: a.cornerMinSpeed, maxApproachSpeed: a.baseApproach,
       brakeDecel: a.brakeDecel, arriveRadius: a.arriveRadius,
       senseDist: a.senseDist, directRange: a.directRange,
@@ -480,6 +485,12 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
     this.copGui = gui;
     gui.close();
     const apply = () => this._applyCopTuning();
+
+    const motion = gui.addFolder('Motion (accel & turning)');
+    motion.add(this.copTuning, 'motionAccel', 50, 3000, 10).name('Acceleration (px/s²)').onChange(apply);
+    motion.add(this.copTuning, 'motionBrake', 50, 3000, 10).name('Deceleration (px/s²)').onChange(apply);
+    motion.add(this.copTuning, 'turnRadius',  20, 200,  2).name('Turn radius (px)').onChange(apply);
+    motion.add(this.copTuning, 'maxTurnRate', 1.0, 8.0, 0.1).name('Max turn rate (rad/s)').onChange(apply);
 
     const corner = gui.addFolder('Driving');
     corner.add(this.copTuning, 'maxSpeed',         100, 1200, 10).name('Max Speed').onChange(apply);
@@ -508,18 +519,40 @@ flankDist: ${t.flankDist}, interceptLead: ${t.interceptLead},
 sepRadius: ${t.sepRadius}, sepStrength: ${t.sepStrength}, searchSpeed: ${t.searchSpeed}`);
     } }, 'copyStats').name('Copy Cop Stats → Console');
 
+    // Persist across refresh: load saved values (which re-applies them to the cops
+    // via each controller's onChange), then save on every change.
+    this._persistPanel(gui, 'gd_copTuning');
+
     gui.domElement.style.position = 'fixed';
     gui.domElement.style.top  = '8px';
     gui.domElement.style.left = '8px';
     gui.domElement.style.zIndex = '9999';
   }
 
+  // Wire a lil-gui panel to localStorage: restore on open, save on change.
+  _persistPanel(gui, key) {
+    try {
+      const saved = localStorage.getItem(key);
+      if (saved) gui.load(JSON.parse(saved));
+    } catch (e) { /* corrupt/unavailable storage — ignore, use defaults */ }
+    gui.onChange(() => {
+      try { localStorage.setItem(key, JSON.stringify(gui.save())); } catch (e) { /* ignore */ }
+    });
+  }
+
   _applyCopTuning() {
     const t = this.copTuning;
     for (const cop of this.cops) {
+      // baseMaxSpeed is the panel's source of truth; mirror onto the live cap too.
       cop.baseMaxSpeed = t.maxSpeed;
+      cop.maxSpeed   = t.maxSpeed;
+      cop.accel      = t.motionAccel;
+      cop.brakeDecel = t.motionBrake;
+      cop.turnRadius = t.turnRadius;
+      cop.maxTurnRate = t.maxTurnRate;
       const a = cop.ai;
       a.cornerMinSpeed = t.cornerMinSpeed; a.baseApproach = t.maxApproachSpeed;
+      a.maxApproachSpeed = t.maxApproachSpeed;
       a.brakeDecel = t.brakeDecel; a.arriveRadius = t.arriveRadius;
       a.senseDist = t.senseDist; a.directRange = t.directRange;
     }
