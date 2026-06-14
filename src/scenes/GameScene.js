@@ -50,6 +50,7 @@ export class GameScene extends Phaser.Scene {
     this.sepRadius  = 80;              // separation: how close before cops repel
     this.sepStrength = 150;            // separation: aim push strength
     this.searchSpeed = 250;            // cop speed cap while searching (clean corners)
+    this.searchDepth = 2;              // how many blocks out from last-known the search sweeps
     this.pursuit    = new Pursuit(20, 30); // 20s to ditch, then 30s of hot search
     // Station the cops withdraw to once the heat cools (SE corner, for testing)
     this.station    = this.navGrid.pos(this.navGrid.index(this.navGrid.cols - 1, this.navGrid.rows - 1));
@@ -114,29 +115,18 @@ export class GameScene extends Phaser.Scene {
     return cop;
   }
 
-  // Where a cop should drive during the cooldown phase: first to the last-known
-  // position, then sweeping outward through nearby intersections to hunt for the
-  // player. Reaching the player's true location while searching re-acquires line
-  // of sight elsewhere in the loop and snaps back to ACTIVE.
+  // Where a cop drives once it's lost the trail (SEARCH). It sweeps the area
+  // AROUND the last-known location — a fan of nearby intersections capped within
+  // `searchDepth` blocks of the spot — instead of charging off down the escape
+  // heading. The sweep is identical whether hunting (fast) or in slow search;
+  // only the speed cap differs, so phase transitions don't make a cop change its
+  // mind. Re-acquiring sight snaps back to ACTIVE elsewhere in the loop.
   _cooldownTarget(cop) {
     const ARRIVE = 120; // px — close enough to a search waypoint to advance
-    const lk = this.pursuit.lastKnown;
-
-    // Phase 1 — DRIVE TO THE LAST-KNOWN LOCATION. Always go to where we last saw
-    // you first (this is the bit that was broken: the cop used to skip straight to
-    // searching because it was already near you, so it never visited the spot and
-    // just barrelled off along your old heading).
-    if (!cop.searching) {
-      if (Phaser.Math.Distance.Between(cop.sprite.x, cop.sprite.y, lk.x, lk.y) > ARRIVE) {
-        return lk;
-      }
-      cop.searching = true;       // arrived at the spot — now sweep outward from it
-      this._startSearch(cop);
-    }
-
-    // Phase 2 — sweep the search route (built around the last-known location).
+    // (Re)build the sweep when we don't have one or have finished it (re-sweep the
+    // still-hot area). Anchored at the last-known spot, so no drift to the edge.
     if (!cop.searchRoute || cop.searchIndex >= cop.searchRoute.length) {
-      this._startSearch(cop);
+      this._buildSweep(cop);
     }
     const wp = cop.searchRoute[cop.searchIndex];
     if (Phaser.Math.Distance.Between(cop.sprite.x, cop.sprite.y, wp.x, wp.y) < ARRIVE) {
@@ -145,49 +135,29 @@ export class GameScene extends Phaser.Scene {
     return cop.searchRoute[Math.min(cop.searchIndex, cop.searchRoute.length - 1)];
   }
 
-  _buildSearchRoute(cop, x, y, baseAngle = null) {
-    const start = this.navGrid.nearestNode(x, y);
-    const nodes = this.navGrid.nodesInRange(start, 2); // nearby intersections
-
-    // Order the nodes into a CIRCULAR sweep by angle around the centre, starting
-    // at baseAngle (the cop's current heading when searching from where it is) or,
-    // failing that, its sector so different cops spread.
-    const n    = Math.max(1, this.cops.length);
-    const base = (baseAngle !== null) ? baseAngle : (cop.searchSlot || 0) * (2 * Math.PI / n);
-    const pts = nodes.map(idx => {
-      const p   = this.navGrid.pos(idx);
-      const rel = Phaser.Math.Angle.Wrap(Math.atan2(p.y - y, p.x - x) - base);
-      return { p, key: rel < 0 ? rel + 2 * Math.PI : rel }; // 0..2π sweeping from base
-    });
-    pts.sort((a, b) => a.key - b.key);
-
-    cop.searchRoute = pts.map(s => s.p);
-    cop.searchIndex = 0;
-  }
-
-  // Begin (or rebuild) a search anchored at the LAST-KNOWN LOCATION (not the cop's
-  // drifted position): slot-0 follows the player's escape vector from there; the
-  // rest sweep outward around it. Anchoring at the spot is what keeps the search
-  // near where you vanished instead of wandering off to the map edge.
-  _startSearch(cop) {
+  // Build a cop's search sweep: intersections within `searchDepth` blocks of the
+  // last-known location, ordered ring-by-ring OUTWARD from it (cops stay near
+  // where you vanished and expand, never beeline off a heading), and within each
+  // ring toward this cop's sector — the escape direction for slot 0, fanned out
+  // by even angular offsets for the rest — so several cops split the area instead
+  // of trailing each other onto the same nodes.
+  _buildSweep(cop) {
     const lk = this.pursuit.lastKnown;
-    if (cop.searchSlot === 0 && this.pursuit.hasLastKnown) {
-      this._buildTrackRoute(cop, lk.x, lk.y, this.pursuit.lastKnownDir);
-    } else {
-      this._buildSearchRoute(cop, lk.x, lk.y, this.pursuit.lastKnownDir);
-    }
-  }
+    const startNode = this.navGrid.nearestNode(lk.x, lk.y);
+    const nodes = [startNode, ...this.navGrid.nodesInRange(startNode, this.searchDepth)];
 
-  // Route that follows the player's last-known travel vector: a line of nodes
-  // marching in `dir` from the start position, as if chasing where they fled.
-  _buildTrackRoute(cop, x, y, dir) {
-    const pts = [];
-    for (let d = 1; d <= 4; d++) {
-      const n = this.navGrid.nearestNode(x + Math.cos(dir) * d * GRID_STEP,
-                                         y + Math.sin(dir) * d * GRID_STEP);
-      pts.push(this.navGrid.pos(n));
-    }
-    cop.searchRoute = pts;
+    const n    = Math.max(1, this.cops.length);
+    const base = this.pursuit.lastKnownDir + (cop.searchSlot || 0) * (2 * Math.PI / n);
+
+    const scored = nodes.map(idx => {
+      const p   = this.navGrid.pos(idx);
+      const d   = Math.hypot(p.x - lk.x, p.y - lk.y);
+      const ang = Math.abs(Phaser.Math.Angle.Wrap(Math.atan2(p.y - lk.y, p.x - lk.x) - base));
+      return { p, ring: Math.round(d / GRID_STEP), ang };
+    });
+    scored.sort((a, b) => (a.ring - b.ring) || (a.ang - b.ang)); // inner rings, sector-first
+
+    cop.searchRoute = scored.map(s => s.p);
     cop.searchIndex = 0;
   }
 
@@ -485,7 +455,7 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
       brakeDecel: a.brakeDecel, arriveRadius: a.arriveRadius,
       senseDist: a.senseDist, directRange: a.directRange, reactionTime: a.reactionTime,
       sepRadius: this.sepRadius, sepStrength: this.sepStrength,
-      searchSpeed: this.searchSpeed,
+      searchSpeed: this.searchSpeed, searchDepth: this.searchDepth,
       flankDist: this.director.flankDist, interceptLead: this.director.interceptLead,
     };
 
@@ -521,6 +491,7 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
     pack.add(this.copTuning, 'sepRadius',     0,   250, 5).name('Separation radius').onChange(apply);
     pack.add(this.copTuning, 'sepStrength',   0,   400, 5).name('Separation strength').onChange(apply);
     pack.add(this.copTuning, 'searchSpeed',   80,  600, 10).name('Search speed cap').onChange(apply);
+    pack.add(this.copTuning, 'searchDepth',   1,   5,   1).name('Search radius (blocks)').onChange(apply);
 
     gui.add({ copyStats: () => {
       const t = this.copTuning;
@@ -534,12 +505,12 @@ arriveRadius: ${t.arriveRadius}, senseDist: ${t.senseDist}, directRange: ${t.dir
 // --- Formation (PursuitDirector) ---
 flankDist: ${t.flankDist}, interceptLead: ${t.interceptLead},
 // --- Separation + search (GameScene) ---
-sepRadius: ${t.sepRadius}, sepStrength: ${t.sepStrength}, searchSpeed: ${t.searchSpeed}`);
+sepRadius: ${t.sepRadius}, sepStrength: ${t.sepStrength}, searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}`);
     } }, 'copyStats').name('Copy Cop Stats → Console');
 
-    // Persist across refresh. Key bumped to v4 when defaults changed + the
-    // Reaction lag dial was added, so stale saves don't mask the new layout.
-    this._persistPanel(gui, 'gd_copTuning4');
+    // Persist across refresh. Key bumped to v5 when the search was reworked +
+    // the Search radius dial added, so stale saves don't mask the new defaults.
+    this._persistPanel(gui, 'gd_copTuning5');
 
     gui.domElement.style.position = 'fixed';
     gui.domElement.style.top  = '8px';
@@ -579,6 +550,7 @@ sepRadius: ${t.sepRadius}, sepStrength: ${t.sepStrength}, searchSpeed: ${t.searc
     this.sepRadius = t.sepRadius;
     this.sepStrength = t.sepStrength;
     this.searchSpeed = t.searchSpeed;
+    this.searchDepth = t.searchDepth;
     this.director.flankDist = t.flankDist;
     this.director.interceptLead = t.interceptLead;
   }
@@ -638,9 +610,10 @@ sepRadius: ${t.sepRadius}, sepStrength: ${t.sepStrength}, searchSpeed: ${t.searc
       this.pursuit.lastKnownSpeed = this.car.getSpeed();
     }
 
-    // On entering SEARCH, reset each cop's search so they head to last-known first
+    // On entering SEARCH, clear each cop's old route so a fresh sweep is built
+    // around the NEW last-known location.
     if (state === PursuitState.SEARCH && this._prevState !== PursuitState.SEARCH) {
-      for (const cop of this.cops) { cop.searching = false; cop.searchRoute = null; cop.searchIndex = 0; }
+      for (const cop of this.cops) { cop.searchRoute = null; cop.searchIndex = 0; }
     }
     this._prevState = state;
 
