@@ -653,12 +653,16 @@ sepRadius: ${t.sepRadius}, sepStrength: ${t.sepStrength}, searchSpeed: ${t.searc
       this.pursuit.lastKnownSpeed = this.car.getSpeed();
     }
 
-    // On entering SEARCH, start a fresh coverage map + clock + radius for this episode.
+    // On entering SEARCH, start a fresh coverage map + clock + radius, and send
+    // every cop to the LAST-KNOWN LOCATION first — the chase keeps priority, so
+    // they drive to where they last saw you (regaining sight en route resumes the
+    // chase) and only begin the node search once they actually arrive there.
     if (state === PursuitState.SEARCH && this._prevState !== PursuitState.SEARCH) {
       this.coverage.fill(-1e9);
       this._searchClock = 0;
       this._searchRadius = this.searchDepth;
-      for (const cop of this.cops) cop._searchNode = null;
+      const lkNode = this.navGrid.nearestNode(this.pursuit.lastKnown.x, this.pursuit.lastKnown.y);
+      for (const cop of this.cops) cop._searchNode = lkNode;
     }
     this._prevState = state;
 
