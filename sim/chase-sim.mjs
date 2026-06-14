@@ -246,13 +246,16 @@ const corners = [];
 // Run a few blocks, juke around one block to break sight, then continue — repeats.
 const losBreak = [node(1, 5), node(3, 5), node(5, 5), node(5, 7), node(3, 7), node(3, 5), node(1, 5), node(1, 7)];
 
-// Skilled player: near-top speed on straights, sheds a lot in 90° turns.
-const SKILL = { straight: 580, corner: 230 };
+// Skilled player: actual sustained top speed (the player's 600 maxSpeed is
+// theoretical — drag pulls real top speed to ~440), sheds a lot in 90° turns.
+// NOTE: the cop is NOT drag-affected, so its maxSpeed IS its real top speed —
+// compare cop speeds to this 440, not to the player's nominal 600.
+const SKILL = { straight: 440, corner: 190 };
 
 console.log('Ghost Driver — headless chase sim');
 console.log(`(real CopAI vs idealized evader straight ${SKILL.straight} / corner ${SKILL.corner}; gap px over ~26s)`);
 
-for (const copSpeed of [590, 560]) {
+for (const copSpeed of [460, 420, 380]) {
   console.log(`\n############ COP TOP SPEED ${copSpeed} (player straights ${SKILL.straight}) ############`);
   run('OPEN ROAD (perimeter loop)', loop, SKILL, copSpeed, 700, 40);
   run('CORNERS (zigzag)', corners, SKILL, copSpeed, 700, 40);
