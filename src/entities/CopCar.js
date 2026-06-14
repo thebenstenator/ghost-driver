@@ -25,12 +25,11 @@ export class CopCar extends Vehicle {
       tint: 0xffffff,   // flat white silhouette so cops pop against the dark map
       tintFill: true,
       stats: {
-        // The player's nominal 600 is never reached — drag caps their REAL top
-        // speed at ~450. The cop's higher accel would settle it at ~479 (FASTER
-        // than the player) unless we cap below 450. So 430 makes the cap actually
-        // bite: cop tops out at 430 < player's real 450, so you pull away on
-        // straights while it stays a threat in corners. The real top-speed dial.
-        maxSpeed:     430,
+        // Top-speed dial. The player's nominal 600 is never reached — drag caps
+        // their REAL top at ~450. The cop's cap bites below its drag equilibrium,
+        // so this is the effective top speed (500 cap → ~440 real, near the
+        // player; lower it for an easier straight-line escape).
+        maxSpeed:     500,
         acceleration: 420, // out-accelerates the player's 345 (brisk, but capped above)
         // Near-kinematic grip — velocity tracks facing almost instantly, so there
         // is no drift lag to wash the cop wide into a building. This is what lets
@@ -40,7 +39,7 @@ export class CopCar extends Vehicle {
         gripHigh:     0.2,  // player 0.03 — looser at speed so it slides through fast corners
         gripSpeedRef: 480,
         turnSpeedLow: 2.5,  // player 2.2
-        turnSpeed:    1.72, // player 1.2 — turns harder at speed
+        turnSpeed:    5,    // player 1.2 — turns hard at speed (tuned for tight corners)
         // Near-full steering authority at any speed so the path-follower can
         // always turn (player is 0 — can't pivot in place). This is what makes
         // the controller deadlock-proof.

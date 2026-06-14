@@ -31,11 +31,16 @@ export class CopAI {
     this.speedMargin      = 20;  // hysteresis band around desiredSpeed
     this.senseDist        = 700; // how far down the path to look for corners
     this.speedCap         = Infinity; // external cap (lowered during search/withdraw)
+    this.reactionTime     = 0.18;// s — while CHASING (clear line of sight) the cop steers
+                                 // toward where you were this long ago, not where you are
+                                 // now. 0 = perfect homing (mirrors you); higher = a sharp
+                                 // juke makes it overshoot, so close-range homing is beatable.
 
     // Cached node path + which node we're heading to
     this._path     = null;
     this._goalNode = -1;
     this._wpIndex  = 0;
+    this._aimHist  = []; // recent target positions, for reaction lag
 
     // Failsafe for a genuine physics wedge only
     this._sampleTimer = 0; this._sampleX = 0; this._sampleY = 0; this._sampleInit = false;
@@ -51,6 +56,11 @@ export class CopAI {
     let aimX = target.x, aimY = target.y;
     let limit = Math.min(this.maxApproachSpeed, this.speedCap);
     let nextTurn = 0;
+
+    // Record target history so we can steer toward a slightly-delayed position
+    // (reaction lag) while chasing in clear sight.
+    this._aimHist.push({ x: target.x, y: target.y });
+    if (this._aimHist.length > 64) this._aimHist.shift();
 
     const clearToTarget = !this.rects || segmentClear(cx, cy, target.x, target.y, this.rects);
 
@@ -88,6 +98,16 @@ export class CopAI {
     } else {
       // Visible or close — drop the cached path so we re-plan fresh next time.
       this._path = null; this._goalNode = -1;
+
+      // Reaction lag: steer toward where the target WAS reactionTime ago instead
+      // of where it is now. On a straight this is the same line; through a sharp
+      // juke the cop commits to your old heading and overshoots, opening a gap —
+      // so a clean corner can shake a cop that's glued to your bumper.
+      if (this.reactionTime > 0) {
+        const lagFrames = Math.min(this._aimHist.length - 1, Math.round(this.reactionTime / dt));
+        const past = this._aimHist[this._aimHist.length - 1 - lagFrames];
+        aimX = past.x; aimY = past.y;
+      }
     }
     cop.aiTarget = { x: aimX, y: aimY };
 

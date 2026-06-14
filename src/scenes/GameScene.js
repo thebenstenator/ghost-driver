@@ -483,7 +483,7 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
       turnSpeedLow: c.turnSpeedLow, turnSpeed: c.turnSpeed, minSteerFactor: c.minSteerFactor,
       cornerMinSpeed: a.cornerMinSpeed, maxApproachSpeed: a.baseApproach,
       brakeDecel: a.brakeDecel, arriveRadius: a.arriveRadius,
-      senseDist: a.senseDist, directRange: a.directRange,
+      senseDist: a.senseDist, directRange: a.directRange, reactionTime: a.reactionTime,
       sepRadius: this.sepRadius, sepStrength: this.sepStrength,
       searchSpeed: this.searchSpeed,
       flankDist: this.director.flankDist, interceptLead: this.director.interceptLead,
@@ -502,8 +502,8 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
     drive.add(this.copTuning, 'minSteerFactor', 0,   1.0, 0.05).name('Low-speed steer floor').onChange(apply);
 
     const grip = gui.addFolder('Grip');
-    grip.add(this.copTuning, 'gripLow',      0.02,  0.6, 0.01).name('Grip (low speed)').onChange(apply);
-    grip.add(this.copTuning, 'gripHigh',     0.005, 0.2, 0.005).name('Grip (high speed)').onChange(apply);
+    grip.add(this.copTuning, 'gripLow',      0.02,  1.0, 0.01).name('Grip (low speed)').onChange(apply);
+    grip.add(this.copTuning, 'gripHigh',     0.005, 1.0, 0.005).name('Grip (high speed)').onChange(apply);
     grip.add(this.copTuning, 'gripSpeedRef', 50,    600, 5).name('High-speed grip at').onChange(apply);
 
     const corner = gui.addFolder('Driving AI');
@@ -513,6 +513,7 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
     corner.add(this.copTuning, 'arriveRadius',     30,  150, 5).name('Node arrive radius').onChange(apply);
     corner.add(this.copTuning, 'senseDist',        200, 1000, 20).name('Corner sense ahead').onChange(apply);
     corner.add(this.copTuning, 'directRange',      50,  400, 10).name('Direct-aim range').onChange(apply);
+    corner.add(this.copTuning, 'reactionTime',     0,   0.5, 0.01).name('Reaction lag (s)').onChange(apply);
 
     const pack = gui.addFolder('Pack & Search');
     pack.add(this.copTuning, 'flankDist',     50,  400, 10).name('Flank distance').onChange(apply);
@@ -529,16 +530,16 @@ gripLow: ${t.gripLow}, gripHigh: ${t.gripHigh}, gripSpeedRef: ${t.gripSpeedRef},
 turnSpeedLow: ${t.turnSpeedLow}, turnSpeed: ${t.turnSpeed}, minSteerFactor: ${t.minSteerFactor},
 // --- Cop behaviour (CopAI) ---
 maxApproachSpeed: ${t.maxApproachSpeed}, cornerMinSpeed: ${t.cornerMinSpeed}, brakeDecel: ${t.brakeDecel},
-arriveRadius: ${t.arriveRadius}, senseDist: ${t.senseDist}, directRange: ${t.directRange},
+arriveRadius: ${t.arriveRadius}, senseDist: ${t.senseDist}, directRange: ${t.directRange}, reactionTime: ${t.reactionTime},
 // --- Formation (PursuitDirector) ---
 flankDist: ${t.flankDist}, interceptLead: ${t.interceptLead},
 // --- Separation + search (GameScene) ---
 sepRadius: ${t.sepRadius}, sepStrength: ${t.sepStrength}, searchSpeed: ${t.searchSpeed}`);
     } }, 'copyStats').name('Copy Cop Stats → Console');
 
-    // Persist across refresh. Key bumped to v3 when cop Max Speed default changed
-    // (430), so a stale saved 590 doesn't keep overriding the new default.
-    this._persistPanel(gui, 'gd_copTuning3');
+    // Persist across refresh. Key bumped to v4 when defaults changed + the
+    // Reaction lag dial was added, so stale saves don't mask the new layout.
+    this._persistPanel(gui, 'gd_copTuning4');
 
     gui.domElement.style.position = 'fixed';
     gui.domElement.style.top  = '8px';
@@ -573,7 +574,7 @@ sepRadius: ${t.sepRadius}, sepStrength: ${t.sepStrength}, searchSpeed: ${t.searc
       const a = cop.ai;
       a.cornerMinSpeed = t.cornerMinSpeed; a.baseApproach = t.maxApproachSpeed;
       a.brakeDecel = t.brakeDecel; a.arriveRadius = t.arriveRadius;
-      a.senseDist = t.senseDist; a.directRange = t.directRange;
+      a.senseDist = t.senseDist; a.directRange = t.directRange; a.reactionTime = t.reactionTime;
     }
     this.sepRadius = t.sepRadius;
     this.sepStrength = t.sepStrength;
