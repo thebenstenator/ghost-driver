@@ -122,7 +122,7 @@ function stepEvader(ev, route, wpRef, dt, straight, corner) {
 }
 
 // ── Perception (mirrors GameScene) ──────────────────────────────────────────
-const PROXIMITY = 250, SIGHT = 900, SEARCH_SPEED = 250, CATCH = 50;
+const PROXIMITY = 70, SIGHT = 900, SEARCH_SPEED = 250, CATCH = 50;
 const AWARE_GRACE = 0.6;  // keep "seeing" this long after sight actually breaks
 const HUNT = 10;          // after losing sight, charge last-known at full speed this long
 function canSee(cop, player) {
@@ -134,7 +134,7 @@ function canSee(cop, player) {
 
 // ── One scenario ────────────────────────────────────────────────────────────
 // skill = { straight, corner } evader speeds (px/s). copSpeed overrides cop top speed.
-function run(name, route, skill, copSpeed = 590, copBackPx = 700, seconds = 26, copAccel = null) {
+function run(name, route, skill, copSpeed = 590, copBackPx = 700, seconds = 26, copAccel = null, chaseTurnCut = null) {
   const h0 = Math.atan2(route[1].y - route[0].y, route[1].x - route[0].x);
   const ev = makeEvader(route[0].x, route[0].y, h0);
   ev.vx = Math.cos(h0) * skill.straight; ev.vy = Math.sin(h0) * skill.straight;
@@ -146,6 +146,7 @@ function run(name, route, skill, copSpeed = 590, copBackPx = 700, seconds = 26, 
   cop.maxSpeed = cop.baseMaxSpeed = copSpeed;
   cop.ai.maxApproachSpeed = cop.ai.baseApproach = copSpeed + 20;
   if (copAccel !== null) cop.accel = copAccel;
+  if (chaseTurnCut !== null) cop.ai.chaseTurnCut = chaseTurnCut;
 
   const dt = 1 / 60;
   const wpRef = { v: 1 };
@@ -299,11 +300,12 @@ probePlayer();
 console.log('Ghost Driver — headless chase sim');
 console.log(`(real CopAI vs idealized evader straight ${SKILL.straight} / corner ${SKILL.corner}; gap px over ~26s)`);
 
-// Sweep cop ACCELERATION (top speed fixed at 420, just under the player's 450).
-// The player's effective accel is ~225 px/s²; find where the corner battle is fair.
-for (const copAccel of [750, 350, 200]) {
-  console.log(`\n############ COP ACCEL ${copAccel} px/s²  (player ~225; cop top 420 vs player 450) ############`);
-  run('OPEN ROAD (perimeter loop)', loop, SKILL, 420, 700, 40, copAccel);
-  run('CORNERS (zigzag)', corners, SKILL, 420, 700, 40, copAccel);
-  run('LOS BREAK (juke a block)', losBreak, SKILL, 420, 700, 40, copAccel);
+// Sweep the NEW chase-corner governor (cop top 420 / accel 280). chaseTurnCut =
+// rad of heading swing that drops chase speed to cornerMinSpeed. High value
+// (10) ≈ the old homing missile (no corner cost); lower = corners cost it more.
+for (const cut of [10.0, 1.2, 0.7]) {
+  console.log(`\n############ chaseTurnCut ${cut} rad  (10 ≈ old homing; lower = corners cost the cop) ############`);
+  run('OPEN ROAD (perimeter loop)', loop, SKILL, 420, 700, 40, 280, cut);
+  run('CORNERS (zigzag)', corners, SKILL, 420, 700, 40, 280, cut);
+  run('LOS BREAK (juke a block)', losBreak, SKILL, 420, 700, 40, 280, cut);
 }

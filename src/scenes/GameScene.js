@@ -41,7 +41,11 @@ export class GameScene extends Phaser.Scene {
     this.director   = new PursuitDirector(this.navGrid);
     this.cops       = [];
     this.sightRange = 900;             // px — cop spotting range in clear line
-    this.proximityRange = 250;         // px — sensed regardless of line of sight (can't lose someone beside you)
+    this.proximityRange = 70;          // px — sensed THROUGH walls only at point-blank (can't
+                                       // lose someone on your bumper). Kept small on purpose:
+                                       // a large value meant the cop could never lose you up
+                                       // close, so rounding a building could never break sight.
+                                       // Beyond this, spotting needs a clear line (sightRange).
     this.awareGrace = 0.6;             // s — stay aware this long after last perceiving (memory)
     this.sepRadius  = 80;              // separation: how close before cops repel
     this.sepStrength = 150;            // separation: aim push strength
@@ -473,7 +477,7 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
       maxSpeed: c.baseMaxSpeed,
       motionAccel: c.accel, motionBrake: c.brakeDecel,
       turnRadius: c.turnRadius, maxTurnRate: c.maxTurnRate,
-      cornerMinSpeed: a.cornerMinSpeed, maxApproachSpeed: a.baseApproach,
+      cornerMinSpeed: a.cornerMinSpeed, chaseTurnCut: a.chaseTurnCut, maxApproachSpeed: a.baseApproach,
       brakeDecel: a.brakeDecel, arriveRadius: a.arriveRadius,
       senseDist: a.senseDist, directRange: a.directRange,
       sepRadius: this.sepRadius, sepStrength: this.sepStrength,
@@ -496,6 +500,7 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
     corner.add(this.copTuning, 'maxSpeed',         100, 1200, 10).name('Max Speed').onChange(apply);
     corner.add(this.copTuning, 'maxApproachSpeed', 200, 800, 10).name('Straight speed').onChange(apply);
     corner.add(this.copTuning, 'cornerMinSpeed',   80,  500, 5).name('Corner min speed').onChange(apply);
+    corner.add(this.copTuning, 'chaseTurnCut',     0.4, 10, 0.1).name('Chase corner cost (lo=more)').onChange(apply);
     corner.add(this.copTuning, 'brakeDecel',       100, 800, 10).name('Brake planning').onChange(apply);
     corner.add(this.copTuning, 'arriveRadius',     30,  150, 5).name('Node arrive radius').onChange(apply);
     corner.add(this.copTuning, 'senseDist',        200, 1000, 20).name('Corner sense ahead').onChange(apply);
@@ -558,7 +563,7 @@ sepRadius: ${t.sepRadius}, sepStrength: ${t.sepStrength}, searchSpeed: ${t.searc
       cop.turnRadius = t.turnRadius;
       cop.maxTurnRate = t.maxTurnRate;
       const a = cop.ai;
-      a.cornerMinSpeed = t.cornerMinSpeed; a.baseApproach = t.maxApproachSpeed;
+      a.cornerMinSpeed = t.cornerMinSpeed; a.chaseTurnCut = t.chaseTurnCut; a.baseApproach = t.maxApproachSpeed;
       a.maxApproachSpeed = t.maxApproachSpeed;
       a.brakeDecel = t.brakeDecel; a.arriveRadius = t.arriveRadius;
       a.senseDist = t.senseDist; a.directRange = t.directRange;

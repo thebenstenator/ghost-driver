@@ -38,7 +38,12 @@ export class CopAI {
                                  // bulldoze them through a wall.
     this.standoff         = 36;  // px short of the player the chasing cop aims for (≈ bumpers)
     this.cornerMinSpeed   = 140; // speed through a 90°+ corner (must be slow enough that
-                                 // CopCar's turn radius fits the corner without clipping)
+                                 // CopCar's turn radius fits the corner without clipping).
+                                 // Now also the floor speed while CHASING through a turn.
+    this.chaseTurnCut     = 1.0; // rad of heading swing (to keep tracking you) that drops
+                                 // chase speed all the way to cornerMinSpeed. THIS is what
+                                 // makes your corners cost the cop while it can see you —
+                                 // smaller = it bleeds more speed in turns = more ditchable.
     this.brakeDecel       = 320; // shapes how early speed eases down before a corner
     this.senseDist        = 700; // how far down the path to look for corners
     this.speedCap         = Infinity; // external cap (lowered during search/withdraw)
@@ -96,6 +101,16 @@ export class CopAI {
         const back = Math.min(this.standoff, dist);
         const ux = (target.x - cx) / (dist || 1), uy = (target.y - cy) / (dist || 1);
         aim = { x: target.x - ux * back, y: target.y - uy * back };
+
+        // Corner cost WHILE chasing: if keeping you in our sights needs a hard
+        // heading swing (you just cornered/juked), bleed speed toward cornerMinSpeed.
+        // Without this the cop tracks every turn at full speed (the homing-missile
+        // feel); with it, skilled cornering opens a gap it has to claw back.
+        const desiredHeading = Math.atan2(aim.y - cy, aim.x - cx);
+        const turnNeeded = Math.abs(Phaser.Math.Angle.Wrap(desiredHeading - cop.heading));
+        const tt = Math.min(turnNeeded / this.chaseTurnCut, 1);
+        speed = Phaser.Math.Linear(speed, Math.min(this.cornerMinSpeed, speed), tt);
+        nextTurn = turnNeeded;
       }
     }
 
