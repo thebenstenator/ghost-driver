@@ -1,25 +1,18 @@
-import Phaser from 'phaser';
 import { Vehicle } from './Vehicle.js';
 import { CopAI } from '../ai/CopAI.js';
 
-// A pursuing cop car. It reuses Vehicle only for the sprite + collision body — it
-// does NOT use the player's drift physics. Cops move with a STEERING-KINEMATIC
-// model: the AI says where to head and how fast, and the cop turns toward it with
-// a speed-dependent turn radius and ramps its speed with a fixed acceleration.
-//
-// This is the middle path between the two things that failed:
-//   • Piloting the player's DRIFT car with AI inputs → spinouts, wedging, stuck
-//     in reverse (grip/handbrake/scrub fight the AI).
-//   • Setting velocity straight at the target → rides on rails: instant speed,
-//     instant direction change, always max speed. Reliable but unnatural.
-// Here heading and speed are DIRECTLY bounded (can't spin out / wedge / reverse),
-// but they can only CHANGE over time — so the cop accelerates from a stop and arcs
-// through corners (wider arcs at speed = understeer), reading like a real car.
+// A pursuing cop car. Same physics as the player, driven by a CopAI.
 //
 // ── HOW TO TUNE A COP ──────────────────────────────────────────────────────
-// Top speed → `maxSpeed` (stats below). Acceleration / braking / turn radius →
-// the fields in this constructor. How it decides where to go and how fast (corner
-// speed, look-ahead, pathing, standoff) → CopAI's constructor.
+// Cop *handling* (speed, grip, steering, drift) is tuned here, in the `stats`
+// object below — each key overrides the corresponding Vehicle default, so you
+// can give a cop any handling profile relative to the player. This is the
+// preferred way to balance a cop: change numbers here, not in the physics.
+//
+// Cop *behaviour* (how it decides to drive — pursuit, cornering aggression,
+// stuck recovery, approach/ram) is tuned by the constants in CopAI's
+// constructor. Pursuit-level / per-unit variety will eventually pass a config
+// in here; for now this is the single "level 1 patrol" profile.
 // ───────────────────────────────────────────────────────────────────────────
 export class CopCar extends Vehicle {
   constructor(scene, x, y, navGrid, rects = null) {
@@ -32,81 +25,40 @@ export class CopCar extends Vehicle {
       tint: 0xffffff,   // flat white silhouette so cops pop against the dark map
       tintFill: true,
       stats: {
-        // Top travel speed, and the master difficulty dial. Compare it to the
-        // player's ACTUAL top speed (~440) — NOT their nominal 600, which drag
-        // never lets them reach. The cop has no drag, so this IS its real speed.
-        // The chase sim (calibrated to 440) shows ~420 is the sweet spot: just
-        // below the player so OPEN ROAD is a real escape valve, while corners
-        // still get you caught. Faster than ~440 = effectively un-ditchable.
-        maxSpeed: 425,
+        maxSpeed:     590, // just under the player's 600 — catchable on a long straight
+        acceleration: 420, // out-accelerates the player's 345
+        // Near-kinematic grip — velocity tracks facing almost instantly, so there
+        // is no drift lag to wash the cop wide into a building. This is what lets
+        // the path-follower thread the tight grid. (Player is 0.14/0.03 — the cop
+        // is deliberately planted/on-rails; the player is the one who drifts.)
+        gripLow:      0.6,  // player 0.14
+        gripHigh:     0.5,  // player 0.03 — stays grippy at speed
+        gripSpeedRef: 480,
+        turnSpeedLow: 2.5,  // player 2.2
+        turnSpeed:    1.72, // player 1.2 — turns harder at speed
+        // Near-full steering authority at any speed so the path-follower can
+        // always turn (player is 0 — can't pivot in place). This is what makes
+        // the controller deadlock-proof.
+        minSteerFactor: 0.8,
       },
     });
 
     this.ai = new CopAI(navGrid, rects);
-    this.aiTarget = { x, y };           // current aim point, for debug draw
-    this.baseMaxSpeed = this.maxSpeed;  // tuning panel restores maxSpeed from this
-
-    // ── Steering-kinematic motion params ──
-    this.accel       = 280;  // px/s² ramp up to target speed. Kept close to the player's
-                             // effective ~225 (the player is drag-limited; the cop is not)
-                             // so the cop doesn't out-drag you out of every corner. Higher
-                             // values make it surge onto your bumper after each slowdown.
-    this.brakeDecel  = 1400; // px/s² ramp down (slow for corners / standoff)
-    this.turnRadius  = 52;   // px — min cornering radius; bigger = wider arcs at speed
-    this.maxTurnRate = 5.5;  // rad/s cap (so it can't pivot instantly at high speed)
-    this.baseTurnRate = 2.6; // rad/s floor (so it can still reorient when crawling)
-
-    this.heading = this.facing; // direction of travel (velocity points this way)
-    this.speed   = 0;           // current scalar speed (ramped, not snapped)
+    this.aiTarget = { x, y }; // current steering target, for debug draw
+    this.baseMaxSpeed = this.maxSpeed; // catch-up rubber-band raises maxSpeed above this when far
   }
 
-  // target: { x, y } in world space (player / last-known / station). null = stand down.
+  // target: an object with .x / .y in world space (the player, or a last-known
+  // position). A null target means "stand down" — coast to a stop.
   update(delta, target) {
-    const dt   = delta / 1000;
-    const body = this.sprite.body;
     if (!target) {
-      body.setVelocity(0, 0);
-      this.vx = this.vy = 0;
-      this.speed = 0;
+      super.update(delta, { up: false, down: false, left: false, right: false, handbrake: false, brake: true });
       this.aiTarget = null;
-      this.debug = { mode: 'STANDDOWN', speed: 0, dist: 0, bend: 0, cornerLimit: 0, angleErr: 0, reverseTime: 0 };
+      this.debug = { mode: 'STANDDOWN', speed: this.getSpeed(), dist: 0, bend: 0,
+                     cornerLimit: 0, angleErr: 0, reverseTime: 0 };
       return;
     }
-
-    const { aim, speed } = this.ai.getControls(this, target);
-    this.aiTarget = aim;
-
-    const dx = aim.x - this.sprite.x, dy = aim.y - this.sprite.y;
-    const d  = Math.hypot(dx, dy);
-
-    // Target speed the AI wants, capped by our top speed. Drop to 0 on arrival so
-    // we don't overstep the aim and jitter across it.
-    let targetSpeed = Math.min(speed, this.maxSpeed);
-    if (d < 3 || this.speed * dt > d) targetSpeed = 0;
-
-    // Ramp speed toward target (accelerate or brake — never snap).
-    if (targetSpeed > this.speed) this.speed = Math.min(targetSpeed, this.speed + this.accel * dt);
-    else                          this.speed = Math.max(targetSpeed, this.speed - this.brakeDecel * dt);
-
-    // Steer heading toward the aim, limited by a speed-dependent turn rate. Faster
-    // → wider arc (turnRate ≈ speed/turnRadius), with a low-speed floor so a nearly
-    // stopped cop can still reorient, and a cap so it never pivots on a dime.
-    let angleErr = 0;
-    if (d > 1) {
-      const desired = Math.atan2(dy, dx);
-      angleErr = Phaser.Math.Angle.Wrap(desired - this.heading);
-      const turnRate = Phaser.Math.Clamp(this.speed / this.turnRadius, this.baseTurnRate, this.maxTurnRate);
-      this.heading = Phaser.Math.Angle.RotateTo(this.heading, desired, turnRate * dt);
-    }
-
-    // Velocity follows the nose — no sideways slide.
-    this.vx = Math.cos(this.heading) * this.speed;
-    this.vy = Math.sin(this.heading) * this.speed;
-    body.setVelocity(this.vx, this.vy);
-
-    this.facing = this.heading;
-    this.sprite.setRotation(this.facing + Math.PI / 2);
-
-    if (this.debug) { this.debug.angleErr = Phaser.Math.RadToDeg(angleErr); }
+    const controls = this.ai.getControls(this, target, delta / 1000);
+    super.update(delta, controls);
   }
 }

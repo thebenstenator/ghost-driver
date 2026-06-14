@@ -477,12 +477,11 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
     const c = this.cops[0], a = c.ai;
 
     // Single source of truth for the panel; changes are pushed to every cop.
-    // (Cops are kinematic now — grip/turn/accel no longer apply.)
     this.copTuning = {
-      maxSpeed: c.baseMaxSpeed,
-      motionAccel: c.accel, motionBrake: c.brakeDecel,
-      turnRadius: c.turnRadius, maxTurnRate: c.maxTurnRate,
-      cornerMinSpeed: a.cornerMinSpeed, chaseTurnCut: a.chaseTurnCut, maxApproachSpeed: a.baseApproach,
+      maxSpeed: c.baseMaxSpeed, acceleration: c.acceleration,
+      gripLow: c.gripLow, gripHigh: c.gripHigh, gripSpeedRef: c.gripSpeedRef,
+      turnSpeedLow: c.turnSpeedLow, turnSpeed: c.turnSpeed, minSteerFactor: c.minSteerFactor,
+      cornerMinSpeed: a.cornerMinSpeed, maxApproachSpeed: a.baseApproach,
       brakeDecel: a.brakeDecel, arriveRadius: a.arriveRadius,
       senseDist: a.senseDist, directRange: a.directRange,
       sepRadius: this.sepRadius, sepStrength: this.sepStrength,
@@ -495,17 +494,21 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
     gui.close();
     const apply = () => this._applyCopTuning();
 
-    const motion = gui.addFolder('Motion (accel & turning)');
-    motion.add(this.copTuning, 'motionAccel', 50, 3000, 10).name('Acceleration (px/s²)').onChange(apply);
-    motion.add(this.copTuning, 'motionBrake', 50, 3000, 10).name('Deceleration (px/s²)').onChange(apply);
-    motion.add(this.copTuning, 'turnRadius',  20, 200,  2).name('Turn radius (px)').onChange(apply);
-    motion.add(this.copTuning, 'maxTurnRate', 1.0, 8.0, 0.1).name('Max turn rate (rad/s)').onChange(apply);
+    const drive = gui.addFolder('Handling');
+    drive.add(this.copTuning, 'maxSpeed',       100, 1200, 10).name('Max Speed').onChange(apply);
+    drive.add(this.copTuning, 'acceleration',   10, 1500,  5).name('Acceleration').onChange(apply);
+    drive.add(this.copTuning, 'turnSpeedLow',   0.5, 8.0, 0.05).name('Turn Speed low').onChange(apply);
+    drive.add(this.copTuning, 'turnSpeed',      0.5, 8.0, 0.05).name('Turn Speed high').onChange(apply);
+    drive.add(this.copTuning, 'minSteerFactor', 0,   1.0, 0.05).name('Low-speed steer floor').onChange(apply);
 
-    const corner = gui.addFolder('Driving');
-    corner.add(this.copTuning, 'maxSpeed',         100, 1200, 10).name('Max Speed').onChange(apply);
+    const grip = gui.addFolder('Grip');
+    grip.add(this.copTuning, 'gripLow',      0.02,  0.6, 0.01).name('Grip (low speed)').onChange(apply);
+    grip.add(this.copTuning, 'gripHigh',     0.005, 0.2, 0.005).name('Grip (high speed)').onChange(apply);
+    grip.add(this.copTuning, 'gripSpeedRef', 50,    600, 5).name('High-speed grip at').onChange(apply);
+
+    const corner = gui.addFolder('Driving AI');
     corner.add(this.copTuning, 'maxApproachSpeed', 200, 800, 10).name('Straight speed').onChange(apply);
     corner.add(this.copTuning, 'cornerMinSpeed',   80,  500, 5).name('Corner min speed').onChange(apply);
-    corner.add(this.copTuning, 'chaseTurnCut',     0.4, 10, 0.1).name('Chase corner cost (lo=more)').onChange(apply);
     corner.add(this.copTuning, 'brakeDecel',       100, 800, 10).name('Brake planning').onChange(apply);
     corner.add(this.copTuning, 'arriveRadius',     30,  150, 5).name('Node arrive radius').onChange(apply);
     corner.add(this.copTuning, 'senseDist',        200, 1000, 20).name('Corner sense ahead').onChange(apply);
@@ -520,18 +523,22 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
 
     gui.add({ copyStats: () => {
       const t = this.copTuning;
-      console.log(`// --- Cop driving (CopCar / CopAI) ---
-maxSpeed: ${t.maxSpeed}, maxApproachSpeed: ${t.maxApproachSpeed}, cornerMinSpeed: ${t.cornerMinSpeed},
-brakeDecel: ${t.brakeDecel}, arriveRadius: ${t.arriveRadius}, senseDist: ${t.senseDist}, directRange: ${t.directRange},
+      console.log(`// --- Cop handling (CopCar stats) ---
+maxSpeed: ${t.maxSpeed}, acceleration: ${t.acceleration},
+gripLow: ${t.gripLow}, gripHigh: ${t.gripHigh}, gripSpeedRef: ${t.gripSpeedRef},
+turnSpeedLow: ${t.turnSpeedLow}, turnSpeed: ${t.turnSpeed}, minSteerFactor: ${t.minSteerFactor},
+// --- Cop behaviour (CopAI) ---
+maxApproachSpeed: ${t.maxApproachSpeed}, cornerMinSpeed: ${t.cornerMinSpeed}, brakeDecel: ${t.brakeDecel},
+arriveRadius: ${t.arriveRadius}, senseDist: ${t.senseDist}, directRange: ${t.directRange},
 // --- Formation (PursuitDirector) ---
 flankDist: ${t.flankDist}, interceptLead: ${t.interceptLead},
 // --- Separation + search (GameScene) ---
 sepRadius: ${t.sepRadius}, sepStrength: ${t.sepStrength}, searchSpeed: ${t.searchSpeed}`);
     } }, 'copyStats').name('Copy Cop Stats → Console');
 
-    // Persist across refresh: load saved values (which re-applies them to the cops
-    // via each controller's onChange), then save on every change.
-    this._persistPanel(gui, 'gd_copTuning');
+    // Persist across refresh. Key bumped to v2: reverting to physics cops changed
+    // the panel's shape, so old kinematic saves are ignored (clean defaults).
+    this._persistPanel(gui, 'gd_copTuning2');
 
     gui.domElement.style.position = 'fixed';
     gui.domElement.style.top  = '8px';
@@ -560,16 +567,11 @@ sepRadius: ${t.sepRadius}, sepStrength: ${t.sepStrength}, searchSpeed: ${t.searc
   _applyCopTuning() {
     const t = this.copTuning;
     for (const cop of this.cops) {
-      // baseMaxSpeed is the panel's source of truth; mirror onto the live cap too.
-      cop.baseMaxSpeed = t.maxSpeed;
-      cop.maxSpeed   = t.maxSpeed;
-      cop.accel      = t.motionAccel;
-      cop.brakeDecel = t.motionBrake;
-      cop.turnRadius = t.turnRadius;
-      cop.maxTurnRate = t.maxTurnRate;
+      cop.baseMaxSpeed = t.maxSpeed; cop.maxSpeed = t.maxSpeed; cop.acceleration = t.acceleration;
+      cop.gripLow = t.gripLow; cop.gripHigh = t.gripHigh; cop.gripSpeedRef = t.gripSpeedRef;
+      cop.turnSpeedLow = t.turnSpeedLow; cop.turnSpeed = t.turnSpeed; cop.minSteerFactor = t.minSteerFactor;
       const a = cop.ai;
-      a.cornerMinSpeed = t.cornerMinSpeed; a.chaseTurnCut = t.chaseTurnCut; a.baseApproach = t.maxApproachSpeed;
-      a.maxApproachSpeed = t.maxApproachSpeed;
+      a.cornerMinSpeed = t.cornerMinSpeed; a.baseApproach = t.maxApproachSpeed;
       a.brakeDecel = t.brakeDecel; a.arriveRadius = t.arriveRadius;
       a.senseDist = t.senseDist; a.directRange = t.directRange;
     }
@@ -664,10 +666,6 @@ sepRadius: ${t.sepRadius}, sepStrength: ${t.sepStrength}, searchSpeed: ${t.searc
       // Full speed while chasing OR hunting; capped only for sustained search / withdrawal.
       const slow = (state === PursuitState.SEARCH && !hunting) || state === PursuitState.RETURNING;
       cop.ai.speedCap = slow ? this.searchSpeed : Infinity;
-      // Ram the moving player (no arrival easing -> no speed-matched "cruise"); but
-      // ease onto stationary targets (last-known / search points / station) so the
-      // cop settles instead of jittering across them.
-      cop.ai.arriveEase = state !== PursuitState.ACTIVE;
       cop.update(delta, target);
     }
 
