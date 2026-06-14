@@ -22,7 +22,11 @@ export class CopAI {
 
     // --- Tunables ---
     this.steerDeadzone    = 0.05;
-    this.directRange      = 130; // within this, aim straight at the target
+    this.directRange      = 130; // within this, aim straight at the target even if blocked
+    this.chaseRange       = 550; // BEELINE at the target only within this range (with clear
+                                 // sight). Beyond it the cop follows the roads even with a
+                                 // clear line — so a far cop corners at intersections instead
+                                 // of tracking you straight across a corner into a building.
     this.arriveRadius     = 70;  // px to count a path node as reached
     this.maxApproachSpeed = 610; // speed on a straight (physics caps lower)
     this.baseApproach     = 610; // catch-up rubber-band raises maxApproachSpeed above this when far
@@ -64,7 +68,10 @@ export class CopAI {
 
     const clearToTarget = !this.rects || segmentClear(cx, cy, target.x, target.y, this.rects);
 
-    if (!clearToTarget && dist > this.directRange) {
+    // Beeline straight at the target only when close (clear sight within chaseRange,
+    // or point-blank). Otherwise follow the road network so we corner properly.
+    const beeline = dist <= this.directRange || (clearToTarget && dist <= this.chaseRange);
+    if (!beeline) {
       // --- Navigate the road network, one intersection at a time ---
       const copNode  = this.nav.nearestNode(cx, cy);
       const goalNode = this.nav.nearestNode(target.x, target.y);

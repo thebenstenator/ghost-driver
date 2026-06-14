@@ -478,7 +478,7 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
       turnSpeedLow: c.turnSpeedLow, turnSpeed: c.turnSpeed, minSteerFactor: c.minSteerFactor,
       cornerMinSpeed: a.cornerMinSpeed, maxApproachSpeed: a.baseApproach,
       brakeDecel: a.brakeDecel, arriveRadius: a.arriveRadius,
-      senseDist: a.senseDist, directRange: a.directRange, reactionTime: a.reactionTime,
+      senseDist: a.senseDist, directRange: a.directRange, chaseRange: a.chaseRange, reactionTime: a.reactionTime,
       sepRadius: this.sepRadius, sepStrength: this.sepStrength,
       searchSpeed: this.searchSpeed, searchDepth: this.searchDepth, coverageTTL: this.coverageTTL,
       flankDist: this.director.flankDist, interceptLead: this.director.interceptLead,
@@ -508,6 +508,7 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
     corner.add(this.copTuning, 'arriveRadius',     30,  150, 5).name('Node arrive radius').onChange(apply);
     corner.add(this.copTuning, 'senseDist',        200, 1000, 20).name('Corner sense ahead').onChange(apply);
     corner.add(this.copTuning, 'directRange',      50,  400, 10).name('Direct-aim range').onChange(apply);
+    corner.add(this.copTuning, 'chaseRange',       150, 2000, 25).name('Beeline range (else paths)').onChange(apply);
     corner.add(this.copTuning, 'reactionTime',     0,   0.5, 0.01).name('Reaction lag (s)').onChange(apply);
 
     const pack = gui.addFolder('Pack & Search');
@@ -527,7 +528,7 @@ gripLow: ${t.gripLow}, gripHigh: ${t.gripHigh}, gripSpeedRef: ${t.gripSpeedRef},
 turnSpeedLow: ${t.turnSpeedLow}, turnSpeed: ${t.turnSpeed}, minSteerFactor: ${t.minSteerFactor},
 // --- Cop behaviour (CopAI) ---
 maxApproachSpeed: ${t.maxApproachSpeed}, cornerMinSpeed: ${t.cornerMinSpeed}, brakeDecel: ${t.brakeDecel},
-arriveRadius: ${t.arriveRadius}, senseDist: ${t.senseDist}, directRange: ${t.directRange}, reactionTime: ${t.reactionTime},
+arriveRadius: ${t.arriveRadius}, senseDist: ${t.senseDist}, directRange: ${t.directRange}, chaseRange: ${t.chaseRange}, reactionTime: ${t.reactionTime},
 // --- Formation (PursuitDirector) ---
 flankDist: ${t.flankDist}, interceptLead: ${t.interceptLead},
 // --- Separation + search (GameScene) ---
@@ -571,7 +572,7 @@ sepRadius: ${t.sepRadius}, sepStrength: ${t.sepStrength}, searchSpeed: ${t.searc
       const a = cop.ai;
       a.cornerMinSpeed = t.cornerMinSpeed; a.baseApproach = t.maxApproachSpeed;
       a.brakeDecel = t.brakeDecel; a.arriveRadius = t.arriveRadius;
-      a.senseDist = t.senseDist; a.directRange = t.directRange; a.reactionTime = t.reactionTime;
+      a.senseDist = t.senseDist; a.directRange = t.directRange; a.chaseRange = t.chaseRange; a.reactionTime = t.reactionTime;
     }
     this.sepRadius = t.sepRadius;
     this.sepStrength = t.sepStrength;
