@@ -119,19 +119,22 @@ export class GameScene extends Phaser.Scene {
   // player. Reaching the player's true location while searching re-acquires line
   // of sight elsewhere in the loop and snaps back to ACTIVE.
   _cooldownTarget(cop) {
-    const ARRIVE = 120; // px — "general area" is close enough; no need to hit the exact point
+    const ARRIVE = 120; // px — close enough to a search waypoint to advance
     const lk = this.pursuit.lastKnown;
 
+    // Phase 1 — DRIVE TO THE LAST-KNOWN LOCATION. Always go to where we last saw
+    // you first (this is the bit that was broken: the cop used to skip straight to
+    // searching because it was already near you, so it never visited the spot and
+    // just barrelled off along your old heading).
     if (!cop.searching) {
-      const d = Phaser.Math.Distance.Between(cop.sprite.x, cop.sprite.y, lk.x, lk.y);
-      // Only head back to the last-known if we're more than ~a block away; if
-      // we're already in the area, start searching right here.
-      if (d > GRID_STEP) return lk;
-      cop.searching = true;
+      if (Phaser.Math.Distance.Between(cop.sprite.x, cop.sprite.y, lk.x, lk.y) > ARRIVE) {
+        return lk;
+      }
+      cop.searching = true;       // arrived at the spot — now sweep outward from it
       this._startSearch(cop);
     }
 
-    // Rebuild a fresh sweep from the current spot/heading when the route runs out.
+    // Phase 2 — sweep the search route (built around the last-known location).
     if (!cop.searchRoute || cop.searchIndex >= cop.searchRoute.length) {
       this._startSearch(cop);
     }
@@ -162,14 +165,16 @@ export class GameScene extends Phaser.Scene {
     cop.searchIndex = 0;
   }
 
-  // Begin (or rebuild) a search from the cop's CURRENT position: slot-0 follows
-  // the player's escape vector; the rest sweep outward starting in their heading.
+  // Begin (or rebuild) a search anchored at the LAST-KNOWN LOCATION (not the cop's
+  // drifted position): slot-0 follows the player's escape vector from there; the
+  // rest sweep outward around it. Anchoring at the spot is what keeps the search
+  // near where you vanished instead of wandering off to the map edge.
   _startSearch(cop) {
-    const sx = cop.sprite.x, sy = cop.sprite.y;
+    const lk = this.pursuit.lastKnown;
     if (cop.searchSlot === 0 && this.pursuit.hasLastKnown) {
-      this._buildTrackRoute(cop, sx, sy, this.pursuit.lastKnownDir);
+      this._buildTrackRoute(cop, lk.x, lk.y, this.pursuit.lastKnownDir);
     } else {
-      this._buildSearchRoute(cop, sx, sy, cop.facing);
+      this._buildSearchRoute(cop, lk.x, lk.y, this.pursuit.lastKnownDir);
     }
   }
 
@@ -603,7 +608,7 @@ sepRadius: ${t.sepRadius}, sepStrength: ${t.sepStrength}, searchSpeed: ${t.searc
     // not drop the chase. ---
     const px = this.car.sprite.x, py = this.car.sprite.y;
     const dt = delta / 1000;
-    let anyAware = false;
+    let anyAware = false, anyLOS = false;
     let nearestCopDist = Infinity;
     for (const cop of this.cops) {
       const d = Phaser.Math.Distance.Between(cop.sprite.x, cop.sprite.y, px, py);
@@ -611,16 +616,19 @@ sepRadius: ${t.sepRadius}, sepStrength: ${t.sepStrength}, searchSpeed: ${t.searc
       const sees = d <= this.proximityRange ||
         (d <= this.sightRange && segmentClear(cop.sprite.x, cop.sprite.y, px, py, this.losRects));
       cop.awareTimer = sees ? this.awareGrace : Math.max(0, (cop.awareTimer || 0) - dt);
-      cop.hasLOS = sees;                  // instantaneous, for debug colouring
+      cop.hasLOS = sees;                  // instantaneous real line of sight
       cop.aware  = cop.awareTimer > 0;    // includes the memory grace
       if (cop.aware) anyAware = true;
+      if (sees)      anyLOS = true;
     }
 
-    // --- Pursuit state machine (driven by awareness, not a single-frame ray) ---
-    const state = this.pursuit.update(anyAware, px, py, dt);
+    // --- Pursuit state machine. `aware` (grace) keeps it ACTIVE through flickers;
+    // only a real line of sight (`anyLOS`) moves the last-known marker, so a juke
+    // behind a building commits the cops to where they GENUINELY last saw you. ---
+    const state = this.pursuit.update(anyAware, anyLOS, px, py, dt);
     if (this.pursuit.justDitched) this._flashGhost();
-    // Remember how the player was moving when last seen (for hunt prediction + search vector)
-    if (anyAware) {
+    // Player's heading/speed at the last REAL sighting (the search/track vector).
+    if (anyLOS) {
       this.pursuit.lastKnownDir = this.car.getSpeed() > 40
         ? Math.atan2(this.car.vy, this.car.vx)
         : this.car.facing;

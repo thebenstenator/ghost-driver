@@ -49,19 +49,28 @@ export class Pursuit {
     this.ditched      = false;
   }
 
-  update(anyLOS, px, py, dt) {
+  // aware  : cop perceives the player, INCLUDING the brief memory grace — keeps the
+  //          pursuit ACTIVE through a momentary ray flicker.
+  // hasLOS : a REAL line of sight this frame. Only this updates last-known, so the
+  //          grace window can't leak the player's true position through a wall — the
+  //          cop commits to where it genuinely last saw you.
+  update(aware, hasLOS, px, py, dt) {
     this.justDitched = false;
 
-    if (anyLOS) {
-      // Seen — full pursuit. Remember position, recharge everything.
-      this.state        = PursuitState.ACTIVE;
+    // Only a real sighting moves the last-known marker.
+    if (hasLOS) {
       this.lastKnown.x  = px;
       this.lastKnown.y  = py;
       this.hasLastKnown = true;
-      this.cooldown     = this.cooldownDuration;
-      this.hot          = this.hotDuration;
-      this.ditched      = false;
-      this.hunting      = false;
+    }
+
+    if (aware) {
+      // Perceived (real or grace) — full pursuit, recharge timers.
+      this.state    = PursuitState.ACTIVE;
+      this.cooldown = this.cooldownDuration;
+      this.hot      = this.hotDuration;
+      this.ditched  = false;
+      this.hunting  = false;
       return this.state;
     }
 

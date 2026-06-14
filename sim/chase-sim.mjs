@@ -172,9 +172,11 @@ function run(name, route, skill, copSpeed = 590, copBackPx = 700, seconds = 26, 
     // Out-of-sight bookkeeping (true LOS, for the ditch verdict)
     if (rawSees) { noSightStreak = 0; } else { noSightStreak += dt; maxNoSight = Math.max(maxNoSight, noSightStreak); }
 
+    // Only a real sighting moves last-known (matches Pursuit: grace can't leak it).
+    if (rawSees) lastKnown = { x: ev.sprite.x, y: ev.sprite.y };
+
     let target;
     if (aware) {
-      lastKnown = { x: ev.sprite.x, y: ev.sprite.y };
       lostFor = 0;
       cop.ai.speedCap = Infinity;          // full chase
       cop.ai.arriveEase = false;           // ram the player, don't settle into a cruise
