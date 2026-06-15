@@ -3,9 +3,10 @@ import Phaser from 'phaser';
 // Roles a cop can be assigned during an active chase.
 export const CopRole = {
   CHASE:       'CHASE',     // tail the player's actual position
-  FLANK_LEFT:  'FLANK_L',   // approach from the player's left
-  FLANK_RIGHT: 'FLANK_R',   // approach from the player's right
-  INTERCEPT:   'INTERCEPT', // cut off the player's predicted path ahead
+  FLANK_LEFT:  'FLANK_L',   // ride the player's left rear quarter (PIT prep / box)
+  FLANK_RIGHT: 'FLANK_R',   // ride the player's right rear quarter (PIT prep / box)
+  INTERCEPT:   'INTERCEPT', // RESERVED for a future dedicated Interceptor unit (heat 3+)
+                            // that spawns ahead and predicts the path. Base cops don't use it.
 };
 
 // PursuitDirector — the coordination brain for an active chase.
@@ -24,9 +25,12 @@ export class PursuitDirector {
   constructor(navGrid) {
     this.nav = navGrid;
     this.reassignInterval = 0.6; // seconds between role re-matches (sticky in between)
-    this.flankDist     = 150;    // px to the side for flankers
-    this.interceptLead = 1.3;    // seconds of player travel to predict for interception
-    this.interceptMin  = 250;    // px minimum intercept lead
+    this.flankDist     = 46;     // px to the side for flankers — ~a car width, riding
+                                 // alongside on the SAME road (PIT prep), not a block over
+    this.boxSpeed      = 170;    // player speed below which flankers swing ahead to box you in
+    this.boxAhead      = 95;     // px ahead a flanker cuts to when boxing (you've slowed/crashed)
+    this.interceptLead = 1.3;    // [reserved] for the future Interceptor unit
+    this.interceptMin  = 250;    // [reserved]
     this._timer = 0;
   }
 
@@ -48,12 +52,14 @@ export class PursuitDirector {
       : playerCar.facing;
   }
 
-  // Which roles to field for a given cop count. (Pursuit level will drive this.)
+  // Which roles to field for a given cop count. Base cops are CHASE + FLANKERS;
+  // every cop stays involved (tailing / riding a flank / boxing). Interception is
+  // a future dedicated unit, not part of the base formation. (Pursuit level will
+  // drive this later.)
   _formation(n) {
     if (n <= 1) return [CopRole.CHASE];
-    if (n === 2) return [CopRole.CHASE, CopRole.INTERCEPT];
-    if (n === 3) return [CopRole.CHASE, CopRole.FLANK_LEFT, CopRole.FLANK_RIGHT];
-    const roles = [CopRole.CHASE, CopRole.FLANK_LEFT, CopRole.FLANK_RIGHT, CopRole.INTERCEPT];
+    if (n === 2) return [CopRole.CHASE, CopRole.FLANK_LEFT];
+    const roles = [CopRole.CHASE, CopRole.FLANK_LEFT, CopRole.FLANK_RIGHT];
     while (roles.length < n) roles.push(roles.length % 2 ? CopRole.FLANK_LEFT : CopRole.FLANK_RIGHT);
     return roles.slice(0, n);
   }
@@ -85,13 +91,9 @@ export class PursuitDirector {
     const px = playerCar.sprite.x, py = playerCar.sprite.y;
     const h  = this._heading(playerCar);
     switch (role) {
-      case CopRole.FLANK_LEFT:
-        return { x: px + Math.cos(h - Math.PI / 2) * this.flankDist,
-                 y: py + Math.sin(h - Math.PI / 2) * this.flankDist };
-      case CopRole.FLANK_RIGHT:
-        return { x: px + Math.cos(h + Math.PI / 2) * this.flankDist,
-                 y: py + Math.sin(h + Math.PI / 2) * this.flankDist };
-      case CopRole.INTERCEPT: {
+      case CopRole.FLANK_LEFT:  return this._flankTarget(playerCar, px, py, h, -1);
+      case CopRole.FLANK_RIGHT: return this._flankTarget(playerCar, px, py, h, +1);
+      case CopRole.INTERCEPT: { // reserved (future Interceptor unit)
         const lead = Math.max(this.interceptMin, playerCar.getSpeed() * this.interceptLead);
         const node = this.nav.nearestNode(px + Math.cos(h) * lead, py + Math.sin(h) * lead);
         return this.nav.pos(node);
@@ -99,5 +101,19 @@ export class PursuitDirector {
       default: // CHASE
         return { x: px, y: py };
     }
+  }
+
+  // A flanker rides a car-width off the player's side on the SAME road (PIT prep).
+  // As the player slows (or crashes), it swings AHEAD and closes in to box them —
+  // which sets up the player's counter: brake hard and let it overshoot.
+  _flankTarget(playerCar, px, py, h, sgn) {
+    const box   = Phaser.Math.Clamp((this.boxSpeed - playerCar.getSpeed()) / this.boxSpeed, 0, 1);
+    const along = box * this.boxAhead;            // 0 while fleeing → ahead of you when slow
+    const side  = this.flankDist * (1 - 0.4 * box); // tuck in a little while boxing
+    const perp  = h + sgn * Math.PI / 2;
+    return {
+      x: px + Math.cos(h) * along + Math.cos(perp) * side,
+      y: py + Math.sin(h) * along + Math.sin(perp) * side,
+    };
   }
 }

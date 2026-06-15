@@ -492,7 +492,7 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
       sepRadius: this.sepRadius, sepStrength: this.sepStrength,
       searchSpeed: this.searchSpeed, searchDepth: this.searchDepth, searchMaxDepth: this.searchMaxDepth,
       coverageTTL: this.coverageTTL, searchDirBias: this.searchDirBias,
-      flankDist: this.director.flankDist, interceptLead: this.director.interceptLead,
+      flankDist: this.director.flankDist, boxSpeed: this.director.boxSpeed, boxAhead: this.director.boxAhead,
     };
 
     const gui = new GUI({ title: 'Cop Tuning', width: 300 });
@@ -523,8 +523,9 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
     corner.add(this.copTuning, 'reactionTime',     0,   0.5, 0.01).name('Reaction lag (s)').onChange(apply);
 
     const pack = gui.addFolder('Pack & Search');
-    pack.add(this.copTuning, 'flankDist',     50,  400, 10).name('Flank distance').onChange(apply);
-    pack.add(this.copTuning, 'interceptLead', 0.2, 3.0, 0.1).name('Intercept lead (s)').onChange(apply);
+    pack.add(this.copTuning, 'flankDist',     10,  200, 5).name('Flank side gap').onChange(apply);
+    pack.add(this.copTuning, 'boxSpeed',      0,   400, 10).name('Box-in below speed').onChange(apply);
+    pack.add(this.copTuning, 'boxAhead',      0,   250, 5).name('Box cut-ahead').onChange(apply);
     pack.add(this.copTuning, 'sepRadius',     0,   250, 5).name('Separation radius').onChange(apply);
     pack.add(this.copTuning, 'sepStrength',   0,   400, 5).name('Separation strength').onChange(apply);
     pack.add(this.copTuning, 'searchSpeed',   80,  600, 10).name('Search speed cap').onChange(apply);
@@ -543,14 +544,14 @@ turnSpeedLow: ${t.turnSpeedLow}, turnSpeed: ${t.turnSpeed}, minSteerFactor: ${t.
 maxApproachSpeed: ${t.maxApproachSpeed}, cornerMinSpeed: ${t.cornerMinSpeed}, brakeDecel: ${t.brakeDecel},
 arriveRadius: ${t.arriveRadius}, senseDist: ${t.senseDist}, directRange: ${t.directRange}, chaseRange: ${t.chaseRange}, reactionTime: ${t.reactionTime},
 // --- Formation (PursuitDirector) ---
-flankDist: ${t.flankDist}, interceptLead: ${t.interceptLead},
+flankDist: ${t.flankDist}, boxSpeed: ${t.boxSpeed}, boxAhead: ${t.boxAhead},
 // --- Separation + search (GameScene) ---
 sepRadius: ${t.sepRadius}, sepStrength: ${t.sepStrength}, searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${t.searchMaxDepth}, coverageTTL: ${t.coverageTTL}, searchDirBias: ${t.searchDirBias}`);
     } }, 'copyStats').name('Copy Cop Stats → Console');
 
     // Persist across refresh. Key bumped to v5 when the search was reworked +
     // the Search radius dial added, so stale saves don't mask the new defaults.
-    this._persistPanel(gui, 'gd_copTuning7');
+    this._persistPanel(gui, 'gd_copTuning8');
 
     gui.domElement.style.position = 'fixed';
     gui.domElement.style.top  = '8px';
@@ -595,7 +596,8 @@ sepRadius: ${t.sepRadius}, sepStrength: ${t.sepStrength}, searchSpeed: ${t.searc
     this.coverageTTL = t.coverageTTL;
     this.searchDirBias = t.searchDirBias;
     this.director.flankDist = t.flankDist;
-    this.director.interceptLead = t.interceptLead;
+    this.director.boxSpeed = t.boxSpeed;
+    this.director.boxAhead = t.boxAhead;
   }
 
   update(_time, delta) {
