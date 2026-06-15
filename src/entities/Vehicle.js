@@ -135,12 +135,18 @@ export class Vehicle {
   // slides instead of sticking — same behaviour as Arcade's own body separation,
   // just extended to the nose/tail circles.
   bumperBlock(bumper) {
+    // Work off the LIVE body velocity (the main-body collision runs first and has
+    // already zeroed its component) — never the stale this.vx/vy from before the
+    // step, or we'd restore the speed the wall just removed (a boost on exit).
+    const body = this.sprite.body;
+    let vx = body.velocity.x, vy = body.velocity.y;
     const t = bumper.body.touching;
-    if (t.left  && this.vx < 0) this.vx = 0;
-    if (t.right && this.vx > 0) this.vx = 0;
-    if (t.up    && this.vy < 0) this.vy = 0;
-    if (t.down  && this.vy > 0) this.vy = 0;
-    this.sprite.body.setVelocity(this.vx, this.vy);
+    if (t.left  && vx < 0) vx = 0;
+    if (t.right && vx > 0) vx = 0;
+    if (t.up    && vy < 0) vy = 0;
+    if (t.down  && vy > 0) vy = 0;
+    body.setVelocity(vx, vy);
+    this.vx = vx; this.vy = vy; // keep the Vehicle's fields in sync with the body
   }
 
   update(delta, controls) {
