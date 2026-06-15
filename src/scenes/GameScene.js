@@ -733,6 +733,15 @@ sepRadius: ${t.sepRadius}, sepStrength: ${t.sepStrength}, searchSpeed: ${t.searc
 
     // Debug: line of sight (green=visible, red=blocked) + steering targets
     this.aiDebug.clear();
+
+    // Actual collision circles (the real physics bodies) in cyan — so we can see
+    // exactly what collides vs the car sprite, and tune the radius.
+    this.aiDebug.lineStyle(1, 0x00e5ff, 0.9);
+    for (const v of [this.car, ...this.cops]) {
+      const b = v.sprite.body;
+      this.aiDebug.strokeCircle(b.center.x, b.center.y, b.halfWidth);
+    }
+
     for (const cop of this.cops) {
       this.aiDebug.lineStyle(1, cop.hasLOS ? 0x39ff14 : 0xff3b3b, 0.35);
       this.aiDebug.lineBetween(cop.sprite.x, cop.sprite.y, px, py);
