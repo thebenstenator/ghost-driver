@@ -65,15 +65,19 @@ export class GameScene extends Phaser.Scene {
     // Station the cops withdraw to once the heat cools (SE corner, for testing)
     this.station    = this.navGrid.pos(this.navGrid.index(this.navGrid.cols - 1, this.navGrid.rows - 1));
 
-    // Spawn the chosen number of cops, approaching from different sides
+    // Spawn the chosen number of cops, approaching from different sides. The player
+    // starts at (cx,cy), so each cop faces that point — east faces west, west faces
+    // east, south faces north — instead of all facing north.
     const cx = WORLD_WIDTH / 2, cy = WORLD_HEIGHT / 2;
     const spawnPts = [
-      { x: cx - 504, y: cy },         // west
-      { x: cx + 504, y: cy },         // east
-      { x: cx,        y: cy + 1008 }, // south
+      { x: cx - 504, y: cy },        // west
+      { x: cx + 504, y: cy },        // east
+      { x: cx,        y: cy + 504 }, // south (brought in closer, was +1008)
     ];
     for (let i = 0; i < this.copCount && i < spawnPts.length; i++) {
-      this._spawnCop(spawnPts[i].x, spawnPts[i].y);
+      const cop = this._spawnCop(spawnPts[i].x, spawnPts[i].y);
+      cop.facing = Math.atan2(cy - spawnPts[i].y, cx - spawnPts[i].x); // face the player's start
+      cop.sprite.setRotation(cop.facing + Math.PI / 2);
     }
 
     // The chase is already underway when the mission starts (if there are cops)
