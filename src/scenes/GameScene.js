@@ -60,6 +60,10 @@ export class GameScene extends Phaser.Scene {
     this.coverageTTL = 6;              // s a searched node stays "covered" before it's worth re-checking
     this.searchDirBias = 55;           // how strongly the search leans toward the last-known escape
                                        // direction (cops fan across the FORWARD arc, not full circle)
+    this.searchDwell = 1.2;            // s after losing the trail that EVERY cop heads to last-known
+                                       // before fanning out — a sub-second LOS blip can't spin a cop around
+    this.searchStall = 3;              // s of no progress toward a search node before a cop ABANDONS it
+                                       // (can't reach it — wedged in an alley / node behind a wall) and re-picks
     // Shared search-coverage map: time (search clock) each nav node was last SEEN
     // by any cop. Cops paint what they can see and head for the least-covered
     // node, so they divide the area instead of re-checking the same streets.
@@ -164,15 +168,35 @@ export class GameScene extends Phaser.Scene {
   _cooldownTarget(cop) {
     const ARRIVE = 120;
     const lk = this.pursuit.lastKnown;
+
+    // JUST-LOST DWELL: for the first searchDwell seconds of SEARCH, every cop drives
+    // to the LAST-KNOWN spot — no frontier fan yet. A sub-second LOS blip (you cut a
+    // corner) then can't spin a cop around toward a far search node before the chase
+    // resumes; only a genuinely lost trail fans them out.
+    if (this._searchClock < this.searchDwell) { cop._searchNode = null; return lk; }
+
     const area = this._searchArea();
 
     // COMMIT to the current target until we PHYSICALLY reach it. Don't abandon it
     // just because we now SEE it (that was the dithering bug: spotting the node a
     // block ahead marked it covered, so the cop re-picked and never committed to a
     // turn). Drive through the intersection, THEN choose the next node.
+    //
+    // ...BUT abandon it if we stop making progress toward it (wedged in an alley, or
+    // the node sits behind a wall we can't thread). Without this, a cop that can't
+    // reach its node recommits to it forever: drive at the wall, K-turn, drive at the
+    // SAME wall, loop for 30s+. On abandon we mark it covered so nobody re-picks it.
     if (cop._searchNode != null && area.includes(cop._searchNode)) {
       const p = this.navGrid.pos(cop._searchNode);
-      if (Phaser.Math.Distance.Between(cop.sprite.x, cop.sprite.y, p.x, p.y) >= ARRIVE) return p;
+      const d = Phaser.Math.Distance.Between(cop.sprite.x, cop.sprite.y, p.x, p.y);
+      if (d >= ARRIVE) {
+        if (d < (cop._searchBest ?? Infinity) - 20) {            // closing in → keep committing
+          cop._searchBest = d; cop._searchStallSince = this._searchClock;
+        }
+        const stalled = (this._searchClock - (cop._searchStallSince ?? this._searchClock)) > this.searchStall;
+        if (!stalled) return p;
+        this.coverage[cop._searchNode] = this._searchClock;      // give up: mark covered, re-pick below
+      }
     }
 
     // Pick the next node: uncovered ground first, then prefer CONTINUING in the
@@ -202,6 +226,7 @@ export class GameScene extends Phaser.Scene {
       if (cost < bestCost) { bestCost = cost; best = idx; }
     }
     cop._searchNode = best;
+    cop._searchBest = Infinity; cop._searchStallSince = this._searchClock; // reset progress watch
     return this.navGrid.pos(best);
   }
 
