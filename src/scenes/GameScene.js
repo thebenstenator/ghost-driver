@@ -648,8 +648,8 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
       searchSpeed: this.searchSpeed, searchDepth: this.searchDepth, searchMaxDepth: this.searchMaxDepth,
       coverageTTL: this.coverageTTL, searchDirBias: this.searchDirBias,
       searchDwell: this.searchDwell, searchStall: this.searchStall,
-      flankDist: this.director.flankDist, boxSpeed: this.director.boxSpeed, boxAhead: this.director.boxAhead,
-      engageRange: this.director.engageRange,
+      boxTriggerSpeed: this.director.boxTriggerSpeed, boxEngageRange: this.director.boxEngageRange,
+      boxAhead: this.director.boxAhead, boxBehind: this.director.boxBehind,
       convoyEnabled: this.director.convoyEnabled, followGap: this.director.followGap,
     };
 
@@ -681,10 +681,10 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
     corner.add(this.copTuning, 'reactionTime',     0,   0.5, 0.01).name('Reaction lag (s)').onChange(apply);
 
     const pack = gui.addFolder('Pack & Search');
-    pack.add(this.copTuning, 'flankDist',     10,  200, 5).name('Flank side gap').onChange(apply);
-    pack.add(this.copTuning, 'boxSpeed',      0,   400, 10).name('Box-in below speed').onChange(apply);
-    pack.add(this.copTuning, 'boxAhead',      0,   250, 5).name('Box cut-ahead').onChange(apply);
-    pack.add(this.copTuning, 'engageRange',   100, 1000, 20).name('RAM/BOX engage range').onChange(apply);
+    pack.add(this.copTuning, 'boxTriggerSpeed', 0,  400, 10).name('Box: trigger below speed').onChange(apply);
+    pack.add(this.copTuning, 'boxEngageRange', 100, 1200, 20).name('Box: engage range').onChange(apply);
+    pack.add(this.copTuning, 'boxAhead',      0,   300, 5).name('Box: front cut-ahead').onChange(apply);
+    pack.add(this.copTuning, 'boxBehind',     0,   300, 5).name('Box: rear gap').onChange(apply);
     pack.add(this.copTuning, 'rubberBandDist',  100, 2500, 50).name('Rubberband distance').onChange(apply);
     pack.add(this.copTuning, 'rubberBandBoost', 0,   400,  10).name('Rubberband boost').onChange(apply);
     pack.add(this.copTuning, 'sepRadius',     0,   250, 5).name('Separation radius').onChange(apply);
@@ -711,16 +711,16 @@ turnSpeedLow: ${t.turnSpeedLow}, turnSpeed: ${t.turnSpeed}, minSteerFactor: ${t.
 maxApproachSpeed: ${t.maxApproachSpeed}, cornerMinSpeed: ${t.cornerMinSpeed}, brakeDecel: ${t.brakeDecel},
 arriveRadius: ${t.arriveRadius}, senseDist: ${t.senseDist}, directRange: ${t.directRange}, chaseRange: ${t.chaseRange}, reactionTime: ${t.reactionTime},
 // --- Formation + convoy (PursuitDirector) ---
-flankDist: ${t.flankDist}, boxSpeed: ${t.boxSpeed}, boxAhead: ${t.boxAhead}, engageRange: ${t.engageRange},
+boxTriggerSpeed: ${t.boxTriggerSpeed}, boxEngageRange: ${t.boxEngageRange}, boxAhead: ${t.boxAhead}, boxBehind: ${t.boxBehind},
 convoyEnabled: ${t.convoyEnabled}, followGap: ${t.followGap},
 // --- Separation + rubber band + search (GameScene) ---
 sepRadius: ${t.sepRadius}, sepStrength: ${t.sepStrength}, rubberBandDist: ${t.rubberBandDist}, rubberBandBoost: ${t.rubberBandBoost},
 searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${t.searchMaxDepth}, coverageTTL: ${t.coverageTTL}, searchDirBias: ${t.searchDirBias}, searchDwell: ${t.searchDwell}, searchStall: ${t.searchStall}`);
     } }, 'copyStats').name('Copy Cop Stats → Console');
 
-    // Persist across refresh. Key bumped to v11: cornering defaults changed
-    // (cornerMinSpeed 240, directRange 60), so stale saves don't mask them.
-    this._persistPanel(gui, 'gd_copTuning11');
+    // Persist across refresh. Key bumped to v12: roles replaced by event-driven box
+    // (boxTriggerSpeed / boxEngageRange / boxAhead / boxBehind), flank dials removed.
+    this._persistPanel(gui, 'gd_copTuning12');
 
     gui.domElement.style.position = 'fixed';
     gui.domElement.style.top  = '8px';
@@ -768,10 +768,10 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
     this.searchDirBias = t.searchDirBias;
     this.searchDwell = t.searchDwell;
     this.searchStall = t.searchStall;
-    this.director.flankDist = t.flankDist;
-    this.director.boxSpeed = t.boxSpeed;
+    this.director.boxTriggerSpeed = t.boxTriggerSpeed;
+    this.director.boxEngageRange = t.boxEngageRange;
     this.director.boxAhead = t.boxAhead;
-    this.director.engageRange = t.engageRange;
+    this.director.boxBehind = t.boxBehind;
     this.director.convoyEnabled = t.convoyEnabled;
     this.director.followGap = t.followGap;
   }
@@ -988,10 +988,8 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
         else                      cop._slowT = 0;
         const stuck = (cop._slowT || 0) > 0.25;
 
+        // Behaviour state (PURSUE / BOX_F / BOX_R), ACTIVE only.
         const role  = (this.pursuit.state === PursuitState.ACTIVE && cop.role) ? cop.role : '—';
-        // Only show a flank-case during an ACTIVE chase — the director doesn't run
-        // (or clear it) during SEARCH, so a stale RAM/BOX would otherwise linger.
-        const flank = (this.pursuit.state === PursuitState.ACTIVE && cop.flankCase) ? cop.flankCase : '—';
         const los   = cop.hasLOS ? 'LOS' : 'los✗';
         // Convoy relay mode (DIRECT/CONVOY/LONE), ACTIVE only — shows who's chasing
         // directly vs. following a teammate's trail vs. on their own.
@@ -1003,11 +1001,11 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
         // so a line prints on real decision changes. The raw mode still shows in the line.
         const phase = (d.mode === 'UNSTK_BK' || d.mode === 'UNSTK_FW') ? 'UNSTK'
                     : (d.mode === 'STANDDOWN') ? 'STANDDOWN' : 'DRIVE';
-        const sig = `${stateTag}|${role}|${flank}|${conv}|${phase}|${los}|${wall ? 'W' : ''}|${stuck ? 'S' : ''}`;
+        const sig = `${stateTag}|${role}|${conv}|${phase}|${los}|${wall ? 'W' : ''}|${stuck ? 'S' : ''}`;
         if (sig !== cop._sig) {
           cop._sig = sig;
           console.log(
-            `[t=${t} cop${i}] ${stateTag} ${role}/${flank} ${conv} ${d.mode} ${los} ` +
+            `[t=${t} cop${i}] ${stateTag} ${role} ${conv} ${d.mode} ${los} ` +
             `cmd=${cmd} act=${act} dist=${Math.round(d.dist || 0)}` +
             (wall ? ' WALL' : '') + (stuck ? ' STUCK' : '')
           );
