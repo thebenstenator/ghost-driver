@@ -120,12 +120,16 @@ export class Vehicle {
   }
 
   // Keep the bumper bodies pinned to the car's nose and tail (call each frame).
+  // Remember where we placed each one, so bumperBlock can tell how far a wall
+  // pushed it back (= how far the car needs to be ejected).
   _positionBumpers() {
     const cx = this.sprite.x, cy = this.sprite.y;
     const cos = Math.cos(this.facing), sin = Math.sin(this.facing);
     for (const b of this.bumpers) {
       const o = this.bumperOffset * b.bumperDir;
-      b.body.reset(cx + cos * o, cy + sin * o); // teleport body to the end, no drift
+      b.px = cx + cos * o;
+      b.py = cy + sin * o;
+      b.body.reset(b.px, b.py); // teleport body to the end, no drift
     }
   }
 
@@ -135,18 +139,26 @@ export class Vehicle {
   // slides instead of sticking — same behaviour as Arcade's own body separation,
   // just extended to the nose/tail circles.
   bumperBlock(bumper) {
-    // Work off the LIVE body velocity (the main-body collision runs first and has
-    // already zeroed its component) — never the stale this.vx/vy from before the
-    // step, or we'd restore the speed the wall just removed (a boost on exit).
     const body = this.sprite.body;
+
+    // EJECT: Arcade just pushed this bumper out of the wall; the bumper moved from
+    // where we placed it (px,py) to its separated centre. Apply that same push to
+    // the car body so its nose/tail can't sit inside the wall. This is positional,
+    // so it doesn't depend on any velocity-read timing.
+    const dx = bumper.body.center.x - bumper.px;
+    const dy = bumper.body.center.y - bumper.py;
+    body.x += dx; body.y += dy;
+    body.updateCenter();
+
+    // Kill only the velocity INTO the wall (along the push), keep tangential so the
+    // car slides along it. Work off the live body velocity, then sync our fields.
     let vx = body.velocity.x, vy = body.velocity.y;
-    const t = bumper.body.touching;
-    if (t.left  && vx < 0) vx = 0;
-    if (t.right && vx > 0) vx = 0;
-    if (t.up    && vy < 0) vy = 0;
-    if (t.down  && vy > 0) vy = 0;
+    if (dx > 0.01 && vx < 0) vx = 0;   // pushed right  -> wall on the left
+    if (dx < -0.01 && vx > 0) vx = 0;  // pushed left   -> wall on the right
+    if (dy > 0.01 && vy < 0) vy = 0;   // pushed down   -> wall above
+    if (dy < -0.01 && vy > 0) vy = 0;  // pushed up      -> wall below
     body.setVelocity(vx, vy);
-    this.vx = vx; this.vy = vy; // keep the Vehicle's fields in sync with the body
+    this.vx = vx; this.vy = vy;
   }
 
   update(delta, controls) {
