@@ -848,28 +848,45 @@ sepRadius: ${t.sepRadius}, sepStrength: ${t.sepStrength}, searchSpeed: ${t.searc
       }
     }
     if (this.car.isDrifting) lines.push('[HANDBRAKE DRIFT]');
-    lines.push('', 'WASD / Arrows — Drive', 'Space — Handbrake', 'Shift — Brake', 'P — Pause', 'C — Cop console log', 'V — Cycle camera', 'R — Restart', 'M — Menu');
+    lines.push('', 'WASD / Arrows — Drive', 'Space — Handbrake', 'Shift — Brake', 'P — Pause', 'C — Cop decision log', 'V — Cycle camera', 'R — Restart', 'M — Menu');
     this.debugText.setText(lines);
 
-    // Throttled console telemetry for every cop
+    // Cop decision trace. Logs a line only when a cop's DECISION or its EFFECT
+    // changes — so the console reads as a cause→effect sequence (what fired, what
+    // it caused) instead of a number wall. Fields:
+    //   state (+HUNT/+DITCHED) · role · flank-case · AI mode · LOS · cmd→act speed
+    //   · WALL (against a building/bound) · STUCK (wants to move but isn't, ~crash)
     if (this.copLog) {
-      this._copLogTimer += delta;
-      if (this._copLogTimer >= 350) {
-        this._copLogTimer = 0;
-        this.cops.forEach((cop, i) => {
-          const d = cop.debug;
-          if (!d) return;
+      const t  = (this.time.now / 1000).toFixed(2);
+      const dt = delta / 1000;
+      const stateTag = this.pursuit.state
+        + (this.pursuit.hunting ? '+HUNT' : '')
+        + (this.pursuit.ditched ? '+DITCHED' : '');
+      this.cops.forEach((cop, i) => {
+        const d   = cop.debug || {};
+        const cmd = Math.round(d.speed || 0);     // speed the AI is asking for
+        const act = Math.round(cop.getSpeed());   // speed it's actually doing
+        const b   = cop.sprite.body.blocked;
+        const wall = b && !b.none;                // touching a building / world bound
+
+        // STUCK: it wants to move (cmd high) but barely is (act low) for a beat.
+        if (cmd > 60 && act < 40) cop._slowT = (cop._slowT || 0) + dt;
+        else                      cop._slowT = 0;
+        const stuck = (cop._slowT || 0) > 0.25;
+
+        const role  = (this.pursuit.state === PursuitState.ACTIVE && cop.role) ? cop.role : '—';
+        const flank = cop.flankCase || '—';
+        const los   = cop.hasLOS ? 'LOS' : 'los✗';
+        const sig = `${stateTag}|${role}|${flank}|${d.mode}|${los}|${wall ? 'W' : ''}|${stuck ? 'S' : ''}`;
+        if (sig !== cop._sig) {
+          cop._sig = sig;
           console.log(
-            `[cop${i}] ${(cop.hasLOS ? 'LOS ' : '    ')}${d.mode.padEnd(14)} ` +
-            `spd=${Math.round(d.speed).toString().padStart(3)} ` +
-            `lim=${Math.round(d.cornerLimit).toString().padStart(3)} ` +
-            `dist=${Math.round(d.dist).toString().padStart(4)} ` +
-            `bend=${(d.bend * 180 / Math.PI).toFixed(0).padStart(3)}° ` +
-            `err=${(d.angleErr * 180 / Math.PI).toFixed(0).padStart(4)}°` +
-            (d.reverseTime > 0 ? ` rev=${d.reverseTime.toFixed(2)}` : '')
+            `[t=${t} cop${i}] ${stateTag} ${role}/${flank} ${d.mode} ${los} ` +
+            `cmd=${cmd} act=${act} dist=${Math.round(d.dist || 0)}` +
+            (wall ? ' WALL' : '') + (stuck ? ' STUCK' : '')
           );
-        });
-      }
+        }
+      });
     }
   }
 }

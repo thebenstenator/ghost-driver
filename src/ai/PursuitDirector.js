@@ -58,6 +58,7 @@ export class PursuitDirector {
         const sgn = cop.role === CopRole.FLANK_LEFT ? -1 : +1;
         cop.dirTarget = this._flankTarget(cop, playerCar, px, py, h, sgn, anyFront);
       } else {
+        cop.flankCase = null;
         cop.dirTarget = this._roleTarget(cop.role, playerCar);
       }
     }
@@ -143,10 +144,11 @@ export class PursuitDirector {
     const perp = h + sgn * Math.PI / 2;
 
     // In front → head-on ram.
-    if (rel > this.frontZone) return { x: px, y: py };
+    if (rel > this.frontZone) { cop.flankCase = 'RAM'; return { x: px, y: py }; }
 
     // A teammate holds the front → box in behind (rear quarter, this cop's side).
     if (anyFront) {
+      cop.flankCase = 'BOX';
       return {
         x: px - Math.cos(h) * this.boxBehind + Math.cos(perp) * this.flankDist,
         y: py - Math.sin(h) * this.boxBehind + Math.sin(perp) * this.flankDist,
@@ -158,6 +160,7 @@ export class PursuitDirector {
     const along = box * this.boxAhead;
     const flankFrac = Phaser.Math.Clamp((rel + this.flankDist) / (2 * this.flankDist), 0, 1);
     const side  = this.flankDist * flankFrac * (1 - 0.4 * box);
+    cop.flankCase = flankFrac < 0.6 ? 'CATCHUP' : 'SIDE';
     return {
       x: px + Math.cos(h) * along + Math.cos(perp) * side,
       y: py + Math.sin(h) * along + Math.sin(perp) * side,
