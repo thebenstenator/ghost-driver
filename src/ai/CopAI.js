@@ -48,9 +48,12 @@ export class CopAI {
     this._wpIndex  = 0;
     this._aimHist  = []; // recent target positions, for reaction lag
 
-    // Failsafe for a genuine physics wedge only
-    this._sampleTimer = 0; this._sampleX = 0; this._sampleY = 0; this._sampleInit = false;
-    this._reverseTime = 0;
+    // --- Unstuck maneuver (wall-wedge extraction) ---
+    this.unstuckBackTime = 0.5; // s reversing while turning
+    this.unstuckFwdTime  = 0.4; // s forward while turning (committed) before re-evaluating
+    this._unstuck    = null;    // active maneuver: { phase:'BACK'|'FWD', t }
+    this._stuckTime  = 0;       // how long we've been wedged (far from target, not moving)
+    this._unstuckDir = 1;       // turn direction; alternates each attempt
   }
 
   getControls(cop, target, dt) {
@@ -67,6 +70,35 @@ export class CopAI {
     // (reaction lag) while chasing in clear sight.
     this._aimHist.push({ x: target.x, y: target.y });
     if (this._aimHist.length > 64) this._aimHist.shift();
+
+    // --- Wall-wedge extraction (OVERRIDES normal driving) ---
+    // Run a K-turn that actually re-orients the car off the obstacle: reverse while
+    // turning, then forward while turning, alternating the turn direction each
+    // attempt so a retry tries the other way. Without this, the cop just juts
+    // forward/reverse against the same wall (wheel stays pointed at the blocked
+    // target) and never escapes.
+    if (this._unstuck) {
+      const m = this._unstuck;
+      m.t -= dt;
+      if (this._unstuckDir > 0) controls.right = true; else controls.left = true;
+      if (m.phase === 'BACK') {
+        controls.down = true;                 // reverse + turn
+        if (m.t <= 0) { m.phase = 'FWD'; m.t = this.unstuckFwdTime; }
+      } else {
+        controls.up = true;                   // forward + turn (committed)
+        if (m.t <= 0) this._unstuck = null;
+      }
+      cop.aiTarget = { x: target.x, y: target.y };
+      cop.debug = { mode: m.phase === 'BACK' ? 'UNSTK_BK' : 'UNSTK_FW', speed, dist, bend: 0, cornerLimit: 0, angleErr: 0, reverseTime: 0 };
+      return controls;
+    }
+    // Wedge detection: wants to reach a target that's still far, but barely moving.
+    if (dist > 100 && speed < 30) this._stuckTime += dt; else this._stuckTime = 0;
+    if (this._stuckTime > 0.35) {
+      this._unstuckDir = -this._unstuckDir; // alternate so a retry tries the other way
+      this._unstuck = { phase: 'BACK', t: this.unstuckBackTime };
+      this._stuckTime = 0;
+    }
 
     const clearToTarget = !this.rects || segmentClear(cx, cy, target.x, target.y, this.rects);
 
@@ -127,22 +159,6 @@ export class CopAI {
     const angleErr = Phaser.Math.Angle.Wrap(desired - cop.facing);
     if (angleErr > this.steerDeadzone)       controls.right = true;
     else if (angleErr < -this.steerDeadzone) controls.left  = true;
-
-    // --- Failsafe: genuine wedge (barely moving, not at target) → brief reverse ---
-    if (this._reverseTime > 0) {
-      this._reverseTime -= dt;
-      controls.down = true; // keep the wheel turned toward target while backing out
-      this._sampleX = cx; this._sampleY = cy; this._sampleTimer = 0;
-      cop.debug = { mode: 'REVERSE', speed, dist, bend: nextTurn, cornerLimit: limit, angleErr, reverseTime: this._reverseTime };
-      return controls;
-    }
-    if (!this._sampleInit) { this._sampleX = cx; this._sampleY = cy; this._sampleInit = true; }
-    this._sampleTimer += dt;
-    if (this._sampleTimer >= 0.7) {
-      const moved = Phaser.Math.Distance.Between(cx, cy, this._sampleX, this._sampleY);
-      if (dist > 80 && moved < 15) this._reverseTime = 0.5;
-      this._sampleX = cx; this._sampleY = cy; this._sampleTimer = 0;
-    }
 
     // --- Throttle toward desiredSpeed ---
     let mode;

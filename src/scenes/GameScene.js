@@ -49,6 +49,11 @@ export class GameScene extends Phaser.Scene {
     this.awareGrace = 0.6;             // s — stay aware this long after last perceiving (memory)
     this.sepRadius  = 80;              // separation: how close before cops repel
     this.sepStrength = 150;            // separation: aim push strength
+    // Rubber band: a cop farther than `rubberBandDist` from the player gets up to
+    // `rubberBandBoost` px/s added to its top speed so stragglers can rejoin.
+    // Purely distance-gated. Default boost 0 = OFF.
+    this.rubberBandDist  = 800;
+    this.rubberBandBoost = 0;
     this.searchSpeed = 250;            // cop speed cap while searching (clean corners)
     this.searchDepth = 2;              // STARTING search radius (blocks out from last-known)
     this.searchMaxDepth = 6;           // search grows out to this many blocks as ground is checked
@@ -494,6 +499,7 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
       brakeDecel: a.brakeDecel, arriveRadius: a.arriveRadius,
       senseDist: a.senseDist, directRange: a.directRange, chaseRange: a.chaseRange, reactionTime: a.reactionTime,
       sepRadius: this.sepRadius, sepStrength: this.sepStrength,
+      rubberBandDist: this.rubberBandDist, rubberBandBoost: this.rubberBandBoost,
       searchSpeed: this.searchSpeed, searchDepth: this.searchDepth, searchMaxDepth: this.searchMaxDepth,
       coverageTTL: this.coverageTTL, searchDirBias: this.searchDirBias,
       flankDist: this.director.flankDist, boxSpeed: this.director.boxSpeed, boxAhead: this.director.boxAhead,
@@ -530,6 +536,8 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
     pack.add(this.copTuning, 'flankDist',     10,  200, 5).name('Flank side gap').onChange(apply);
     pack.add(this.copTuning, 'boxSpeed',      0,   400, 10).name('Box-in below speed').onChange(apply);
     pack.add(this.copTuning, 'boxAhead',      0,   250, 5).name('Box cut-ahead').onChange(apply);
+    pack.add(this.copTuning, 'rubberBandDist',  100, 2500, 50).name('Rubberband distance').onChange(apply);
+    pack.add(this.copTuning, 'rubberBandBoost', 0,   400,  10).name('Rubberband boost').onChange(apply);
     pack.add(this.copTuning, 'sepRadius',     0,   250, 5).name('Separation radius').onChange(apply);
     pack.add(this.copTuning, 'sepStrength',   0,   400, 5).name('Separation strength').onChange(apply);
     pack.add(this.copTuning, 'searchSpeed',   80,  600, 10).name('Search speed cap').onChange(apply);
@@ -549,13 +557,14 @@ maxApproachSpeed: ${t.maxApproachSpeed}, cornerMinSpeed: ${t.cornerMinSpeed}, br
 arriveRadius: ${t.arriveRadius}, senseDist: ${t.senseDist}, directRange: ${t.directRange}, chaseRange: ${t.chaseRange}, reactionTime: ${t.reactionTime},
 // --- Formation (PursuitDirector) ---
 flankDist: ${t.flankDist}, boxSpeed: ${t.boxSpeed}, boxAhead: ${t.boxAhead},
-// --- Separation + search (GameScene) ---
-sepRadius: ${t.sepRadius}, sepStrength: ${t.sepStrength}, searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${t.searchMaxDepth}, coverageTTL: ${t.coverageTTL}, searchDirBias: ${t.searchDirBias}`);
+// --- Separation + rubber band + search (GameScene) ---
+sepRadius: ${t.sepRadius}, sepStrength: ${t.sepStrength}, rubberBandDist: ${t.rubberBandDist}, rubberBandBoost: ${t.rubberBandBoost},
+searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${t.searchMaxDepth}, coverageTTL: ${t.coverageTTL}, searchDirBias: ${t.searchDirBias}`);
     } }, 'copyStats').name('Copy Cop Stats → Console');
 
-    // Persist across refresh. Key bumped to v5 when the search was reworked +
-    // the Search radius dial added, so stale saves don't mask the new defaults.
-    this._persistPanel(gui, 'gd_copTuning8');
+    // Persist across refresh. Key bumped to v9: new defaults (maxSpeed 495 / accel
+    // 350) + rubber-band dials added, so stale saves don't mask them.
+    this._persistPanel(gui, 'gd_copTuning9');
 
     gui.domElement.style.position = 'fixed';
     gui.domElement.style.top  = '8px';
@@ -594,6 +603,8 @@ sepRadius: ${t.sepRadius}, sepStrength: ${t.sepStrength}, searchSpeed: ${t.searc
     }
     this.sepRadius = t.sepRadius;
     this.sepStrength = t.sepStrength;
+    this.rubberBandDist = t.rubberBandDist;
+    this.rubberBandBoost = t.rubberBandBoost;
     this.searchSpeed = t.searchSpeed;
     this.searchDepth = t.searchDepth;
     this.searchMaxDepth = t.searchMaxDepth;
@@ -709,6 +720,9 @@ sepRadius: ${t.sepRadius}, sepStrength: ${t.sepStrength}, searchSpeed: ${t.searc
       // Full speed while chasing OR hunting; capped only for sustained search / withdrawal.
       const slow = (state === PursuitState.SEARCH && !hunting) || state === PursuitState.RETURNING;
       cop.ai.speedCap = slow ? this.searchSpeed : Infinity;
+      // Rubber band: stragglers far from the player get a flat top-speed boost.
+      const dp = Phaser.Math.Distance.Between(cop.sprite.x, cop.sprite.y, px, py);
+      cop.maxSpeed = cop.baseMaxSpeed + (dp > this.rubberBandDist ? this.rubberBandBoost : 0);
       cop.update(delta, target);
     }
 
