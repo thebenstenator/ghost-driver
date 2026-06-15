@@ -35,6 +35,8 @@ export class CopAI {
     this.speedMargin      = 20;  // hysteresis band around desiredSpeed
     this.senseDist        = 700; // how far down the path to look for corners
     this.speedCap         = Infinity; // external cap (lowered during search/withdraw)
+    this.ramRange         = 95;  // px — inside this, ignore reaction lag and aim at the player's
+                                 // ACTUAL position so the cop can make contact and shove (boxing/PIT)
     this.reactionTime     = 0.18;// s — while CHASING (clear line of sight) the cop steers
                                  // toward where you were this long ago, not where you are
                                  // now. 0 = perfect homing (mirrors you); higher = a sharp
@@ -107,10 +109,12 @@ export class CopAI {
       this._path = null; this._goalNode = -1;
 
       // Reaction lag: steer toward where the target WAS reactionTime ago instead
-      // of where it is now. On a straight this is the same line; through a sharp
-      // juke the cop commits to your old heading and overshoots, opening a gap —
-      // so a clean corner can shake a cop that's glued to your bumper.
-      if (this.reactionTime > 0) {
+      // of where it is now. Through a sharp juke the cop commits to your old
+      // heading and overshoots, opening a gap. BUT only at range — within ramRange
+      // it aims at your ACTUAL position so it can make contact and shove you
+      // (boxing / PIT); otherwise the lag leaves it trailing ~70px back, unable
+      // to ever touch you ("comes to a dead stop").
+      if (this.reactionTime > 0 && dist > this.ramRange) {
         const lagFrames = Math.min(this._aimHist.length - 1, Math.round(this.reactionTime / dt));
         const past = this._aimHist[this._aimHist.length - 1 - lagFrames];
         aimX = past.x; aimY = past.y;
