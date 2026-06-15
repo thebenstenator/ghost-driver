@@ -10,8 +10,7 @@ export class Vehicle {
       texture      = 'player_car',
       displayWidth = 38,
       displayHeight = 60,
-      bodyRadius   = 19, // centre collision-circle radius in px (≈ half the car width)
-      bumperRadius = 14, // front/rear capsule-circle radius in px (extends collision along the length)
+      bodyRadius   = 19, // collision-circle radius in px (≈ half the car width; Arcade only does circle/AABB)
       facing       = -Math.PI / 2,
       depth        = 10,
       tint         = null,
@@ -87,78 +86,10 @@ export class Vehicle {
 
     // Back-reference so colliders can find the owning vehicle from the sprite
     this.sprite.vehicle = this;
-
-    // --- Capsule: front + rear "bumper" bodies ---
-    // The single circle covers the car's width but not its length (nose/tail poke
-    // through walls). Add two follower circles down the long axis so the collider
-    // hugs the whole car. They're invisible bodies repositioned each frame to the
-    // car's nose/tail; GameScene collides them with walls and calls bumperBlock().
-    const half = displayHeight / 2;
-    this.bumperOffset = half - bumperRadius;  // sit each circle at an end of the car
-    this.bumperRadius = bumperRadius;
-    // Build bumpers from a tiny dedicated texture, NOT the big car frame — a large
-    // frame throws the circle's offset off by ~half its size (left the bodies
-    // floating beside the car). With a 4px frame the circle centres cleanly.
-    const BT = '_bumperDot';
-    if (!scene.textures.exists(BT)) {
-      const g = scene.make.graphics({ add: false });
-      g.fillStyle(0xffffff, 1); g.fillRect(0, 0, 4, 4);
-      g.generateTexture(BT, 4, 4); g.destroy();
-    }
-    this.bumpers = [1, -1].map((dir) => {
-      const b = scene.physics.add.image(x, y, BT).setVisible(false);
-      b.body.setAllowGravity(false);
-      b.body.setCircle(bumperRadius, b.width / 2 - bumperRadius, b.height / 2 - bumperRadius);
-      b.bumperDir = dir;   // +1 = front (along facing), -1 = rear
-      b.vehicle   = this;
-      return b;
-    });
   }
 
   getSpeed() {
     return Math.sqrt(this.vx * this.vx + this.vy * this.vy);
-  }
-
-  // Keep the bumper bodies pinned to the car's nose and tail (call each frame).
-  // Remember where we placed each one, so bumperBlock can tell how far a wall
-  // pushed it back (= how far the car needs to be ejected).
-  _positionBumpers() {
-    const cx = this.sprite.x, cy = this.sprite.y;
-    const cos = Math.cos(this.facing), sin = Math.sin(this.facing);
-    for (const b of this.bumpers) {
-      const o = this.bumperOffset * b.bumperDir;
-      b.px = cx + cos * o;
-      b.py = cy + sin * o;
-      b.body.reset(b.px, b.py); // teleport body to the end, no drift
-    }
-  }
-
-  // A bumper hit a wall: kill only the car's velocity INTO that wall, along the
-  // ACTUAL contact axis (buildings are axis-aligned, so the bumper's touching
-  // flags give the world-axis normal). Velocity ALONG the wall is kept, so the car
-  // slides instead of sticking — same behaviour as Arcade's own body separation,
-  // just extended to the nose/tail circles.
-  bumperBlock(bumper) {
-    const body = this.sprite.body;
-
-    // EJECT: Arcade just pushed this bumper out of the wall; the bumper moved from
-    // where we placed it (px,py) to its separated centre. Apply that same push to
-    // the car body so its nose/tail can't sit inside the wall. This is positional,
-    // so it doesn't depend on any velocity-read timing.
-    const dx = bumper.body.center.x - bumper.px;
-    const dy = bumper.body.center.y - bumper.py;
-    body.x += dx; body.y += dy;
-    body.updateCenter();
-
-    // Kill only the velocity INTO the wall (along the push), keep tangential so the
-    // car slides along it. Work off the live body velocity, then sync our fields.
-    let vx = body.velocity.x, vy = body.velocity.y;
-    if (dx > 0.01 && vx < 0) vx = 0;   // pushed right  -> wall on the left
-    if (dx < -0.01 && vx > 0) vx = 0;  // pushed left   -> wall on the right
-    if (dy > 0.01 && vy < 0) vy = 0;   // pushed down   -> wall above
-    if (dy < -0.01 && vy > 0) vy = 0;  // pushed up      -> wall below
-    body.setVelocity(vx, vy);
-    this.vx = vx; this.vy = vy;
   }
 
   update(delta, controls) {
@@ -317,7 +248,5 @@ export class Vehicle {
     // --- Write to physics body ---
     this.sprite.setVelocity(this.vx, this.vy);
     this.sprite.setRotation(this.facing + Math.PI / 2);
-
-    this._positionBumpers();
   }
 }
