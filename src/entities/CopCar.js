@@ -20,7 +20,7 @@ export class CopCar extends Vehicle {
       texture: 'player_car',
       displayWidth: 38,
       displayHeight: 60,
-      bodyRadius: 19,
+      bodySize: 30,
       depth: 9,
       tint: 0xffffff,   // flat white silhouette so cops pop against the dark map
       tintFill: true,

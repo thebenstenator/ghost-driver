@@ -10,7 +10,7 @@ export class Vehicle {
       texture      = 'player_car',
       displayWidth = 38,
       displayHeight = 60,
-      bodyRadius   = 19, // collision-circle radius in px (≈ half the car width; Arcade only does circle/AABB)
+      bodySize     = 30,
       facing       = -Math.PI / 2,
       depth        = 10,
       tint         = null,
@@ -73,16 +73,9 @@ export class Vehicle {
       if (tintFill) this.sprite.setTintFill(tint);
       else          this.sprite.setTint(tint);
     }
-    // Circular body. Arcade bodies can't rotate, so a circle gives the SAME
-    // footprint at every heading (consistent wall hits whichever way you crash).
-    // NOTE: Arcade's setCircle ignores the sprite's display scale — the radius is
-    // used as-is in world px — so pass the world radius directly and centre it in
-    // the (native) frame. (A long car can't be an oval in Arcade — that would need
-    // a multi-circle capsule or Matter.js.)
-    this.sprite.body.setCircle(bodyRadius,
-      this.sprite.width  / 2 - bodyRadius,            // centre the circle in the frame
-      this.sprite.height / 2 - bodyRadius);
-    this.bodyRadius = bodyRadius;                      // world radius, for debug draw
+    // Square body: Arcade Physics AABBs are axis-aligned and don't rotate with
+    // the sprite, so a square approximates the car's footprint at any angle
+    this.sprite.body.setSize(bodySize, bodySize);
 
     // Back-reference so colliders can find the owning vehicle from the sprite
     this.sprite.vehicle = this;

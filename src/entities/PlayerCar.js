@@ -9,7 +9,7 @@ export class PlayerCar extends Vehicle {
       texture: 'player_car',
       displayWidth: 38,
       displayHeight: 60,
-      bodyRadius: 19,
+      bodySize: 30,
       depth: 10,
     });
   }
