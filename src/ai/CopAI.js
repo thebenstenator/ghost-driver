@@ -41,6 +41,12 @@ export class CopAI {
                                  // toward where you were this long ago, not where you are
                                  // now. 0 = perfect homing (mirrors you); higher = a sharp
                                  // juke makes it overshoot, so close-range homing is beatable.
+    this.losGrace         = 0.5; // s — after the cop's OWN sight line breaks, keep beelining
+                                 // straight at the player this long before falling back to the
+                                 // road path. A momentary clip (you round a corner) otherwise
+                                 // snaps it CHASE→PURSUE and it peels off toward an intersection
+                                 // — the lone-cop "swerve" while the rest of the pack still sees you.
+    this._losTimer        = 0;   // remaining grace; reset to losGrace whenever the line is clear
 
     // Cached node path + which node we're heading to
     this._path     = null;
@@ -101,10 +107,17 @@ export class CopAI {
     }
 
     const clearToTarget = !this.rects || segmentClear(cx, cy, target.x, target.y, this.rects);
+    // Per-cop sight grace: hold the direct chase for losGrace seconds after the line
+    // breaks, so a brief corner-clip keeps the cop driving at you instead of snapping
+    // onto a road path that can double back. A genuinely sustained block still falls
+    // through to nav-path once the grace runs out.
+    if (clearToTarget) this._losTimer = this.losGrace;
+    else               this._losTimer = Math.max(0, this._losTimer - dt);
+    const effectiveClear = clearToTarget || this._losTimer > 0;
 
     // Beeline straight at the target only when close (clear sight within chaseRange,
     // or point-blank). Otherwise follow the road network so we corner properly.
-    const beeline = dist <= this.directRange || (clearToTarget && dist <= this.chaseRange);
+    const beeline = dist <= this.directRange || (effectiveClear && dist <= this.chaseRange);
     if (!beeline) {
       // --- Navigate the road network, one intersection at a time ---
       const copNode  = this.nav.nearestNode(cx, cy);
@@ -163,7 +176,7 @@ export class CopAI {
     // --- Throttle toward desiredSpeed ---
     let mode;
     if (speed > limit + this.speedMargin)      { controls.brake = true; mode = 'BRAKE'; }
-    else if (speed < limit - this.speedMargin) { controls.up    = true; mode = (clearToTarget ? 'CHASE' : 'PURSUE'); }
+    else if (speed < limit - this.speedMargin) { controls.up    = true; mode = (beeline ? 'CHASE' : 'PURSUE'); }
     else                                         { mode = 'CRUISE'; }
 
     cop.debug = { mode, speed, dist, bend: nextTurn, cornerLimit: limit, angleErr, reverseTime: 0 };
