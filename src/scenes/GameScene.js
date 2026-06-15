@@ -718,9 +718,9 @@ sepRadius: ${t.sepRadius}, sepStrength: ${t.sepStrength}, rubberBandDist: ${t.ru
 searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${t.searchMaxDepth}, coverageTTL: ${t.coverageTTL}, searchDirBias: ${t.searchDirBias}, searchDwell: ${t.searchDwell}, searchStall: ${t.searchStall}`);
     } }, 'copyStats').name('Copy Cop Stats → Console');
 
-    // Persist across refresh. Key bumped to v10: convoy + engage-range + search
-    // dwell/give-up dials added, so stale saves don't mask the new defaults.
-    this._persistPanel(gui, 'gd_copTuning10');
+    // Persist across refresh. Key bumped to v11: cornering defaults changed
+    // (cornerMinSpeed 240, directRange 60), so stale saves don't mask them.
+    this._persistPanel(gui, 'gd_copTuning11');
 
     gui.domElement.style.position = 'fixed';
     gui.domElement.style.top  = '8px';

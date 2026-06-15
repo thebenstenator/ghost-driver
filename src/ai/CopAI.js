@@ -22,7 +22,9 @@ export class CopAI {
 
     // --- Tunables ---
     this.steerDeadzone    = 0.05;
-    this.directRange      = 130; // within this, aim straight at the target even if blocked
+    this.directRange      = 60;  // within this, aim straight at the target even if blocked. Kept
+                                 // small (true point-blank) — a larger zone drove cops into walls
+                                 // when a building corner sat between them and a close target.
     this.chaseRange       = 550; // BEELINE at the target only within this range (with clear
                                  // sight). Beyond it the cop follows the roads even with a
                                  // clear line — so a far cop corners at intersections instead
@@ -30,7 +32,9 @@ export class CopAI {
     this.arriveRadius     = 70;  // px to count a path node as reached
     this.maxApproachSpeed = 610; // speed on a straight (physics caps lower)
     this.baseApproach     = 610; // catch-up rubber-band raises maxApproachSpeed above this when far
-    this.cornerMinSpeed   = 395; // speed through a 90°+ corner (tuned high — aggressive corners)
+    this.cornerMinSpeed   = 240; // speed through a 90°+ corner. The old 395 took 90° turns through
+                                 // 128px streets near full speed and clipped the building corner —
+                                 // the dominant source of wall-grind. Slow down so corners stay clean.
     this.brakeDecel       = 320; // assumed braking power for the slow-down curve
     this.speedMargin      = 20;  // hysteresis band around desiredSpeed
     this.senseDist        = 700; // how far down the path to look for corners
@@ -67,6 +71,7 @@ export class CopAI {
     const cx = cop.sprite.x, cy = cop.sprite.y;
     const speed = cop.getSpeed();
     const dist  = Phaser.Math.Distance.Between(cx, cy, target.x, target.y);
+    const blocked = !!(cop.sprite.body.blocked && !cop.sprite.body.blocked.none);
 
     let aimX = target.x, aimY = target.y;
     let limit = Math.min(this.maxApproachSpeed, this.speedCap);
@@ -98,8 +103,12 @@ export class CopAI {
       cop.debug = { mode: m.phase === 'BACK' ? 'UNSTK_BK' : 'UNSTK_FW', speed, dist, bend: 0, cornerLimit: 0, angleErr: 0, reverseTime: 0 };
       return controls;
     }
-    // Wedge detection: wants to reach a target that's still far, but barely moving.
-    if (dist > 100 && speed < 30) this._stuckTime += dt; else this._stuckTime = 0;
+    // Wedge detection: barely moving while it wants to drive — either far from a target
+    // (classic wedge) OR physically jammed against a wall at close range (the dist<100
+    // grind that the old "dist>100" gate ignored, so a cop pinned on a corner a few px
+    // from the player ground forever). `blocked` distinguishes a real jam from simply
+    // sitting still near the target.
+    if (speed < 30 && (dist > 100 || blocked)) this._stuckTime += dt; else this._stuckTime = 0;
     if (this._stuckTime > 0.35) {
       this._unstuckDir = -this._unstuckDir; // alternate so a retry tries the other way
       this._unstuck = { phase: 'BACK', t: this.unstuckBackTime };
@@ -107,7 +116,6 @@ export class CopAI {
     }
 
     const clearToTarget = !this.rects || segmentClear(cx, cy, target.x, target.y, this.rects);
-    const blocked = !!(cop.sprite.body.blocked && !cop.sprite.body.blocked.none);
     // Per-cop sight grace: hold the direct chase for losGrace seconds after the line
     // breaks, so a brief corner-clip keeps the cop driving at you instead of snapping
     // onto a road path that can double back. BUT if we're actually grinding a wall with
