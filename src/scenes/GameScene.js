@@ -115,7 +115,7 @@ export class GameScene extends Phaser.Scene {
   _addBumperColliders(vehicle) {
     for (const b of vehicle.bumpers) {
       this.physics.add.collider(b, this.walls,
-        (bumper) => bumper.vehicle.bumperBlock(bumper.bumperDir));
+        (bumper) => bumper.vehicle.bumperBlock(bumper));
     }
   }
 

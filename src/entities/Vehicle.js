@@ -129,17 +129,18 @@ export class Vehicle {
     }
   }
 
-  // A bumper hit a wall: kill the car's velocity INTO that wall (along the long
-  // axis), so the nose/tail stops at the wall instead of poking through. Lateral
-  // velocity is kept so the car can still slide along the wall.
-  bumperBlock(dir) {
-    const cos = Math.cos(this.facing), sin = Math.sin(this.facing);
-    const fwd = this.vx * cos + this.vy * sin; // longitudinal speed (+ = forward)
-    if ((dir > 0 && fwd > 0) || (dir < 0 && fwd < 0)) {
-      this.vx -= fwd * cos;
-      this.vy -= fwd * sin;
-      this.sprite.body.setVelocity(this.vx, this.vy);
-    }
+  // A bumper hit a wall: kill only the car's velocity INTO that wall, along the
+  // ACTUAL contact axis (buildings are axis-aligned, so the bumper's touching
+  // flags give the world-axis normal). Velocity ALONG the wall is kept, so the car
+  // slides instead of sticking — same behaviour as Arcade's own body separation,
+  // just extended to the nose/tail circles.
+  bumperBlock(bumper) {
+    const t = bumper.body.touching;
+    if (t.left  && this.vx < 0) this.vx = 0;
+    if (t.right && this.vx > 0) this.vx = 0;
+    if (t.up    && this.vy < 0) this.vy = 0;
+    if (t.down  && this.vy > 0) this.vy = 0;
+    this.sprite.body.setVelocity(this.vx, this.vy);
   }
 
   update(delta, controls) {
