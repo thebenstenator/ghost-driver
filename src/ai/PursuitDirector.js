@@ -42,7 +42,7 @@ export class PursuitDirector {
       this._assignRoles(cops, playerCar);
       this._timer = this.reassignInterval;
     }
-    for (const cop of cops) cop.dirTarget = this._roleTarget(cop.role, playerCar);
+    for (const cop of cops) cop.dirTarget = this._roleTarget(cop.role, playerCar, cop);
   }
 
   // Player travel direction — velocity when moving, facing when ~stationary.
@@ -86,13 +86,16 @@ export class PursuitDirector {
     }
   }
 
-  // The world-space target for a role, given the player's current state.
-  _roleTarget(role, playerCar) {
+  // The world-space target for a role, given the player's current state. `cop` is
+  // optional — when present, a flanker's side-offset ramps in by how far forward it
+  // is (so it catches up behind you before sliding out, instead of swerving across
+  // a wall). Omitted during role assignment, where the full flank slot is wanted.
+  _roleTarget(role, playerCar, cop = null) {
     const px = playerCar.sprite.x, py = playerCar.sprite.y;
     const h  = this._heading(playerCar);
     switch (role) {
-      case CopRole.FLANK_LEFT:  return this._flankTarget(playerCar, px, py, h, -1);
-      case CopRole.FLANK_RIGHT: return this._flankTarget(playerCar, px, py, h, +1);
+      case CopRole.FLANK_LEFT:  return this._flankTarget(playerCar, px, py, h, -1, cop);
+      case CopRole.FLANK_RIGHT: return this._flankTarget(playerCar, px, py, h, +1, cop);
       case CopRole.INTERCEPT: { // reserved (future Interceptor unit)
         const lead = Math.max(this.interceptMin, playerCar.getSpeed() * this.interceptLead);
         const node = this.nav.nearestNode(px + Math.cos(h) * lead, py + Math.sin(h) * lead);
@@ -104,12 +107,25 @@ export class PursuitDirector {
   }
 
   // A flanker rides a car-width off the player's side on the SAME road (PIT prep).
-  // As the player slows (or crashes), it swings AHEAD and closes in to box them —
-  // which sets up the player's counter: brake hard and let it overshoot.
-  _flankTarget(playerCar, px, py, h, sgn) {
+  // As the player slows (or crashes), it swings AHEAD and closes in to box them.
+  //
+  // CATCH-UP FIRST: the side offset ramps in by how far FORWARD the cop is. A cop
+  // still behind you gets ~no side offset (it just chases straight up the road to
+  // catch up); only as it draws alongside does the offset grow and slide it into
+  // the flank lane. This stops a behind cop from swerving sideways into a wall the
+  // instant it's assigned a flank.
+  _flankTarget(playerCar, px, py, h, sgn, cop = null) {
     const box   = Phaser.Math.Clamp((this.boxSpeed - playerCar.getSpeed()) / this.boxSpeed, 0, 1);
     const along = box * this.boxAhead;            // 0 while fleeing → ahead of you when slow
-    const side  = this.flankDist * (1 - 0.4 * box); // tuck in a little while boxing
+
+    let flankFrac = 1;
+    if (cop) {
+      // How far ahead(+)/behind(-) the cop is along the player's heading.
+      const rel = (cop.sprite.x - px) * Math.cos(h) + (cop.sprite.y - py) * Math.sin(h);
+      // behind by a car-length → 0 (pure chase); level/ahead → 1 (full flank).
+      flankFrac = Phaser.Math.Clamp((rel + this.flankDist) / (2 * this.flankDist), 0, 1);
+    }
+    const side  = this.flankDist * flankFrac * (1 - 0.4 * box);
     const perp  = h + sgn * Math.PI / 2;
     return {
       x: px + Math.cos(h) * along + Math.cos(perp) * side,
