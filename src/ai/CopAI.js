@@ -107,11 +107,15 @@ export class CopAI {
     }
 
     const clearToTarget = !this.rects || segmentClear(cx, cy, target.x, target.y, this.rects);
+    const blocked = !!(cop.sprite.body.blocked && !cop.sprite.body.blocked.none);
     // Per-cop sight grace: hold the direct chase for losGrace seconds after the line
     // breaks, so a brief corner-clip keeps the cop driving at you instead of snapping
-    // onto a road path that can double back. A genuinely sustained block still falls
-    // through to nav-path once the grace runs out.
+    // onto a road path that can double back. BUT if we're actually grinding a wall with
+    // no clear line, drop the grace immediately and route around — riding the grace
+    // into a building is what caused the constant wall-grind. A sustained block also
+    // falls through to nav-path once the grace runs out.
     if (clearToTarget) this._losTimer = this.losGrace;
+    else if (blocked)  this._losTimer = 0;
     else               this._losTimer = Math.max(0, this._losTimer - dt);
     const effectiveClear = clearToTarget || this._losTimer > 0;
 

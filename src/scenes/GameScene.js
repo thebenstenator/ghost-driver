@@ -38,7 +38,7 @@ export class GameScene extends Phaser.Scene {
 
     // --- Cops + pursuit ---
     this.navGrid    = new NavGrid();
-    this.director   = new PursuitDirector(this.navGrid);
+    this.director   = new PursuitDirector(this.navGrid, this.losRects);
     this.cops       = [];
     this.sightRange = 900;             // px — cop spotting range in clear line
     this.proximityRange = 70;          // px — sensed THROUGH walls only at point-blank (can't
@@ -54,6 +54,10 @@ export class GameScene extends Phaser.Scene {
     // Purely distance-gated. Default boost 0 = OFF.
     this.rubberBandDist  = 800;
     this.rubberBandBoost = 0;
+    // Breadcrumb trails — each cop records its recent path so blind teammates can
+    // convoy-follow a known-drivable route (see PursuitDirector._convoyTarget).
+    this.trailSpacing = 35;            // px of travel between recorded trail points
+    this.trailMax     = 36;            // points kept per cop (~1260px of trail)
     this.searchSpeed = 250;            // cop speed cap while searching (clean corners)
     this.searchDepth = 2;              // STARTING search radius (blocks out from last-known)
     this.searchMaxDepth = 6;           // search grows out to this many blocks as ground is checked
@@ -258,6 +262,17 @@ export class GameScene extends Phaser.Scene {
     }
     if (sx === 0 && sy === 0) return target;
     return { x: target.x + sx * STRENGTH, y: target.y + sy * STRENGTH };
+  }
+
+  // Append the cop's current position to its breadcrumb trail, sampled by distance
+  // so the list stays short. Blind teammates follow this trail to relay in (convoy).
+  _recordTrail(cop) {
+    if (!cop._trail) cop._trail = [];
+    const t = cop._trail, last = t[t.length - 1];
+    if (!last || Phaser.Math.Distance.Between(last.x, last.y, cop.sprite.x, cop.sprite.y) >= this.trailSpacing) {
+      t.push({ x: cop.sprite.x, y: cop.sprite.y });
+      if (t.length > this.trailMax) t.shift();
+    }
   }
 
   _buildWorld() {
@@ -527,7 +542,10 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
       rubberBandDist: this.rubberBandDist, rubberBandBoost: this.rubberBandBoost,
       searchSpeed: this.searchSpeed, searchDepth: this.searchDepth, searchMaxDepth: this.searchMaxDepth,
       coverageTTL: this.coverageTTL, searchDirBias: this.searchDirBias,
+      searchDwell: this.searchDwell, searchStall: this.searchStall,
       flankDist: this.director.flankDist, boxSpeed: this.director.boxSpeed, boxAhead: this.director.boxAhead,
+      engageRange: this.director.engageRange,
+      convoyEnabled: this.director.convoyEnabled, followGap: this.director.followGap,
     };
 
     const gui = new GUI({ title: 'Cop Tuning', width: 300 });
@@ -561,6 +579,7 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
     pack.add(this.copTuning, 'flankDist',     10,  200, 5).name('Flank side gap').onChange(apply);
     pack.add(this.copTuning, 'boxSpeed',      0,   400, 10).name('Box-in below speed').onChange(apply);
     pack.add(this.copTuning, 'boxAhead',      0,   250, 5).name('Box cut-ahead').onChange(apply);
+    pack.add(this.copTuning, 'engageRange',   100, 1000, 20).name('RAM/BOX engage range').onChange(apply);
     pack.add(this.copTuning, 'rubberBandDist',  100, 2500, 50).name('Rubberband distance').onChange(apply);
     pack.add(this.copTuning, 'rubberBandBoost', 0,   400,  10).name('Rubberband boost').onChange(apply);
     pack.add(this.copTuning, 'sepRadius',     0,   250, 5).name('Separation radius').onChange(apply);
@@ -570,6 +589,12 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
     pack.add(this.copTuning, 'searchMaxDepth', 1,  10, 1).name('Search max (blocks)').onChange(apply);
     pack.add(this.copTuning, 'coverageTTL',    1,  20, 1).name('Search memory (s)').onChange(apply);
     pack.add(this.copTuning, 'searchDirBias',  0,  150, 5).name('Escape-dir bias').onChange(apply);
+    pack.add(this.copTuning, 'searchDwell',    0,  4,  0.1).name('Search dwell (s)').onChange(apply);
+    pack.add(this.copTuning, 'searchStall',    1,  8,  0.5).name('Search give-up (s)').onChange(apply);
+
+    const convoy = gui.addFolder('Convoy (blind cops)');
+    convoy.add(this.copTuning, 'convoyEnabled').name('Convoy following').onChange(apply);
+    convoy.add(this.copTuning, 'followGap',   30,  300, 10).name('Follow gap behind leader').onChange(apply);
 
     gui.add({ copyStats: () => {
       const t = this.copTuning;
@@ -580,16 +605,17 @@ turnSpeedLow: ${t.turnSpeedLow}, turnSpeed: ${t.turnSpeed}, minSteerFactor: ${t.
 // --- Cop behaviour (CopAI) ---
 maxApproachSpeed: ${t.maxApproachSpeed}, cornerMinSpeed: ${t.cornerMinSpeed}, brakeDecel: ${t.brakeDecel},
 arriveRadius: ${t.arriveRadius}, senseDist: ${t.senseDist}, directRange: ${t.directRange}, chaseRange: ${t.chaseRange}, reactionTime: ${t.reactionTime},
-// --- Formation (PursuitDirector) ---
-flankDist: ${t.flankDist}, boxSpeed: ${t.boxSpeed}, boxAhead: ${t.boxAhead},
+// --- Formation + convoy (PursuitDirector) ---
+flankDist: ${t.flankDist}, boxSpeed: ${t.boxSpeed}, boxAhead: ${t.boxAhead}, engageRange: ${t.engageRange},
+convoyEnabled: ${t.convoyEnabled}, followGap: ${t.followGap},
 // --- Separation + rubber band + search (GameScene) ---
 sepRadius: ${t.sepRadius}, sepStrength: ${t.sepStrength}, rubberBandDist: ${t.rubberBandDist}, rubberBandBoost: ${t.rubberBandBoost},
-searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${t.searchMaxDepth}, coverageTTL: ${t.coverageTTL}, searchDirBias: ${t.searchDirBias}`);
+searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${t.searchMaxDepth}, coverageTTL: ${t.coverageTTL}, searchDirBias: ${t.searchDirBias}, searchDwell: ${t.searchDwell}, searchStall: ${t.searchStall}`);
     } }, 'copyStats').name('Copy Cop Stats → Console');
 
-    // Persist across refresh. Key bumped to v9: new defaults (maxSpeed 495 / accel
-    // 350) + rubber-band dials added, so stale saves don't mask them.
-    this._persistPanel(gui, 'gd_copTuning9');
+    // Persist across refresh. Key bumped to v10: convoy + engage-range + search
+    // dwell/give-up dials added, so stale saves don't mask the new defaults.
+    this._persistPanel(gui, 'gd_copTuning10');
 
     gui.domElement.style.position = 'fixed';
     gui.domElement.style.top  = '8px';
@@ -635,9 +661,14 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
     this.searchMaxDepth = t.searchMaxDepth;
     this.coverageTTL = t.coverageTTL;
     this.searchDirBias = t.searchDirBias;
+    this.searchDwell = t.searchDwell;
+    this.searchStall = t.searchStall;
     this.director.flankDist = t.flankDist;
     this.director.boxSpeed = t.boxSpeed;
     this.director.boxAhead = t.boxAhead;
+    this.director.engageRange = t.engageRange;
+    this.director.convoyEnabled = t.convoyEnabled;
+    this.director.followGap = t.followGap;
   }
 
   update(_time, delta) {
@@ -681,6 +712,10 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
       if (cop.aware) anyAware = true;
       if (sees)      anyLOS = true;
     }
+
+    // Record each cop's breadcrumb trail (for convoy-following) BEFORE the director
+    // runs, so a leader's trail is current when a follower picks its target.
+    for (const cop of this.cops) this._recordTrail(cop);
 
     // --- Pursuit state machine. `aware` (grace) keeps it ACTIVE through flickers;
     // only a real line of sight (`anyLOS`) moves the last-known marker, so a juke
@@ -741,7 +776,14 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
       if      (state === PursuitState.ACTIVE)    target = cop.dirTarget;
       else if (state === PursuitState.SEARCH)    target = this._cooldownTarget(cop);
       else if (state === PursuitState.RETURNING) target = this.station;
-      if (target) target = this._clampWorld(this._separate(cop, target));
+      // Separation spreads cops apart so they don't pile up — but a CONVOY follower is
+      // deliberately tracking a single drivable line, so nudging its target sideways
+      // would shove it into a wall. Skip separation for convoy cops; clamp always.
+      const convoying = state === PursuitState.ACTIVE && cop.pursuitMode === 'CONVOY';
+      if (target) {
+        if (!convoying) target = this._separate(cop, target);
+        target = this._clampWorld(target);
+      }
       // Full speed while chasing OR hunting; capped only for sustained search / withdrawal.
       const slow = (state === PursuitState.SEARCH && !hunting) || state === PursuitState.RETURNING;
       cop.ai.speedCap = slow ? this.searchSpeed : Infinity;
@@ -785,11 +827,14 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
         this.aiDebug.fillStyle(0xffaa00, 0.8);
         this.aiDebug.fillCircle(cop.aiTarget.x, cop.aiTarget.y, 5);
       }
-      // Live per-cop label: role (when chasing) + control mode + speed
+      // Live per-cop label: role (when chasing) + convoy mode + control mode + speed
       if (cop.modeLabel && cop.debug) {
         const role = (state === PursuitState.ACTIVE && cop.role) ? cop.role + ' ' : '';
+        // Only show a convoy tag when it's not the ordinary "I can see you" case.
+        const conv = (state === PursuitState.ACTIVE && cop.pursuitMode && cop.pursuitMode !== 'DIRECT')
+          ? cop.pursuitMode + ' ' : '';
         cop.modeLabel.setPosition(cop.sprite.x, cop.sprite.y - 34);
-        cop.modeLabel.setText(`${role}${cop.debug.mode} ${Math.round(cop.debug.speed)}`);
+        cop.modeLabel.setText(`${role}${conv}${cop.debug.mode} ${Math.round(cop.debug.speed)}`);
         cop.modeLabel.setColor(cop.hasLOS ? '#39ff14' : '#ff8c8c');
       }
     }
@@ -918,6 +963,9 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
         // (or clear it) during SEARCH, so a stale RAM/BOX would otherwise linger.
         const flank = (this.pursuit.state === PursuitState.ACTIVE && cop.flankCase) ? cop.flankCase : '—';
         const los   = cop.hasLOS ? 'LOS' : 'los✗';
+        // Convoy relay mode (DIRECT/CONVOY/LONE), ACTIVE only — shows who's chasing
+        // directly vs. following a teammate's trail vs. on their own.
+        const conv  = (this.pursuit.state === PursuitState.ACTIVE && cop.pursuitMode) ? cop.pursuitMode : '—';
         // Coarse phase for the change-signature only. The raw throttle mode
         // (CHASE/PURSUE/CRUISE/BRAKE) flickers every few frames at a speed cap, which
         // would spam a new line each flip and bury the events that matter. Collapse
@@ -925,11 +973,11 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
         // so a line prints on real decision changes. The raw mode still shows in the line.
         const phase = (d.mode === 'UNSTK_BK' || d.mode === 'UNSTK_FW') ? 'UNSTK'
                     : (d.mode === 'STANDDOWN') ? 'STANDDOWN' : 'DRIVE';
-        const sig = `${stateTag}|${role}|${flank}|${phase}|${los}|${wall ? 'W' : ''}|${stuck ? 'S' : ''}`;
+        const sig = `${stateTag}|${role}|${flank}|${conv}|${phase}|${los}|${wall ? 'W' : ''}|${stuck ? 'S' : ''}`;
         if (sig !== cop._sig) {
           cop._sig = sig;
           console.log(
-            `[t=${t} cop${i}] ${stateTag} ${role}/${flank} ${d.mode} ${los} ` +
+            `[t=${t} cop${i}] ${stateTag} ${role}/${flank} ${conv} ${d.mode} ${los} ` +
             `cmd=${cmd} act=${act} dist=${Math.round(d.dist || 0)}` +
             (wall ? ' WALL' : '') + (stuck ? ' STUCK' : '')
           );
