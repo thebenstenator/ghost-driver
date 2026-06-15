@@ -96,12 +96,19 @@ export class Vehicle {
     const half = displayHeight / 2;
     this.bumperOffset = half - bumperRadius;  // sit each circle at an end of the car
     this.bumperRadius = bumperRadius;
+    // Build bumpers from a tiny dedicated texture, NOT the big car frame — a large
+    // frame throws the circle's offset off by ~half its size (left the bodies
+    // floating beside the car). With a 4px frame the circle centres cleanly.
+    const BT = '_bumperDot';
+    if (!scene.textures.exists(BT)) {
+      const g = scene.make.graphics({ add: false });
+      g.fillStyle(0xffffff, 1); g.fillRect(0, 0, 4, 4);
+      g.generateTexture(BT, 4, 4); g.destroy();
+    }
     this.bumpers = [1, -1].map((dir) => {
-      const b = scene.physics.add.image(x, y, texture).setVisible(false);
+      const b = scene.physics.add.image(x, y, BT).setVisible(false);
       b.body.setAllowGravity(false);
-      b.body.setCircle(bumperRadius,
-        b.width  / 2 - bumperRadius,
-        b.height / 2 - bumperRadius);
+      b.body.setCircle(bumperRadius, b.width / 2 - bumperRadius, b.height / 2 - bumperRadius);
       b.bumperDir = dir;   // +1 = front (along facing), -1 = rear
       b.vehicle   = this;
       return b;
