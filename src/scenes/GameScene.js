@@ -18,6 +18,16 @@ export class GameScene extends Phaser.Scene {
     super({ key: 'GameScene' });
   }
 
+  // Dev-mode flag, persisted in localStorage and toggled from the menu. Shared so the
+  // menu checkbox and the scene read the exact same value.
+  static DEV_KEY = 'gd_devMode';
+  static isDevMode() {
+    try { return localStorage.getItem(GameScene.DEV_KEY) === '1'; } catch (e) { return false; }
+  }
+  static setDevMode(on) {
+    try { localStorage.setItem(GameScene.DEV_KEY, on ? '1' : '0'); } catch (e) { /* ignore */ }
+  }
+
   init(data) {
     // Cop count chosen in the menu (default 3 if launched directly)
     this.copCount = (data && Number.isInteger(data.copCount)) ? data.copCount : 3;
@@ -26,6 +36,11 @@ export class GameScene extends Phaser.Scene {
   }
 
   create() {
+    // Dev mode (set from the menu, persisted): when OFF, all dev overlays, labels and
+    // tuning panels are suppressed for a clean playtest screen. Read FIRST — cop spawn
+    // and HUD setup below branch on it. Game logic is identical either way.
+    this.devMode = GameScene.isDevMode();
+
     this.physics.world.setBounds(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
     this.cameras.main.setBounds(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
 
@@ -100,8 +115,8 @@ export class GameScene extends Phaser.Scene {
     this.bust   = new BustMeter();
     this.busted = false;
 
-    // Debug graphics for AI steering targets + line of sight
-    this.aiDebug = this.add.graphics().setDepth(50);
+    // Debug graphics for AI steering targets + line of sight (dev only)
+    this.aiDebug = this.devMode ? this.add.graphics().setDepth(50) : null;
 
     this._setupHud();
 
@@ -110,9 +125,11 @@ export class GameScene extends Phaser.Scene {
     this.cameras.main.setZoom(1.0);
 
     this._setupInput();
-    this._setupDebugOverlay();
-    this._setupTunePanel();
-    this._setupCopTunePanel();
+    if (this.devMode) {
+      this._setupDebugOverlay();
+      this._setupTunePanel();
+      this._setupCopTunePanel();
+    }
 
     // Tear down the DOM tuning panels when the scene restarts / returns to menu,
     // otherwise they stack up duplicates on every R / menu cycle.
@@ -129,11 +146,11 @@ export class GameScene extends Phaser.Scene {
   _spawnCop(x, y) {
     const cop = new CopCar(this, x, y, this.navGrid, this.losRects);
     cop.searchSlot = this.cops.length; // 0,1,2… — its angular sector when searching
-    // Floating debug label so each cop's AI state is visible in the world
-    cop.modeLabel = this.add.text(x, y, '', {
+    // Floating debug label so each cop's AI state is visible in the world (dev only)
+    cop.modeLabel = this.devMode ? this.add.text(x, y, '', {
       fontFamily: 'monospace', fontSize: '11px', color: '#ffffff',
       backgroundColor: '#000000aa', padding: { x: 3, y: 1 },
-    }).setOrigin(0.5, 1).setDepth(60);
+    }).setOrigin(0.5, 1).setDepth(60) : null;
     this.physics.add.collider(cop.sprite, this.walls);
     this.physics.add.collider(cop.sprite, this.car.sprite);
     // Cops bump off each other rather than stacking
@@ -347,13 +364,15 @@ export class GameScene extends Phaser.Scene {
     // Pause toggle
     this.input.keyboard.on('keydown-P', () => this._togglePause());
 
-    // Cop telemetry: press C to toggle throttled console logging of cop state
+    // Cop telemetry: press C to toggle throttled console logging of cop state (dev only)
     this.copLog       = false;
     this._copLogTimer = 0;
-    this.input.keyboard.on('keydown-C', () => {
-      this.copLog = !this.copLog;
-      console.log(`[cop telemetry] ${this.copLog ? 'ON' : 'OFF'}`);
-    });
+    if (this.devMode) {
+      this.input.keyboard.on('keydown-C', () => {
+        this.copLog = !this.copLog;
+        console.log(`[cop telemetry] ${this.copLog ? 'ON' : 'OFF'}`);
+      });
+    }
 
     // Spectate: press V to cycle the camera through player → each cop. While
     // viewing a cop, the car is frozen so you can watch a search without driving.
@@ -451,6 +470,92 @@ export class GameScene extends Phaser.Scene {
   _flashGhost() {
     this.ghostText.setAlpha(1).setScale(0.8);
     this.tweens.add({ targets: this.ghostText, alpha: 0, scale: 1.4, duration: 1500, ease: 'Cubic.easeOut' });
+  }
+
+  // Dev-only world overlay: LOS lines (green=visible, red=blocked), steering targets,
+  // per-cop state labels, search coverage dots, last-known marker, station.
+  _drawAiDebug(state, px, py) {
+    this.aiDebug.clear();
+    for (const cop of this.cops) {
+      this.aiDebug.lineStyle(1, cop.hasLOS ? 0x39ff14 : 0xff3b3b, 0.35);
+      this.aiDebug.lineBetween(cop.sprite.x, cop.sprite.y, px, py);
+      if (cop.aiTarget) {
+        this.aiDebug.lineStyle(1, 0xffaa00, 0.5);
+        this.aiDebug.lineBetween(cop.sprite.x, cop.sprite.y, cop.aiTarget.x, cop.aiTarget.y);
+        this.aiDebug.fillStyle(0xffaa00, 0.8);
+        this.aiDebug.fillCircle(cop.aiTarget.x, cop.aiTarget.y, 5);
+      }
+      // Live per-cop label: role (when chasing) + convoy mode + control mode + speed
+      if (cop.modeLabel && cop.debug) {
+        const role = (state === PursuitState.ACTIVE && cop.role) ? cop.role + ' ' : '';
+        // Only show a convoy tag when it's not the ordinary "I can see you" case.
+        const conv = (state === PursuitState.ACTIVE && cop.pursuitMode && cop.pursuitMode !== 'DIRECT')
+          ? cop.pursuitMode + ' ' : '';
+        cop.modeLabel.setPosition(cop.sprite.x, cop.sprite.y - 34);
+        cop.modeLabel.setText(`${role}${conv}${cop.debug.mode} ${Math.round(cop.debug.speed)}`);
+        cop.modeLabel.setColor(cop.hasLOS ? '#39ff14' : '#ff8c8c');
+      }
+    }
+    // Coverage paint: dot each search-area node — green = covered (seen recently),
+    // red = still unsearched. Shows the cops dividing up the area.
+    if (state === PursuitState.SEARCH) {
+      for (const idx of this._searchArea()) {
+        const p = this.navGrid.pos(idx);
+        const covered = (this._searchClock - this.coverage[idx]) < this.coverageTTL;
+        this.aiDebug.fillStyle(covered ? 0x39ff14 : 0xff3b3b, covered ? 0.5 : 0.28);
+        this.aiDebug.fillCircle(p.x, p.y, covered ? 16 : 10);
+      }
+    }
+    // Last-known marker + escape-vector arrow while searching
+    if (state === PursuitState.SEARCH && this.pursuit.hasLastKnown) {
+      const lk = this.pursuit.lastKnown, dir = this.pursuit.lastKnownDir;
+      this.aiDebug.lineStyle(2, 0xffd23f, 0.8);
+      this.aiDebug.strokeCircle(lk.x, lk.y, 30);
+      // arrow in the direction the player was last heading
+      const ex = lk.x + Math.cos(dir) * 90, ey = lk.y + Math.sin(dir) * 90;
+      this.aiDebug.lineStyle(3, 0xffd23f, 0.9);
+      this.aiDebug.lineBetween(lk.x, lk.y, ex, ey);
+      const ah = 0.5;
+      this.aiDebug.lineBetween(ex, ey, ex - Math.cos(dir - ah) * 16, ey - Math.sin(dir - ah) * 16);
+      this.aiDebug.lineBetween(ex, ey, ex - Math.cos(dir + ah) * 16, ey - Math.sin(dir + ah) * 16);
+    }
+    // Station marker
+    this.aiDebug.lineStyle(2, 0x4a90ff, 0.6);
+    this.aiDebug.strokeRect(this.station.x - 24, this.station.y - 24, 48, 48);
+  }
+
+  // Dev-only top-left text overlay: fps/speed/state + nearest-cop AI + controls.
+  _drawDebugText(state, spectating, speed) {
+    const view = this.camFocusIndex === 0 ? 'PLAYER' : `COP ${this.camFocusIndex - 1}`;
+    const lines = [
+      `FPS:   ${Math.round(this.game.loop.actualFps)}`,
+      `Speed: ${Math.round(speed)} px/s`,
+      `Cops:  ${this.cops.length}`,
+      `State: ${state}`,
+      `Bust:  ${Math.round(this.bust.value)}%${this.bust.pinned ? ' PINNED' : ''}`,
+      `View:  ${view}${spectating ? ' (car frozen)' : ''}`,
+    ];
+
+    // Nearest cop + its AI state
+    let nearestCop = null, nearestDist = Infinity;
+    for (const c of this.cops) {
+      const d = Phaser.Math.Distance.Between(c.sprite.x, c.sprite.y, this.car.sprite.x, this.car.sprite.y);
+      if (d < nearestDist) { nearestDist = d; nearestCop = c; }
+    }
+    if (nearestCop) {
+      const d = nearestCop.debug;
+      lines.push(`Nearest cop: ${Math.round(nearestDist)} px`);
+      if (d) {
+        lines.push(
+          `  mode:  ${d.mode}`,
+          `  speed: ${Math.round(d.speed)}  limit: ${Math.round(d.cornerLimit)}`,
+          `  bend:  ${(d.bend * 180 / Math.PI).toFixed(0)}°  err: ${(d.angleErr * 180 / Math.PI).toFixed(0)}°`
+        );
+      }
+    }
+    if (this.car.isDrifting) lines.push('[HANDBRAKE DRIFT]');
+    lines.push('', 'WASD / Arrows — Drive', 'Space — Handbrake', 'Shift — Brake', 'P — Pause', 'C — Cop decision log', 'V — Cycle camera', 'R — Restart', 'M — Menu');
+    this.debugText.setText(lines);
   }
 
   _setupTunePanel() {
@@ -816,54 +921,8 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
     }
     this._drawBustBar();
 
-    // Debug: line of sight (green=visible, red=blocked) + steering targets
-    this.aiDebug.clear();
-    for (const cop of this.cops) {
-      this.aiDebug.lineStyle(1, cop.hasLOS ? 0x39ff14 : 0xff3b3b, 0.35);
-      this.aiDebug.lineBetween(cop.sprite.x, cop.sprite.y, px, py);
-      if (cop.aiTarget) {
-        this.aiDebug.lineStyle(1, 0xffaa00, 0.5);
-        this.aiDebug.lineBetween(cop.sprite.x, cop.sprite.y, cop.aiTarget.x, cop.aiTarget.y);
-        this.aiDebug.fillStyle(0xffaa00, 0.8);
-        this.aiDebug.fillCircle(cop.aiTarget.x, cop.aiTarget.y, 5);
-      }
-      // Live per-cop label: role (when chasing) + convoy mode + control mode + speed
-      if (cop.modeLabel && cop.debug) {
-        const role = (state === PursuitState.ACTIVE && cop.role) ? cop.role + ' ' : '';
-        // Only show a convoy tag when it's not the ordinary "I can see you" case.
-        const conv = (state === PursuitState.ACTIVE && cop.pursuitMode && cop.pursuitMode !== 'DIRECT')
-          ? cop.pursuitMode + ' ' : '';
-        cop.modeLabel.setPosition(cop.sprite.x, cop.sprite.y - 34);
-        cop.modeLabel.setText(`${role}${conv}${cop.debug.mode} ${Math.round(cop.debug.speed)}`);
-        cop.modeLabel.setColor(cop.hasLOS ? '#39ff14' : '#ff8c8c');
-      }
-    }
-    // Coverage paint: dot each search-area node — green = covered (seen recently),
-    // red = still unsearched. Shows the cops dividing up the area.
-    if (state === PursuitState.SEARCH) {
-      for (const idx of this._searchArea()) {
-        const p = this.navGrid.pos(idx);
-        const covered = (this._searchClock - this.coverage[idx]) < this.coverageTTL;
-        this.aiDebug.fillStyle(covered ? 0x39ff14 : 0xff3b3b, covered ? 0.5 : 0.28);
-        this.aiDebug.fillCircle(p.x, p.y, covered ? 16 : 10);
-      }
-    }
-    // Last-known marker + escape-vector arrow while searching
-    if (state === PursuitState.SEARCH && this.pursuit.hasLastKnown) {
-      const lk = this.pursuit.lastKnown, dir = this.pursuit.lastKnownDir;
-      this.aiDebug.lineStyle(2, 0xffd23f, 0.8);
-      this.aiDebug.strokeCircle(lk.x, lk.y, 30);
-      // arrow in the direction the player was last heading
-      const ex = lk.x + Math.cos(dir) * 90, ey = lk.y + Math.sin(dir) * 90;
-      this.aiDebug.lineStyle(3, 0xffd23f, 0.9);
-      this.aiDebug.lineBetween(lk.x, lk.y, ex, ey);
-      const ah = 0.5;
-      this.aiDebug.lineBetween(ex, ey, ex - Math.cos(dir - ah) * 16, ey - Math.sin(dir - ah) * 16);
-      this.aiDebug.lineBetween(ex, ey, ex - Math.cos(dir + ah) * 16, ey - Math.sin(dir + ah) * 16);
-    }
-    // Station marker
-    this.aiDebug.lineStyle(2, 0x4a90ff, 0.6);
-    this.aiDebug.strokeRect(this.station.x - 24, this.station.y - 24, 48, 48);
+    // Dev overlay: LOS lines, steering targets, per-cop labels, search coverage.
+    if (this.devMode) this._drawAiDebug(state, px, py);
 
     const speed = this.car.getSpeed();
 
@@ -903,37 +962,8 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
       this.cooldownText.setText('');
     }
 
-    // Debug overlay
-    const view = this.camFocusIndex === 0 ? 'PLAYER' : `COP ${this.camFocusIndex - 1}`;
-    const lines = [
-      `FPS:   ${Math.round(this.game.loop.actualFps)}`,
-      `Speed: ${Math.round(speed)} px/s`,
-      `Cops:  ${this.cops.length}`,
-      `State: ${state}`,
-      `Bust:  ${Math.round(this.bust.value)}%${this.bust.pinned ? ' PINNED' : ''}`,
-      `View:  ${view}${spectating ? ' (car frozen)' : ''}`,
-    ];
-
-    // Nearest cop + its AI state
-    let nearestCop = null, nearestDist = Infinity;
-    for (const c of this.cops) {
-      const d = Phaser.Math.Distance.Between(c.sprite.x, c.sprite.y, this.car.sprite.x, this.car.sprite.y);
-      if (d < nearestDist) { nearestDist = d; nearestCop = c; }
-    }
-    if (nearestCop) {
-      const d = nearestCop.debug;
-      lines.push(`Nearest cop: ${Math.round(nearestDist)} px`);
-      if (d) {
-        lines.push(
-          `  mode:  ${d.mode}`,
-          `  speed: ${Math.round(d.speed)}  limit: ${Math.round(d.cornerLimit)}`,
-          `  bend:  ${(d.bend * 180 / Math.PI).toFixed(0)}°  err: ${(d.angleErr * 180 / Math.PI).toFixed(0)}°`
-        );
-      }
-    }
-    if (this.car.isDrifting) lines.push('[HANDBRAKE DRIFT]');
-    lines.push('', 'WASD / Arrows — Drive', 'Space — Handbrake', 'Shift — Brake', 'P — Pause', 'C — Cop decision log', 'V — Cycle camera', 'R — Restart', 'M — Menu');
-    this.debugText.setText(lines);
+    // Dev text overlay (top-left stats + controls reference).
+    if (this.devMode && this.debugText) this._drawDebugText(state, spectating, speed);
 
     // Cop decision trace. Logs a line only when a cop's DECISION or its EFFECT
     // changes — so the console reads as a cause→effect sequence (what fired, what

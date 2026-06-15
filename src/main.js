@@ -19,7 +19,10 @@ new Phaser.Game({
   },
   scale: {
     mode: Phaser.Scale.FIT,
-    autoCenter: Phaser.Scale.CENTER_BOTH
+    // The page CSS already centers the canvas with flexbox. Letting Phaser ALSO
+    // center it (CENTER_BOTH) double-applies a margin and shifts the canvas off to
+    // one side (more black space on the left). Leave centering to the CSS.
+    autoCenter: Phaser.Scale.NO_CENTER
   },
   scene: [BootScene, MenuScene, GameScene]
 });

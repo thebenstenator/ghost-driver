@@ -1,5 +1,6 @@
 import Phaser from 'phaser';
 import { GAME_WIDTH, GAME_HEIGHT } from '../config.js';
+import { GameScene } from './GameScene.js';
 
 // Playtest menu: choose how many cops to spawn, then launch the chase.
 export class MenuScene extends Phaser.Scene {
@@ -53,6 +54,26 @@ export class MenuScene extends Phaser.Scene {
       fontFamily: 'monospace', fontSize: '16px', color: '#c8c8d4',
       align: 'center', lineSpacing: 10,
     }).setOrigin(0.5);
+
+    // --- Dev mode toggle (bottom-left corner) ---
+    // Off by default. When on, the chase shows tuning panels + AI overlays; when off,
+    // playtesters get a clean screen. Persisted, so it survives restarts.
+    this._devOn = GameScene.isDevMode();
+    const devBox = this.add.text(16, GAME_HEIGHT - 18, '', {
+      fontFamily: 'monospace', fontSize: '15px',
+    }).setOrigin(0, 0.5).setInteractive({ useHandCursor: true });
+    const renderDev = (hover = false) => {
+      devBox.setText(`${this._devOn ? '[x]' : '[ ]'} dev mode`);
+      devBox.setColor(this._devOn ? (hover ? '#5fff4a' : '#39ff14') : (hover ? '#9aa0b5' : '#6a6a7a'));
+    };
+    renderDev();
+    devBox.on('pointerover', () => renderDev(true));
+    devBox.on('pointerout',  () => renderDev(false));
+    devBox.on('pointerdown', () => {
+      this._devOn = !this._devOn;
+      GameScene.setDevMode(this._devOn);
+      renderDev(true);
+    });
 
     // --- Keyboard shortcuts ---
     this.input.keyboard.on('keydown-ZERO',  () => this._start(0));
