@@ -889,9 +889,18 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
         const stuck = (cop._slowT || 0) > 0.25;
 
         const role  = (this.pursuit.state === PursuitState.ACTIVE && cop.role) ? cop.role : '—';
-        const flank = cop.flankCase || '—';
+        // Only show a flank-case during an ACTIVE chase — the director doesn't run
+        // (or clear it) during SEARCH, so a stale RAM/BOX would otherwise linger.
+        const flank = (this.pursuit.state === PursuitState.ACTIVE && cop.flankCase) ? cop.flankCase : '—';
         const los   = cop.hasLOS ? 'LOS' : 'los✗';
-        const sig = `${stateTag}|${role}|${flank}|${d.mode}|${los}|${wall ? 'W' : ''}|${stuck ? 'S' : ''}`;
+        // Coarse phase for the change-signature only. The raw throttle mode
+        // (CHASE/PURSUE/CRUISE/BRAKE) flickers every few frames at a speed cap, which
+        // would spam a new line each flip and bury the events that matter. Collapse
+        // it to what we actually want to catch — wedge-recovery vs ordinary driving —
+        // so a line prints on real decision changes. The raw mode still shows in the line.
+        const phase = (d.mode === 'UNSTK_BK' || d.mode === 'UNSTK_FW') ? 'UNSTK'
+                    : (d.mode === 'STANDDOWN') ? 'STANDDOWN' : 'DRIVE';
+        const sig = `${stateTag}|${role}|${flank}|${phase}|${los}|${wall ? 'W' : ''}|${stuck ? 'S' : ''}`;
         if (sig !== cop._sig) {
           cop._sig = sig;
           console.log(
