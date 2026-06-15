@@ -10,7 +10,8 @@ export class Vehicle {
       texture      = 'player_car',
       displayWidth = 38,
       displayHeight = 60,
-      bodyRadius   = 19, // collision-circle radius in px (≈ half the car width; Arcade only does circle/AABB)
+      bodyRadius   = 19, // centre collision-circle radius in px (≈ half the car width)
+      bumperRadius = 14, // front/rear capsule-circle radius in px (extends collision along the length)
       facing       = -Math.PI / 2,
       depth        = 10,
       tint         = null,
@@ -86,10 +87,52 @@ export class Vehicle {
 
     // Back-reference so colliders can find the owning vehicle from the sprite
     this.sprite.vehicle = this;
+
+    // --- Capsule: front + rear "bumper" bodies ---
+    // The single circle covers the car's width but not its length (nose/tail poke
+    // through walls). Add two follower circles down the long axis so the collider
+    // hugs the whole car. They're invisible bodies repositioned each frame to the
+    // car's nose/tail; GameScene collides them with walls and calls bumperBlock().
+    const half = displayHeight / 2;
+    this.bumperOffset = half - bumperRadius;  // sit each circle at an end of the car
+    this.bumperRadius = bumperRadius;
+    this.bumpers = [1, -1].map((dir) => {
+      const b = scene.physics.add.image(x, y, texture).setVisible(false);
+      b.body.setAllowGravity(false);
+      b.body.setCircle(bumperRadius,
+        b.width  / 2 - bumperRadius,
+        b.height / 2 - bumperRadius);
+      b.bumperDir = dir;   // +1 = front (along facing), -1 = rear
+      b.vehicle   = this;
+      return b;
+    });
   }
 
   getSpeed() {
     return Math.sqrt(this.vx * this.vx + this.vy * this.vy);
+  }
+
+  // Keep the bumper bodies pinned to the car's nose and tail (call each frame).
+  _positionBumpers() {
+    const cx = this.sprite.x, cy = this.sprite.y;
+    const cos = Math.cos(this.facing), sin = Math.sin(this.facing);
+    for (const b of this.bumpers) {
+      const o = this.bumperOffset * b.bumperDir;
+      b.body.reset(cx + cos * o, cy + sin * o); // teleport body to the end, no drift
+    }
+  }
+
+  // A bumper hit a wall: kill the car's velocity INTO that wall (along the long
+  // axis), so the nose/tail stops at the wall instead of poking through. Lateral
+  // velocity is kept so the car can still slide along the wall.
+  bumperBlock(dir) {
+    const cos = Math.cos(this.facing), sin = Math.sin(this.facing);
+    const fwd = this.vx * cos + this.vy * sin; // longitudinal speed (+ = forward)
+    if ((dir > 0 && fwd > 0) || (dir < 0 && fwd < 0)) {
+      this.vx -= fwd * cos;
+      this.vy -= fwd * sin;
+      this.sprite.body.setVelocity(this.vx, this.vy);
+    }
   }
 
   update(delta, controls) {
@@ -248,5 +291,7 @@ export class Vehicle {
     // --- Write to physics body ---
     this.sprite.setVelocity(this.vx, this.vy);
     this.sprite.setRotation(this.facing + Math.PI / 2);
+
+    this._positionBumpers();
   }
 }

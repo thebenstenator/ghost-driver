@@ -35,6 +35,7 @@ export class GameScene extends Phaser.Scene {
     this.car = new PlayerCar(this, WORLD_WIDTH / 2, WORLD_HEIGHT / 2);
 
     this.physics.add.collider(this.car.sprite, this.walls);
+    this._addBumperColliders(this.car);
 
     // --- Cops + pursuit ---
     this.navGrid    = new NavGrid();
@@ -109,6 +110,15 @@ export class GameScene extends Phaser.Scene {
     if (!this._autostart) this._togglePause();
   }
 
+  // Collide a vehicle's capsule bumpers with the buildings; on contact, kill the
+  // car's velocity into the wall so the nose/tail can't poke through.
+  _addBumperColliders(vehicle) {
+    for (const b of vehicle.bumpers) {
+      this.physics.add.collider(b, this.walls,
+        (bumper) => bumper.vehicle.bumperBlock(bumper.bumperDir));
+    }
+  }
+
   _spawnCop(x, y) {
     const cop = new CopCar(this, x, y, this.navGrid, this.losRects);
     cop.searchSlot = this.cops.length; // 0,1,2… — its angular sector when searching
@@ -121,6 +131,7 @@ export class GameScene extends Phaser.Scene {
     this.physics.add.collider(cop.sprite, this.car.sprite);
     // Cops bump off each other rather than stacking
     for (const other of this.cops) this.physics.add.collider(cop.sprite, other.sprite);
+    this._addBumperColliders(cop);
     this.cops.push(cop);
     return cop;
   }
@@ -740,6 +751,9 @@ sepRadius: ${t.sepRadius}, sepStrength: ${t.sepStrength}, searchSpeed: ${t.searc
     for (const v of [this.car, ...this.cops]) {
       const b = v.sprite.body;
       this.aiDebug.strokeCircle(b.center.x, b.center.y, b.halfWidth);
+      for (const bm of v.bumpers) {
+        this.aiDebug.strokeCircle(bm.body.center.x, bm.body.center.y, bm.body.halfWidth);
+      }
     }
 
     for (const cop of this.cops) {
