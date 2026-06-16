@@ -329,7 +329,6 @@ export class GameScene extends Phaser.Scene {
     const turnMult   = 1 + (this.rbTurnMult - 1) * f;
     cop.turnSpeedLow = cop.baseTurnSpeedLow * turnMult;
     cop.turnSpeed    = cop.baseTurnSpeed * turnMult;
-    cop.rejoinFactor = f; // for telemetry/label
   }
 
   // Is a world point clear of the camera view by `margin` px (i.e. safely off-screen)?

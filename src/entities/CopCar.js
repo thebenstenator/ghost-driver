@@ -67,7 +67,7 @@ export class CopCar extends Vehicle {
       super.update(delta, { up: false, down: false, left: false, right: false, handbrake: false, brake: true });
       this.aiTarget = null;
       this.debug = { mode: 'STANDDOWN', speed: this.getSpeed(), dist: 0, bend: 0,
-                     cornerLimit: 0, angleErr: 0, reverseTime: 0 };
+                     cornerLimit: 0, angleErr: 0 };
       return;
     }
     const controls = this.ai.getControls(this, target, delta / 1000);

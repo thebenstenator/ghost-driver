@@ -105,7 +105,7 @@ export class CopAI {
         if (m.t <= 0) this._unstuck = null;
       }
       cop.aiTarget = { x: target.x, y: target.y };
-      cop.debug = { mode: m.phase === 'BACK' ? 'UNSTK_BK' : 'UNSTK_FW', speed, dist, bend: 0, cornerLimit: 0, angleErr: 0, reverseTime: 0 };
+      cop.debug = { mode: m.phase === 'BACK' ? 'UNSTK_BK' : 'UNSTK_FW', speed, dist, bend: 0, cornerLimit: 0, angleErr: 0 };
       return controls;
     }
     // Wedge detection: barely moving while it wants to drive — either far from a target
@@ -217,7 +217,7 @@ export class CopAI {
     else if (speed < limit - this.speedMargin) { controls.up    = true; mode = (beeline ? 'CHASE' : 'PURSUE'); }
     else                                         { mode = 'CRUISE'; }
 
-    cop.debug = { mode, speed, dist, bend: nextTurn, cornerLimit: limit, angleErr, reverseTime: 0 };
+    cop.debug = { mode, speed, dist, bend: nextTurn, cornerLimit: limit, angleErr };
     return controls;
   }
 

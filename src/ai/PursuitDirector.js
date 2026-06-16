@@ -38,7 +38,12 @@ export class PursuitDirector {
     this.boxHold         = 0.8;  // s the box persists after the trigger clears (anti-flicker)
     this.boxAhead        = 110;  // px ahead of the player the front cop cuts to
     this.boxBehind       = 70;   // px behind the player the rear cop tucks to
+    this.boxHysteresis   = 60;   // px of along-heading advantage a challenger needs to steal the
+                                 // front/rear slot from the current holder — stops two side-by-side
+                                 // boxers rapidly swapping slots (and swinging their targets ±180px)
     this._boxTimer       = 0;    // > 0 while boxing (counts down when the trigger is absent)
+    this._frontCop       = null; // current box slot holders (sticky, see _pickBoxers)
+    this._rearCop        = null;
 
     // --- Convoy relay (how a blind cop reaches the player) ---
     this.convoyEnabled   = true;
@@ -108,16 +113,28 @@ export class PursuitDirector {
   }
 
   // Front = the near cop most ahead along the player's heading; rear = the one most
-  // behind. With exactly two near cops they split naturally front/back.
+  // behind. Slots are STICKY: the current holder keeps its slot unless a challenger
+  // beats its along-projection by boxHysteresis, so two side-by-side boxers don't
+  // rapid-swap front/rear (which swung their targets ±180px each flip).
   _pickBoxers(cops, px, py, h) {
-    let frontCop = null, rearCop = null, maxAlong = -Infinity, minAlong = Infinity;
-    for (const c of cops) {
-      if (this._dist(c, px, py) > this.boxEngageRange) continue;
-      const a = this._along(c, px, py, h);
-      if (a > maxAlong) { maxAlong = a; frontCop = c; }
-      if (a < minAlong) { minAlong = a; rearCop = c; }
+    const near  = cops.filter(c => this._dist(c, px, py) <= this.boxEngageRange);
+    const along = c => this._along(c, px, py, h);
+    if (near.length === 0) { this._frontCop = this._rearCop = null; return { frontCop: null, rearCop: null }; }
+
+    // Best raw candidates this frame.
+    let bestFront = near[0], bestRear = near[0];
+    for (const c of near) {
+      if (along(c) > along(bestFront)) bestFront = c;
+      if (along(c) < along(bestRear))  bestRear  = c;
     }
-    if (frontCop === rearCop) rearCop = null; // only one near cop — no rear block
+    // Keep the current holder if it's still near; only yield on a clear margin.
+    let frontCop = near.includes(this._frontCop) ? this._frontCop : bestFront;
+    let rearCop  = near.includes(this._rearCop)  ? this._rearCop  : bestRear;
+    if (bestFront !== frontCop && along(bestFront) > along(frontCop) + this.boxHysteresis) frontCop = bestFront;
+    if (bestRear  !== rearCop  && along(bestRear)  < along(rearCop)  - this.boxHysteresis) rearCop  = bestRear;
+    if (frontCop === rearCop) rearCop = null; // only one distinct near cop — no rear block
+
+    this._frontCop = frontCop; this._rearCop = rearCop;
     return { frontCop, rearCop };
   }
 
