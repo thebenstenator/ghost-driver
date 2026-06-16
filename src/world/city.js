@@ -51,20 +51,10 @@ const ALLEY_W = 64;
   }
 }
 
-// --- Seal the perimeter ---
-// The nav grid only has nodes on the INTERIOR road lines, so the ~MARGIN-wide
-// strip behind the outermost ring of buildings (between them and the world wall)
-// is drivable but has NO nav node. A player hiding there makes cops snap their
-// target a block inward — through a building — then wedge against the wall. Fix:
-// push the outer ring of buildings flush to the world bounds so that dead strip
-// isn't drivable. The outermost INTERIOR roads (which do have nodes) become the
-// perimeter loop. Runs after the alleys (which only touch interior rows/cols).
-for (let row = 0; row < GRID_ROWS; row++) {
-  for (let col = 0; col < GRID_COLS; col++) {
-    const b = BUILDINGS[row * GRID_COLS + col];
-    if (col === 0)              { b.w += b.x; b.x = 0; }              // extend to left wall
-    if (col === GRID_COLS - 1)  { b.w = WORLD_WIDTH - b.x; }         // extend to right wall
-    if (row === 0)              { b.h += b.y; b.y = 0; }              // extend to top wall
-    if (row === GRID_ROWS - 1)  { b.h = WORLD_HEIGHT - b.y; }        // extend to bottom wall
-  }
-}
+// --- Perimeter ---
+// The outer ring of buildings sits MARGIN px in from the world walls, leaving a
+// drivable lane all the way around the edge (you can loop the map). The nav grid
+// includes a matching ring of perimeter nodes on that lane (see NavGrid), so cops
+// can chase/search along the edge instead of targeting a node through the outer
+// buildings and wedging against the wall — which is why this used to be sealed.
+// (Nothing to do here now; documented so the seal isn't re-added by reflex.)

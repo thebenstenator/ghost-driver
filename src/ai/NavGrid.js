@@ -1,4 +1,4 @@
-import { GRID_COLS, GRID_ROWS, GRID_STEP, ROAD, MARGIN } from '../config.js';
+import { GRID_COLS, GRID_ROWS, GRID_STEP, ROAD, MARGIN, WORLD_WIDTH, WORLD_HEIGHT } from '../config.js';
 
 // Navigation graph of the city's road network. Nodes sit at every road
 // intersection; edges connect 4-neighbours along the streets. Cops pathfind
@@ -11,17 +11,22 @@ import { GRID_COLS, GRID_ROWS, GRID_STEP, ROAD, MARGIN } from '../config.js';
 // included — they're just narrower roads).
 export class NavGrid {
   constructor() {
-    // Interior road lines only. The full grid has n+1 road lines (i = 0..n), but
-    // i=0 and i=n are the thin margin strips jammed against the world edge — if a
-    // cop targets one it pins against the boundary. Use the interior lines
-    // (i = 1..n-1) so every nav node sits on a real through-street.
-    this.cols = GRID_COLS - 1;
-    this.rows = GRID_ROWS - 1;
-
-    this.xs = [];
+    // Node lines: the interior road centrelines (i = 1..n-1) PLUS a perimeter ring on
+    // the drivable margin lane that runs around the world edge. The perimeter nodes sit
+    // at MARGIN/2 from each wall (centred in the edge lane), so a cop can chase/search
+    // along the very edge instead of targeting a node through the outer buildings and
+    // wedging. Each margin lane connects cleanly to every interior road, so the ring is
+    // just the outer row/column of an otherwise-uniform lattice.
+    this.xs = [MARGIN / 2];
     for (let i = 1; i < GRID_COLS; i++) this.xs.push(MARGIN + i * GRID_STEP - ROAD / 2);
-    this.ys = [];
+    this.xs.push(WORLD_WIDTH - MARGIN / 2);
+
+    this.ys = [MARGIN / 2];
     for (let j = 1; j < GRID_ROWS; j++) this.ys.push(MARGIN + j * GRID_STEP - ROAD / 2);
+    this.ys.push(WORLD_HEIGHT - MARGIN / 2);
+
+    this.cols = this.xs.length;
+    this.rows = this.ys.length;
   }
 
   index(i, j) { return j * this.cols + i; }

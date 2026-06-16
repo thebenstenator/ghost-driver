@@ -251,9 +251,12 @@ export class GameScene extends Phaser.Scene {
     return this.navGrid.pos(best);
   }
 
-  // Keep a cop's target inside the navigable interior so nothing pins it on the edge.
+  // Keep a cop's target just off the world wall. The edge lane IS navigable now (the
+  // nav grid has a perimeter ring at MARGIN/2 from the wall), so this only trims the
+  // last few px so a target can't sit on the boundary itself — it must not push targets
+  // off the edge lane, or cops couldn't chase along the map edge.
   _clampWorld(t) {
-    const M = 110;
+    const M = 30;
     return {
       x: Phaser.Math.Clamp(t.x, M, WORLD_WIDTH - M),
       y: Phaser.Math.Clamp(t.y, M, WORLD_HEIGHT - M),
@@ -364,15 +367,15 @@ export class GameScene extends Phaser.Scene {
     // Pause toggle
     this.input.keyboard.on('keydown-P', () => this._togglePause());
 
-    // Cop telemetry: press C to toggle throttled console logging of cop state (dev only)
+    // Cop telemetry: press C to toggle throttled console logging of cop state. Works in
+    // playtest mode too (console-only, no on-screen clutter) so traces can be captured
+    // from the real, dev-tool-free experience.
     this.copLog       = false;
     this._copLogTimer = 0;
-    if (this.devMode) {
-      this.input.keyboard.on('keydown-C', () => {
-        this.copLog = !this.copLog;
-        console.log(`[cop telemetry] ${this.copLog ? 'ON' : 'OFF'}`);
-      });
-    }
+    this.input.keyboard.on('keydown-C', () => {
+      this.copLog = !this.copLog;
+      console.log(`[cop telemetry] ${this.copLog ? 'ON' : 'OFF'}`);
+    });
 
     // Spectate: press V to cycle the camera through player → each cop. While
     // viewing a cop, the car is frozen so you can watch a search without driving.
