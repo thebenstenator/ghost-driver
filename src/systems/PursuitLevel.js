@@ -58,6 +58,18 @@ export class PursuitLevel {
     return this._level - prev;
   }
 
+  atMax() { return this._level >= this.maxLevel; }
+
+  // Progress (0..1) from the current level's heat threshold toward the next level's,
+  // for the HUD meter. Pegged at 1 when already at the max level.
+  heatFraction() {
+    if (this._level >= this.maxLevel) return 1;
+    const lo = this.thresholds[this._level] || 0;
+    const hi = this.thresholds[this._level + 1];
+    const f = (this.heat - lo) / Math.max(1, hi - lo);
+    return f < 0 ? 0 : f > 1 ? 1 : f;
+  }
+
   _levelFromHeat() {
     let lv = 1;
     for (let i = 2; i < this.thresholds.length && i <= this.maxLevel; i++) {

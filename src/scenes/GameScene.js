@@ -650,8 +650,15 @@ export class GameScene extends Phaser.Scene {
       color: '#ffffff',
     }).setOrigin(0.5, 0).setScrollFactor(0).setDepth(100);
 
-    // Large cooldown timer, shown only during the cooldown phase
-    this.cooldownText = this.add.text(width / 2, 54, '', {
+    // Heat / pursuit-level meter (Pursuit Mode only) — a thin bar under the status
+    // showing progress toward the next level. Drawn each frame by _drawHeatBar.
+    this.heatGfx = this.add.graphics().setScrollFactor(0).setDepth(100);
+    this.heatLabel = this.add.text(width / 2, 44, '', {
+      fontFamily: 'monospace', fontSize: '11px', fontStyle: 'bold', color: '#c8c8d4',
+    }).setOrigin(1, 0.5).setScrollFactor(0).setDepth(101).setAlpha(0);
+
+    // Large cooldown timer, shown only during the cooldown phase (below the heat bar)
+    this.cooldownText = this.add.text(width / 2, 64, '', {
       fontFamily: 'monospace',
       fontSize: '40px',
       fontStyle: 'bold',
@@ -714,6 +721,28 @@ export class GameScene extends Phaser.Scene {
   _flashGhost() {
     this.ghostText.setAlpha(1).setScale(0.8);
     this.tweens.add({ targets: this.ghostText, alpha: 0, scale: 1.4, duration: 1500, ease: 'Cubic.easeOut' });
+  }
+
+  // Pursuit-Mode heat meter: thin bar under the status showing progress toward the next
+  // level (pegged + "MAX" at the top level). Colour ramps with level. Hidden otherwise.
+  _drawHeatBar() {
+    const g = this.heatGfx;
+    g.clear();
+    if (!this.pursuitLevel || !this.cops.length) { this.heatLabel.setAlpha(0); return; }
+
+    const { width } = this.scale;
+    const w = 200, h = 9, x = (width - w) / 2, y = 46;
+    const lv = this.pursuitLevel.level;
+    const frac = this.pursuitLevel.heatFraction();
+    const col = lv >= 3 ? 0xff3b3b : lv === 2 ? 0xff8c1a : 0xffd23f;
+
+    g.fillStyle(0x000000, 0.5); g.fillRect(x - 2, y - 2, w + 4, h + 4);
+    g.fillStyle(0x2a2a36, 1);   g.fillRect(x, y, w, h);
+    g.fillStyle(col, 0.95);     g.fillRect(x, y, w * frac, h);
+    g.lineStyle(1, 0xffffff, 0.25); g.strokeRect(x, y, w, h);
+
+    this.heatLabel.setText(this.pursuitLevel.atMax() ? 'HEAT MAX' : 'HEAT')
+      .setPosition(x - 8, y + h / 2).setColor(`#${col.toString(16).padStart(6, '0')}`).setAlpha(0.9);
   }
 
   // Dev-only world overlay: LOS lines (green=visible, red=blocked), steering targets,
@@ -1195,6 +1224,7 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
       return;
     }
     this._drawBustBar();
+    this._drawHeatBar();
 
     // Dev overlay: LOS lines, steering targets, per-cop labels, search coverage.
     if (this.devMode) this._drawAiDebug(state, px, py);
