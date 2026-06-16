@@ -46,7 +46,8 @@ export class PursuitDirector {
     this._rearCop        = null;
 
     // --- Convoy relay (how a blind cop reaches the player) ---
-    this.convoyEnabled   = true;
+    this.convoyEnabled   = false; // off by default — playtested better without the relay
+                                  // churn; toggle on via Cop Tuning → Convoy
     this.followGap       = 90;   // px behind the leader a follower aims (no tailgating)
     this.convoyMaxHops   = 2;    // max relay length; longer chains fall back to own route
     this.convoyMaxFactor = 1.6;  // if the chain route is > this × straight-line dist, go direct

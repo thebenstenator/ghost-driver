@@ -1,23 +1,23 @@
 // Pursuit escalation — the "how hard are they looking for you" layer that sits on
-// top of the (level-agnostic) cop AI. HEAT is the source of truth; LEVEL is derived
-// from it. Keeping heat as the primary scalar future-proofs the bigger picture:
-//   • Escaping doesn't hard-reset — heat BLEEDS toward a floor, so getting re-spotted
-//     soon after a ditch snaps you back into a still-hot pursuit.
-//   • A vehicle can later RETAIN heat between missions (just persist this scalar +
-//     decay it while the car sits idle) — `heatFloor` / get|setHeat are the seam.
-//   • Disabling a cop is a big heat spike + a longer replacement timer (stubbed hook).
+// top of the (level-agnostic) cop AI. HEAT is the source of truth; LEVEL is derived.
+// Heat is measured in a uniform per-level SPAN: level N occupies heat
+// [(N-1)*span, N*span], and the bar fills 0→1 within the current level. The ceiling
+// is maxLevel*span (heat can't rise past it).
 //
-// Each level sets a cop CAP and an aggression/cooldown profile. The deployed cop
-// count grows toward the cap on a reinforcement timer (handled by the scene); crossing
-// UP into a level also dispatches one immediately.
+//   • Heat RISES during active pursuit (+ a bump per cop contact), FREEZES during the
+//     pre-ditch cooldown (a brief LOS break can't bleed a level), and BLEEDS once
+//     ditched/standing down — but only down by `bleedLevels` (1.5) from where you
+//     ditched, then it plateaus. So escaping cools you fast yet you stay partly hot;
+//     re-spotted too soon snaps back up. (Future: persist `heat` per vehicle + decay
+//     on idle — getHeat/setHeat/heatFloor are the seam.)
+//   • Each level sets a cop CAP + aggression profile; the scene fills toward the cap
+//     on a reinforcement timer (+ one instant dispatch on level-up).
+//   • Disabling a cop is a big heat spike + a longer replacement timer (stubbed hook).
 export class PursuitLevel {
   constructor() {
     this.heat = 0;
-
-    // Heat at which each level BEGINS (index = level; level is the highest threshold
-    // whose heat we've reached). L1 begins at 0. Only 1–2 are live; 3–5 are stubs.
-    this.thresholds = [0, 0, 30 /*, 70, 120, 180 */];
-    this.maxLevel   = 2;
+    this.levelSpan = 45;   // heat per level — L1: 0–45, L2: 45–90, … ("Heat → next level")
+    this.maxLevel  = 2;    // only 1–2 live; raise as L3–5 land
 
     // Per-level config (index = level). cap = max deployed cops; reinforce = seconds
     // between trickle reinforcements up to the cap; cooldown = ditch timer (s);
@@ -29,53 +29,56 @@ export class PursuitLevel {
       // L3–5: fill in when Interceptor / roadblocks / spikes / heli land.
     ];
 
-    this.activeRate = 1.0;  // heat/s gained while actively pursued
-    this.bleedRate  = 2.0;  // heat/s shed once ditched / stood down (escape cools you)
-    this.heatFloor  = 0;    // heat never bleeds below this (future: vehicle-retained heat)
-    this.ramHeat    = 5;    // heat per player→cop contact ("minor collision")
+    this.activeRate  = 1.0;  // heat/s gained while actively pursued
+    this.bleedRate   = 2.0;  // heat/s shed once ditched / standing down
+    this.bleedLevels = 1.5;  // a single withdraw bleeds at most this many levels, then plateaus
+    this.heatFloor   = 0;    // global minimum (future: vehicle-retained heat)
+    this.ramHeat     = 5;    // heat per player→cop contact ("minor collision")
 
-    // [future, when disabling exists] disabling a cop is a big spike + slow replace.
+    // [future] disabling a cop: big spike + slow replacement.
     this.disableHeat      = 15;
     this.disableReinforce = 25;
 
     this._level = 1;
+    this._prevPhase = 'ACTIVE';
+    this._bleedFloor = 0;
   }
 
-  get level() { return this._level; }
-  cfg()       { return this.config[this._level]; }
-  getHeat()   { return this.heat; }
-  setHeat(h)  { this.heat = Math.max(this.heatFloor, h); this._level = this._levelFromHeat(); }
-  addHeat(n)  { this.heat += n; }
+  get level()   { return this._level; }
+  get maxHeat() { return this.maxLevel * this.levelSpan; }
+  cfg()         { return this.config[this._level]; }
+  getHeat()     { return this.heat; }
+  setHeat(h)    { this.heat = Math.max(this.heatFloor, Math.min(this.maxHeat, h)); this._level = this._levelFromHeat(); }
+  addHeat(n)    { this.heat = Math.min(this.maxHeat, this.heat + n); this._level = this._levelFromHeat(); }
+  atMax()       { return this.heat >= this.maxHeat - 0.5; }
 
-  // phase: 'ACTIVE' rises heat, 'HOLD' freezes it (pre-ditch cooldown), 'BLEED' sheds it.
-  // Returns the signed change in derived level this tick (+1 leveled up, -1 bled down).
+  // Progress (0..1) within the current level, for the HUD meter.
+  heatFraction() {
+    const within = this.heat - (this._level - 1) * this.levelSpan;
+    const f = within / this.levelSpan;
+    return f < 0 ? 0 : f > 1 ? 1 : f;
+  }
+
+  // phase: 'ACTIVE' rises, 'HOLD' freezes (pre-ditch cooldown), 'BLEED' sheds toward a
+  // floor set 1.5 levels below the heat at the moment bleeding began. Returns the signed
+  // change in derived level this tick (+1 leveled up, -1 bled down).
   update(phase, dt) {
-    if      (phase === 'ACTIVE') this.heat += this.activeRate * dt;
-    else if (phase === 'BLEED')  this.heat = Math.max(this.heatFloor, this.heat - this.bleedRate * dt);
-    // 'HOLD' leaves heat untouched.
+    if (phase === 'ACTIVE') {
+      this.heat = Math.min(this.maxHeat, this.heat + this.activeRate * dt);
+    } else if (phase === 'BLEED') {
+      if (this._prevPhase !== 'BLEED') {                       // entering the withdraw bleed
+        this._bleedFloor = Math.max(this.heatFloor, this.heat - this.bleedLevels * this.levelSpan);
+      }
+      this.heat = Math.max(this._bleedFloor, this.heat - this.bleedRate * dt);
+    }
+    this._prevPhase = phase;
     const prev = this._level;
     this._level = this._levelFromHeat();
     return this._level - prev;
   }
 
-  atMax() { return this._level >= this.maxLevel; }
-
-  // Progress (0..1) from the current level's heat threshold toward the next level's,
-  // for the HUD meter. Pegged at 1 when already at the max level.
-  heatFraction() {
-    if (this._level >= this.maxLevel) return 1;
-    const lo = this.thresholds[this._level] || 0;
-    const hi = this.thresholds[this._level + 1];
-    const f = (this.heat - lo) / Math.max(1, hi - lo);
-    return f < 0 ? 0 : f > 1 ? 1 : f;
-  }
-
   _levelFromHeat() {
-    let lv = 1;
-    for (let i = 2; i < this.thresholds.length && i <= this.maxLevel; i++) {
-      if (this.heat >= this.thresholds[i]) lv = i;
-    }
-    return lv;
+    return Math.min(this.maxLevel, 1 + Math.floor(this.heat / this.levelSpan));
   }
 
   // [future] call when the player disables a cop: big heat spike, returns the (longer)

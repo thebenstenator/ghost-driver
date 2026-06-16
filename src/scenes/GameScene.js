@@ -101,19 +101,21 @@ export class GameScene extends Phaser.Scene {
                                 // still-"lost" and otherwise re-trigger every few seconds)
     this.respawnMinGain = 350;  // a relocation must be at least this much closer than the cop's
                                 // current distance, or it's not worth doing (skip and wait)
+    this.respawnSpacing = 300;  // a relocation spot must clear other cops by this much, so several
+                                // reinforcements don't all surface on the same road
     // Breadcrumb trails — each cop records its recent path so blind teammates can
     // convoy-follow a known-drivable route (see PursuitDirector._convoyTarget).
     this.trailSpacing = 35;            // px of travel between recorded trail points
     this.trailMax     = 36;            // points kept per cop (~1260px of trail)
     this.searchSpeed = 250;            // cop speed cap while searching (clean corners)
     this.searchDepth = 2;              // STARTING search radius (blocks out from last-known)
-    this.searchMaxDepth = 6;           // search grows out to this many blocks as ground is checked
+    this.searchMaxDepth = 10;          // search grows out to this many blocks as ground is checked
     this.coverageTTL = 6;              // s a searched node stays "covered" before it's worth re-checking
-    this.searchDirBias = 55;           // how strongly the search leans toward the last-known escape
+    this.searchDirBias = 75;           // how strongly the search leans toward the last-known escape
                                        // direction (cops fan across the FORWARD arc, not full circle)
     this.searchDwell = 1.2;            // s after losing the trail that EVERY cop heads to last-known
                                        // before fanning out — a sub-second LOS blip can't spin a cop around
-    this.searchStall = 3;              // s of no progress toward a search node before a cop ABANDONS it
+    this.searchStall = 2;              // s of no progress toward a search node before a cop ABANDONS it
                                        // (can't reach it — wedged in an alley / node behind a wall) and re-picks
     // Shared search-coverage map: time (search clock) each nav node was last SEEN
     // by any cop. Cops paint what they can see and head for the least-covered
@@ -128,7 +130,9 @@ export class GameScene extends Phaser.Scene {
     // Escalation brain (Pursuit Mode only). Heat → level → cop cap; reinforcements
     // trickle in toward the cap on a timer + an instant one each level-up.
     this.pursuitLevel  = this.pursuitMode ? new PursuitLevel() : null;
-    this._reinforceTimer = 0;
+    // Seed the timer to the full interval so the 2nd cop arrives AFTER it, not instantly
+    // (a 0 here dispatched a reinforcement on frame 1 → "started with 2 cops").
+    this._reinforceTimer = this.pursuitLevel ? this.pursuitLevel.cfg().reinforce : 0;
 
     // Spawn the chosen number of cops, approaching from different sides. The player
     // starts at (cx,cy), so each cop faces that point — east faces west, west faces
@@ -184,7 +188,8 @@ export class GameScene extends Phaser.Scene {
     this.uiCamera = this.cameras.add(0, 0, this.scale.width, this.scale.height);
     this.uiCamera.setScroll(0, 0);
     const hud = [this.statusText, this.cooldownText, this.ghostText, this.bustGfx,
-                 this.bustLabel, this.bustedText, this.pausedText, this.heatGfx, this.heatLabel];
+                 this.bustLabel, this.bustedText, this.pausedText, this.heatGfx, this.heatLabel,
+                 this.reinforceText];
     if (this.debugText) hud.push(this.debugText);
     this.cameras.main.ignore(hud);          // world cam skips HUD
     this.uiCamera.ignore(this.worldLayer);  // UI cam skips the world (and its future children)
@@ -414,7 +419,9 @@ export class GameScene extends Phaser.Scene {
   // facing the player with fresh state. Returns false if no valid off-screen spot.
   _tryRespawnCop(cop, px, py) {
     const cur  = Phaser.Math.Distance.Between(cop.sprite.x, cop.sprite.y, px, py);
-    const base = Math.atan2(cop.sprite.y - py, cop.sprite.x - px);
+    // Bias to the bearing the cop came from, but jitter it so several cops respawning
+    // at once don't all snap to the SAME road ("all 3 came out of the same alley").
+    const base = Math.atan2(cop.sprite.y - py, cop.sprite.x - px) + (Math.random() - 0.5) * 0.7;
     const angOffsets = [0, 0.5, -0.5, 1.0, -1.0, 1.6, -1.6, 2.3, -2.3, Math.PI];
     for (const off of angOffsets) {
       const ang = base + off;
@@ -422,10 +429,11 @@ export class GameScene extends Phaser.Scene {
         const tx = Phaser.Math.Clamp(px + Math.cos(ang) * d, 120, WORLD_WIDTH - 120);
         const ty = Phaser.Math.Clamp(py + Math.sin(ang) * d, 120, WORLD_HEIGHT - 120);
         const p  = this.navGrid.pos(this.navGrid.nearestNode(tx, ty));
-        // Must be off-screen AND a real improvement — otherwise warping is pointless
-        // (the "was 1605 -> 1610" no-op). Nearest valid spot wins (we scan d ascending).
+        // Must be off-screen, a real improvement (no "1605 -> 1610" no-op), AND not
+        // right on top of another cop (so reinforcements spread out, not pile up).
         if (Phaser.Math.Distance.Between(p.x, p.y, px, py) < cur - this.respawnMinGain &&
-            this._offCamera(p.x, p.y, this.respawnMargin)) {
+            this._offCamera(p.x, p.y, this.respawnMargin) &&
+            !this.cops.some(o => o !== cop && Phaser.Math.Distance.Between(o.sprite.x, o.sprite.y, p.x, p.y) < this.respawnSpacing)) {
           this._placeCop(cop, p.x, p.y, px, py);
           return true;
         }
@@ -506,6 +514,7 @@ export class GameScene extends Phaser.Scene {
       const p = this.navGrid.pos(this.navGrid.nearestNode(x, y));
       this._placeCop(cop, p.x, p.y, px, py);
     }
+    this._reinforceFlashUntil = this.time.now + 1400;   // HUD flash near the heat bar
     if (this.copLog) console.log(`[t=${(this.time.now / 1000).toFixed(2)}] DISPATCH cop${this.cops.length - 1} (L${this.pursuitLevel.level}, ${this.cops.length} active)`);
   }
 
@@ -537,9 +546,8 @@ export class GameScene extends Phaser.Scene {
     heat.add(P, 'bleedRate',  0, 10, 0.5).name('Bleed/s (ditched)');
     heat.add(P, 'ramHeat',    0, 30, 1).name('Heat per ram');
     heat.add(P, 'heatFloor',  0, 100, 5).name('Heat floor');
-    // heatToL2 is thresholds[2]; bind via a proxy so the array index is editable.
-    const proxy = { heatToL2: P.thresholds[2] };
-    heat.add(proxy, 'heatToL2', 5, 200, 5).name('Heat → L2').onChange(v => { P.thresholds[2] = v; });
+    heat.add(P, 'levelSpan',  10, 120, 5).name('Heat per level');
+    heat.add(P, 'bleedLevels', 0.5, 4, 0.5).name('Bleed depth (levels)');
 
     const l1 = gui.addFolder('Level 1');
     l1.add(P.config[1], 'cap', 1, 8, 1).name('Cop cap');
@@ -551,7 +559,7 @@ export class GameScene extends Phaser.Scene {
     l2.add(P.config[2], 'reinforce', 2, 40, 1).name('Reinforce (s)');
     l2.add(P.config[2], 'cooldown', 5, 60, 1).name('Cooldown (s)').onChange(() => this._applyLevelTuning());
 
-    this._persistPanel(gui, 'gd_pursuitLevel1');
+    this._persistPanel(gui, 'gd_pursuitLevel2'); // bumped: levelSpan/bleedLevels replace heatToL2
 
     gui.domElement.style.position = 'fixed';
     gui.domElement.style.top  = '8px';
@@ -681,6 +689,11 @@ export class GameScene extends Phaser.Scene {
       fontFamily: 'monospace', fontSize: '11px', fontStyle: 'bold', color: '#c8c8d4',
     }).setOrigin(1, 0.5).setScrollFactor(0).setDepth(101).setAlpha(0);
 
+    // "Reinforcements incoming" flash, shown beside the heat bar on each dispatch.
+    this.reinforceText = this.add.text(width / 2, 62, '⚠ REINFORCEMENTS INCOMING', {
+      fontFamily: 'monospace', fontSize: '12px', fontStyle: 'bold', color: '#ff5a1a',
+    }).setOrigin(0.5, 0.5).setScrollFactor(0).setDepth(101).setAlpha(0);
+
     // Large cooldown timer, shown only during the cooldown phase (below the heat bar)
     this.cooldownText = this.add.text(width / 2, 64, '', {
       fontFamily: 'monospace',
@@ -747,25 +760,45 @@ export class GameScene extends Phaser.Scene {
     this.tweens.add({ targets: this.ghostText, alpha: 0, scale: 1.4, duration: 1500, ease: 'Cubic.easeOut' });
   }
 
-  // Pursuit-Mode heat meter: thin bar under the status showing progress toward the next
-  // level (pegged + "MAX" at the top level). Colour ramps with level. Hidden otherwise.
-  _drawHeatBar() {
+  // Per-level heat-bar fill colours: yellow (L1) → deep red (L5).
+  static HEAT_COLORS = [0xffd23f, 0xff8c1a, 0xff5a1a, 0xff3b3b, 0x8b0000];
+
+  // Pursuit-Mode heat meter: thin bar under the status. Fill colour deepens with level
+  // (yellow→deep red); turns BLUE while heat is paused (pre-ditch cooldown / lost LOS)
+  // or bleeding down during withdraw. Transparent track. Flashes "REINFORCEMENTS
+  // INCOMING" on each dispatch. `state` selects the colour phase.
+  _drawHeatBar(state) {
     const g = this.heatGfx;
     g.clear();
-    if (!this.pursuitLevel || !this.cops.length) { this.heatLabel.setAlpha(0); return; }
+    if (!this.pursuitLevel || !this.cops.length) {
+      this.heatLabel.setAlpha(0); this.reinforceText.setAlpha(0); return;
+    }
 
     const { width } = this.scale;
     const w = 200, h = 9, x = (width - w) / 2, y = 46;
-    const lv = this.pursuitLevel.level;
-    const frac = this.pursuitLevel.heatFraction();
-    const col = lv >= 3 ? 0xff3b3b : lv === 2 ? 0xff8c1a : 0xffd23f;
+    const P = this.pursuitLevel;
+    const frac = P.heatFraction();
+    const rising = state === PursuitState.ACTIVE;
+    const lvCol = GameScene.HEAT_COLORS[Math.min(P.level, 5) - 1];
+    const col = rising ? lvCol : 0x4a90ff;   // blue while paused / bleeding
 
-    g.fillStyle(0x000000, 0.5); g.fillRect(x - 2, y - 2, w + 4, h + 4);
-    g.fillStyle(0x2a2a36, 1);   g.fillRect(x, y, w, h);
-    g.fillStyle(col, 0.95);     g.fillRect(x, y, w * frac, h);
-    g.lineStyle(1, 0xffffff, 0.25); g.strokeRect(x, y, w, h);
+    // Transparent track — just a thin border so empty reads as background.
+    g.lineStyle(1, 0xffffff, 0.22); g.strokeRect(x, y, w, h);
+    g.fillStyle(col, 0.95); g.fillRect(x, y, w * frac, h);
 
-    this.heatLabel.setText(this.pursuitLevel.atMax() ? 'HEAT MAX' : 'HEAT')
+    // Reinforcement flash: white pulse over the fill + the warning label, fading out.
+    const flashT = (this._reinforceFlashUntil || 0) - this.time.now;
+    if (flashT > 0) {
+      const a = Math.min(flashT / 1400, 1);
+      g.fillStyle(0xffffff, a * 0.6); g.fillRect(x, y, w * frac, h);
+      this.reinforceText.setPosition(width / 2, y + 18).setColor('#ff5a1a').setAlpha(a);
+    } else {
+      this.reinforceText.setAlpha(0);
+    }
+
+    const label = !rising ? (state === PursuitState.SEARCH && !this.pursuit.ditched ? 'HOLD' : 'COOLING')
+                : P.atMax() ? 'MAX HEAT' : 'HEAT';
+    this.heatLabel.setText(label)
       .setPosition(x - 8, y + h / 2).setColor(`#${col.toString(16).padStart(6, '0')}`).setAlpha(0.9);
   }
 
@@ -1259,7 +1292,7 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
       return;
     }
     this._drawBustBar();
-    this._drawHeatBar();
+    this._drawHeatBar(state);
 
     // Dev overlay: LOS lines, steering targets, per-cop labels, search coverage.
     if (this.devMode) this._drawAiDebug(state, px, py);
