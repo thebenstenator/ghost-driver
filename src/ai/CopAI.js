@@ -45,6 +45,11 @@ export class CopAI {
                                  // toward where you were this long ago, not where you are
                                  // now. 0 = perfect homing (mirrors you); higher = a sharp
                                  // juke makes it overshoot, so close-range homing is beatable.
+    this.turnBrakeAngle   = 0.9; // rad (~52°) — steering error past which the cop slows to
+                                 // tighten its turn radius (stops it washing into walls on a
+                                 // hard redirect, e.g. when you round a corner). Below this,
+                                 // ordinary chase corrections aren't slowed.
+    this.turnBrakeSpeed   = 160; // px/s — speed cap at a 90°+ turn (tight enough to stay on road)
     this.losGrace         = 0.5; // s — after the cop's OWN sight line breaks, keep beelining
                                  // straight at the player this long before falling back to the
                                  // road path. A momentary clip (you round a corner) otherwise
@@ -192,6 +197,19 @@ export class CopAI {
     const angleErr = Phaser.Math.Angle.Wrap(desired - cop.facing);
     if (angleErr > this.steerDeadzone)       controls.right = true;
     else if (angleErr < -this.steerDeadzone) controls.left  = true;
+
+    // --- Turn-brake: slow down to actually MAKE a sharp turn ---
+    // At speed the turn radius is wider than a street, so when the aim point swings
+    // hard (you round a corner and the cop's target snaps to a new angle) a full-speed
+    // cop washes wide into the building. Cap the speed by how hard it needs to turn so
+    // the radius tightens enough to stay on the road. Only bites past turnBrakeAngle,
+    // so ordinary chase corrections are unaffected. (Beeline has no path corner-braking
+    // otherwise — this is what was missing.)
+    const turnMag = Math.abs(angleErr);
+    if (turnMag > this.turnBrakeAngle) {
+      const tf = Phaser.Math.Clamp((turnMag - this.turnBrakeAngle) / (Math.PI / 2 - this.turnBrakeAngle), 0, 1);
+      limit = Math.min(limit, Phaser.Math.Linear(this.maxApproachSpeed, this.turnBrakeSpeed, tf));
+    }
 
     // --- Throttle toward desiredSpeed ---
     let mode;
