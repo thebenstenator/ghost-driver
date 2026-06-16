@@ -64,11 +64,16 @@ export class GameScene extends Phaser.Scene {
     this.awareGrace = 0.6;             // s — stay aware this long after last perceiving (memory)
     this.sepRadius  = 80;              // separation: how close before cops repel
     this.sepStrength = 150;            // separation: aim push strength
-    // Rubber band: a cop farther than `rubberBandDist` from the player gets up to
-    // `rubberBandBoost` px/s added to its top speed so stragglers can rejoin.
-    // Purely distance-gated. Default boost 0 = OFF.
-    this.rubberBandDist  = 800;
-    this.rubberBandBoost = 0;
+    // Tier-1 rejoin band: a cop that falls behind blends its HANDLING toward a near-
+    // kinematic profile (not just speed) so it stops washing into walls and rejoins
+    // cleanly. Blend ramps from rbStart (no change) to rbFull (max). Invisible in
+    // practice — far cops are off-screen / screen-edge; you only feel that they
+    // rejoin. This is the kinematic feel, used where it helps and can't be seen.
+    this.rbStart      = 700;  // px from player where the blend starts
+    this.rbFull       = 1500; // px from player where the blend is maxed
+    this.rbGrip       = 0.9;  // grip (low & high) at full blend — near on-rails
+    this.rbTurnMult   = 1.6;  // turn-rate multiplier at full blend
+    this.rbSpeedBoost = 90;   // px/s added to top speed at full blend
     // Breadcrumb trails — each cop records its recent path so blind teammates can
     // convoy-follow a known-drivable route (see PursuitDirector._convoyTarget).
     this.trailSpacing = 35;            // px of travel between recorded trail points
@@ -293,6 +298,22 @@ export class GameScene extends Phaser.Scene {
       t.push({ x: cop.sprite.x, y: cop.sprite.y });
       if (t.length > this.trailMax) t.shift();
     }
+  }
+
+  // Tier-1 rejoin band: lerp a cop's live handling from its base "in the fight"
+  // profile toward a near-kinematic one as it falls behind, so far cops stop washing
+  // into walls and rejoin cleanly. Writes the live stat fields each frame (Vehicle
+  // reads them directly); the base copies on the cop are what we blend FROM, so the
+  // tuning panel still owns the baseline.
+  _applyRejoinBand(cop, dist) {
+    const f = Phaser.Math.Clamp((dist - this.rbStart) / Math.max(1, this.rbFull - this.rbStart), 0, 1);
+    cop.maxSpeed     = cop.baseMaxSpeed + this.rbSpeedBoost * f;
+    cop.gripLow      = Phaser.Math.Linear(cop.baseGripLow,  this.rbGrip, f);
+    cop.gripHigh     = Phaser.Math.Linear(cop.baseGripHigh, this.rbGrip, f);
+    const turnMult   = 1 + (this.rbTurnMult - 1) * f;
+    cop.turnSpeedLow = cop.baseTurnSpeedLow * turnMult;
+    cop.turnSpeed    = cop.baseTurnSpeed * turnMult;
+    cop.rejoinFactor = f; // for telemetry/label
   }
 
   _buildWorld() {
@@ -641,13 +662,14 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
     // Single source of truth for the panel; changes are pushed to every cop.
     this.copTuning = {
       maxSpeed: c.baseMaxSpeed, acceleration: c.acceleration,
-      gripLow: c.gripLow, gripHigh: c.gripHigh, gripSpeedRef: c.gripSpeedRef,
-      turnSpeedLow: c.turnSpeedLow, turnSpeed: c.turnSpeed, minSteerFactor: c.minSteerFactor,
+      gripLow: c.baseGripLow, gripHigh: c.baseGripHigh, gripSpeedRef: c.gripSpeedRef,
+      turnSpeedLow: c.baseTurnSpeedLow, turnSpeed: c.baseTurnSpeed, minSteerFactor: c.minSteerFactor,
       cornerMinSpeed: a.cornerMinSpeed, maxApproachSpeed: a.baseApproach,
       brakeDecel: a.brakeDecel, arriveRadius: a.arriveRadius,
       senseDist: a.senseDist, directRange: a.directRange, chaseRange: a.chaseRange, reactionTime: a.reactionTime,
       sepRadius: this.sepRadius, sepStrength: this.sepStrength,
-      rubberBandDist: this.rubberBandDist, rubberBandBoost: this.rubberBandBoost,
+      rbStart: this.rbStart, rbFull: this.rbFull, rbGrip: this.rbGrip,
+      rbTurnMult: this.rbTurnMult, rbSpeedBoost: this.rbSpeedBoost,
       searchSpeed: this.searchSpeed, searchDepth: this.searchDepth, searchMaxDepth: this.searchMaxDepth,
       coverageTTL: this.coverageTTL, searchDirBias: this.searchDirBias,
       searchDwell: this.searchDwell, searchStall: this.searchStall,
@@ -688,8 +710,6 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
     pack.add(this.copTuning, 'boxEngageRange', 100, 1200, 20).name('Box: engage range').onChange(apply);
     pack.add(this.copTuning, 'boxAhead',      0,   300, 5).name('Box: front cut-ahead').onChange(apply);
     pack.add(this.copTuning, 'boxBehind',     0,   300, 5).name('Box: rear gap').onChange(apply);
-    pack.add(this.copTuning, 'rubberBandDist',  100, 2500, 50).name('Rubberband distance').onChange(apply);
-    pack.add(this.copTuning, 'rubberBandBoost', 0,   400,  10).name('Rubberband boost').onChange(apply);
     pack.add(this.copTuning, 'sepRadius',     0,   250, 5).name('Separation radius').onChange(apply);
     pack.add(this.copTuning, 'sepStrength',   0,   400, 5).name('Separation strength').onChange(apply);
     pack.add(this.copTuning, 'searchSpeed',   80,  600, 10).name('Search speed cap').onChange(apply);
@@ -704,6 +724,13 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
     convoy.add(this.copTuning, 'convoyEnabled').name('Convoy following').onChange(apply);
     convoy.add(this.copTuning, 'followGap',   30,  300, 10).name('Follow gap behind leader').onChange(apply);
 
+    const rejoin = gui.addFolder('Rejoin (far cops)');
+    rejoin.add(this.copTuning, 'rbStart',      0,  2500, 50).name('Blend start (px)').onChange(apply);
+    rejoin.add(this.copTuning, 'rbFull',     100, 3500, 50).name('Blend full (px)').onChange(apply);
+    rejoin.add(this.copTuning, 'rbGrip',     0.1,  1.0, 0.05).name('Grip at full').onChange(apply);
+    rejoin.add(this.copTuning, 'rbTurnMult', 1.0,  3.0, 0.1).name('Turn × at full').onChange(apply);
+    rejoin.add(this.copTuning, 'rbSpeedBoost', 0,  400, 10).name('Speed boost at full').onChange(apply);
+
     gui.add({ copyStats: () => {
       const t = this.copTuning;
       console.log(`// --- Cop handling (CopCar stats) ---
@@ -716,14 +743,15 @@ arriveRadius: ${t.arriveRadius}, senseDist: ${t.senseDist}, directRange: ${t.dir
 // --- Formation + convoy (PursuitDirector) ---
 boxTriggerSpeed: ${t.boxTriggerSpeed}, boxEngageRange: ${t.boxEngageRange}, boxAhead: ${t.boxAhead}, boxBehind: ${t.boxBehind},
 convoyEnabled: ${t.convoyEnabled}, followGap: ${t.followGap},
-// --- Separation + rubber band + search (GameScene) ---
-sepRadius: ${t.sepRadius}, sepStrength: ${t.sepStrength}, rubberBandDist: ${t.rubberBandDist}, rubberBandBoost: ${t.rubberBandBoost},
+// --- Separation + rejoin band + search (GameScene) ---
+sepRadius: ${t.sepRadius}, sepStrength: ${t.sepStrength},
+rbStart: ${t.rbStart}, rbFull: ${t.rbFull}, rbGrip: ${t.rbGrip}, rbTurnMult: ${t.rbTurnMult}, rbSpeedBoost: ${t.rbSpeedBoost},
 searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${t.searchMaxDepth}, coverageTTL: ${t.coverageTTL}, searchDirBias: ${t.searchDirBias}, searchDwell: ${t.searchDwell}, searchStall: ${t.searchStall}`);
     } }, 'copyStats').name('Copy Cop Stats → Console');
 
-    // Persist across refresh. Key bumped to v12: roles replaced by event-driven box
-    // (boxTriggerSpeed / boxEngageRange / boxAhead / boxBehind), flank dials removed.
-    this._persistPanel(gui, 'gd_copTuning12');
+    // Persist across refresh. Key bumped to v13: Tier-1 rejoin band replaces the old
+    // speed-only rubber band (rbStart/rbFull/rbGrip/rbTurnMult/rbSpeedBoost).
+    this._persistPanel(gui, 'gd_copTuning13');
 
     gui.domElement.style.position = 'fixed';
     gui.domElement.style.top  = '8px';
@@ -752,9 +780,13 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
   _applyCopTuning() {
     const t = this.copTuning;
     for (const cop of this.cops) {
+      // Write BOTH the live stat and its base copy — the Tier-1 rejoin blend lerps
+      // the live fields each frame from these bases, so the panel must own the bases.
       cop.baseMaxSpeed = t.maxSpeed; cop.maxSpeed = t.maxSpeed; cop.acceleration = t.acceleration;
-      cop.gripLow = t.gripLow; cop.gripHigh = t.gripHigh; cop.gripSpeedRef = t.gripSpeedRef;
-      cop.turnSpeedLow = t.turnSpeedLow; cop.turnSpeed = t.turnSpeed; cop.minSteerFactor = t.minSteerFactor;
+      cop.baseGripLow = t.gripLow; cop.gripLow = t.gripLow;
+      cop.baseGripHigh = t.gripHigh; cop.gripHigh = t.gripHigh; cop.gripSpeedRef = t.gripSpeedRef;
+      cop.baseTurnSpeedLow = t.turnSpeedLow; cop.turnSpeedLow = t.turnSpeedLow;
+      cop.baseTurnSpeed = t.turnSpeed; cop.turnSpeed = t.turnSpeed; cop.minSteerFactor = t.minSteerFactor;
       const a = cop.ai;
       a.cornerMinSpeed = t.cornerMinSpeed; a.baseApproach = t.maxApproachSpeed;
       a.brakeDecel = t.brakeDecel; a.arriveRadius = t.arriveRadius;
@@ -762,8 +794,11 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
     }
     this.sepRadius = t.sepRadius;
     this.sepStrength = t.sepStrength;
-    this.rubberBandDist = t.rubberBandDist;
-    this.rubberBandBoost = t.rubberBandBoost;
+    this.rbStart = t.rbStart;
+    this.rbFull = t.rbFull;
+    this.rbGrip = t.rbGrip;
+    this.rbTurnMult = t.rbTurnMult;
+    this.rbSpeedBoost = t.rbSpeedBoost;
     this.searchSpeed = t.searchSpeed;
     this.searchDepth = t.searchDepth;
     this.searchMaxDepth = t.searchMaxDepth;
@@ -895,9 +930,8 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
       // Full speed while chasing OR hunting; capped only for sustained search / withdrawal.
       const slow = (state === PursuitState.SEARCH && !hunting) || state === PursuitState.RETURNING;
       cop.ai.speedCap = slow ? this.searchSpeed : Infinity;
-      // Rubber band: stragglers far from the player get a flat top-speed boost.
-      const dp = Phaser.Math.Distance.Between(cop.sprite.x, cop.sprite.y, px, py);
-      cop.maxSpeed = cop.baseMaxSpeed + (dp > this.rubberBandDist ? this.rubberBandBoost : 0);
+      // Tier-1 rejoin: blend handling toward near-kinematic the farther this cop is.
+      this._applyRejoinBand(cop, Phaser.Math.Distance.Between(cop.sprite.x, cop.sprite.y, px, py));
       cop.update(delta, target);
     }
 

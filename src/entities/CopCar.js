@@ -48,7 +48,16 @@ export class CopCar extends Vehicle {
 
     this.ai = new CopAI(navGrid, rects);
     this.aiTarget = { x, y }; // current steering target, for debug draw
-    this.baseMaxSpeed = this.maxSpeed; // catch-up rubber-band raises maxSpeed above this when far
+    // Base handling — the "in the fight" profile. When a cop falls far behind, the
+    // scene's Tier-1 rejoin blend lerps the LIVE stats from these toward a near-
+    // kinematic profile (high grip, sharper turns, small speed boost) so it stops
+    // washing into walls and rejoins cleanly. The blend writes the live fields each
+    // frame, so these untouched copies are what it blends FROM.
+    this.baseMaxSpeed     = this.maxSpeed;
+    this.baseGripLow      = this.gripLow;
+    this.baseGripHigh     = this.gripHigh;
+    this.baseTurnSpeedLow = this.turnSpeedLow;
+    this.baseTurnSpeed    = this.turnSpeed;
   }
 
   // target: an object with .x / .y in world space (the player, or a last-known
