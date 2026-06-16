@@ -48,10 +48,17 @@ export class GameScene extends Phaser.Scene {
     this.physics.world.setBounds(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
     this.cameras.main.setBounds(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
 
+    // Everything in the WORLD goes in this layer; the HUD stays on the scene root. A
+    // second UI camera (fixed zoom) renders only the root, and the main camera renders
+    // only the world layer — so the HUD is immune to the speed-based zoom. (setScrollFactor
+    // pins against scroll but NOT zoom.) UI camera is wired at the end of create().
+    this.worldLayer = this.add.layer();
+
     this._buildWorld();
 
     // Player starts at the center road intersection
     this.car = new PlayerCar(this, WORLD_WIDTH / 2, WORLD_HEIGHT / 2);
+    this.worldLayer.add(this.car.sprite);
 
     this.physics.add.collider(this.car.sprite, this.walls);
 
@@ -153,6 +160,7 @@ export class GameScene extends Phaser.Scene {
 
     // Debug graphics for AI steering targets + line of sight (dev only)
     this.aiDebug = this.devMode ? this.add.graphics().setDepth(50) : null;
+    if (this.aiDebug) this.worldLayer.add(this.aiDebug);
 
     this._setupHud();
 
@@ -167,6 +175,19 @@ export class GameScene extends Phaser.Scene {
       this._setupCopTunePanel();
       if (this.pursuitLevel) this._setupPursuitPanel();
     }
+
+    // --- HUD camera ---------------------------------------------------------------
+    // A second camera at fixed zoom renders ONLY the HUD (scene-root objects); the main
+    // camera renders ONLY the world layer. This keeps the HUD a constant on-screen size
+    // regardless of the speed zoom-out (setScrollFactor doesn't counter zoom). Built
+    // after all HUD objects exist (incl. the dev debugText).
+    this.uiCamera = this.cameras.add(0, 0, this.scale.width, this.scale.height);
+    this.uiCamera.setScroll(0, 0);
+    const hud = [this.statusText, this.cooldownText, this.ghostText, this.bustGfx,
+                 this.bustLabel, this.bustedText, this.pausedText, this.heatGfx, this.heatLabel];
+    if (this.debugText) hud.push(this.debugText);
+    this.cameras.main.ignore(hud);          // world cam skips HUD
+    this.uiCamera.ignore(this.worldLayer);  // UI cam skips the world (and its future children)
 
     // Tear down the DOM tuning panels when the scene restarts / returns to menu,
     // otherwise they stack up duplicates on every R / menu cycle.
@@ -183,12 +204,14 @@ export class GameScene extends Phaser.Scene {
 
   _spawnCop(x, y) {
     const cop = new CopCar(this, x, y, this.navGrid, this.losRects);
+    this.worldLayer.add(cop.sprite);   // world layer → rendered by main cam, not the UI cam
     cop.searchSlot = this.cops.length; // 0,1,2… — its angular sector when searching
     // Floating debug label so each cop's AI state is visible in the world (dev only)
     cop.modeLabel = this.devMode ? this.add.text(x, y, '', {
       fontFamily: 'monospace', fontSize: '11px', color: '#ffffff',
       backgroundColor: '#000000aa', padding: { x: 3, y: 1 },
     }).setOrigin(0.5, 1).setDepth(60) : null;
+    if (cop.modeLabel) this.worldLayer.add(cop.modeLabel);
     this.physics.add.collider(cop.sprite, this.walls);
     // Player↔cop contact: bump heat in Pursuit Mode (the "minor collision" escalator),
     // throttled so a sustained scrape doesn't spike it every frame.
@@ -538,11 +561,11 @@ export class GameScene extends Phaser.Scene {
 
   _buildWorld() {
     // Asphalt ground
-    this.add.rectangle(
+    this.worldLayer.add(this.add.rectangle(
       WORLD_WIDTH / 2, WORLD_HEIGHT / 2,
       WORLD_WIDTH, WORLD_HEIGHT,
       0x1a1a24
-    ).setDepth(0);
+    ).setDepth(0));
 
     // 1×1 white pixel used as the physics sprite for static bodies
     const px = this.add.graphics();
@@ -559,9 +582,9 @@ export class GameScene extends Phaser.Scene {
       const cy = y + h / 2;
 
       // Visual building
-      this.add.rectangle(cx, cy, w, h, 0x2c2c3e)
+      this.worldLayer.add(this.add.rectangle(cx, cy, w, h, 0x2c2c3e)
         .setStrokeStyle(1, 0x40405a)
-        .setDepth(2);
+        .setDepth(2));
 
       // Physics body — scale the 1px texture to building size
       const body = this.walls.create(cx, cy, '_px');
@@ -577,6 +600,7 @@ export class GameScene extends Phaser.Scene {
 
   _drawRoadMarkings() {
     const g = this.add.graphics().setDepth(1);
+    this.worldLayer.add(g);
     g.lineStyle(2, 0x3a3a4a, 0.6);
 
     // One centre-line per road gap between columns (vertical roads)
@@ -1202,8 +1226,19 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
     // relocated off-screen near the player instead of grinding all the way back.
     if (state === PursuitState.ACTIVE) this._respawnLostCops(px, py, dt);
 
-    // Once every cop has reached the station, the area is fully clear
+    // Once every cop has reached the station, the area is fully clear. A cop wedged in
+    // a tight alley on the way home (the K-turn can't always escape) would otherwise
+    // strand the pursuit in RETURNING forever — so a returning cop that's stuck for a
+    // beat just warps home. The chase is over and it's off-screen, so it's invisible.
     if (state === PursuitState.RETURNING) {
+      for (const cop of this.cops) {
+        cop._returnStuckT = cop.getSpeed() < 30 ? (cop._returnStuckT || 0) + dt : 0;
+        if (cop._returnStuckT > 3 &&
+            Phaser.Math.Distance.Between(cop.sprite.x, cop.sprite.y, this.station.x, this.station.y) > 90) {
+          this._placeCop(cop, this.station.x, this.station.y, px, py);
+          cop._returnStuckT = 0;
+        }
+      }
       const allHome = this.cops.every(c =>
         Phaser.Math.Distance.Between(c.sprite.x, c.sprite.y, this.station.x, this.station.y) < 90
       );
