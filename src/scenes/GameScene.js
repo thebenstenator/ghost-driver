@@ -74,6 +74,17 @@ export class GameScene extends Phaser.Scene {
     this.rbGrip       = 0.9;  // grip (low & high) at full blend — near on-rails
     this.rbTurnMult   = 1.6;  // turn-rate multiplier at full blend
     this.rbSpeedBoost = 90;   // px/s added to top speed at full blend
+    // Tier-2 rejoin (respawn): a cop that's far AND not chasing AND off-screen for a
+    // sustained beat is relocated off-screen near the player rather than grinding the
+    // whole way back. No handling tune can close a map-width gap; this does, and it
+    // sidesteps the fragile long-haul nav entirely (the genre-standard "dispatch a
+    // fresh unit"). Hard off-camera gate on BOTH ends so there's never a visible pop-in.
+    this.respawnEnabled = true;
+    this.respawnDist    = 1400; // px from player beyond which a non-chasing cop is "lost"
+    this.respawnTime    = 4.0;  // s a cop must stay lost+off-screen before it's relocated
+    this.respawnBandMin = 1000; // nearest it will reappear from the player
+    this.respawnBandMax = 1800; // farthest it will look for an off-screen spot
+    this.respawnMargin  = 110;  // px a relocation spot must clear the camera view by
     // Breadcrumb trails — each cop records its recent path so blind teammates can
     // convoy-follow a known-drivable route (see PursuitDirector._convoyTarget).
     this.trailSpacing = 35;            // px of travel between recorded trail points
@@ -314,6 +325,70 @@ export class GameScene extends Phaser.Scene {
     cop.turnSpeedLow = cop.baseTurnSpeedLow * turnMult;
     cop.turnSpeed    = cop.baseTurnSpeed * turnMult;
     cop.rejoinFactor = f; // for telemetry/label
+  }
+
+  // Is a world point clear of the camera view by `margin` px (i.e. safely off-screen)?
+  _offCamera(x, y, margin = 0) {
+    const v = this.cameras.main.worldView;
+    return x < v.x - margin || x > v.right + margin || y < v.y - margin || y > v.bottom + margin;
+  }
+
+  // Tier-2: relocate cops that have been lost (far + not chasing + off-screen) for a
+  // sustained beat. Per cop, accumulate "lost" time; once over the threshold and the
+  // cop itself is off-screen, try to warp it to a fresh off-screen road node near the
+  // player (biased to the side it was coming from). Nothing happens if no off-screen
+  // spot is available (e.g. player in the open) — it just waits, so no pop-in.
+  _respawnLostCops(px, py, dt) {
+    if (!this.respawnEnabled) return;
+    for (const cop of this.cops) {
+      const dp = Phaser.Math.Distance.Between(cop.sprite.x, cop.sprite.y, px, py);
+      const lost = dp > this.respawnDist && cop.pursuitMode !== 'DIRECT';
+      cop._lostT = lost ? (cop._lostT || 0) + dt : 0;
+      if (cop._lostT > this.respawnTime &&
+          this._offCamera(cop.sprite.x, cop.sprite.y, this.respawnMargin) &&
+          this._tryRespawnCop(cop, px, py)) {
+        cop._lostT = 0;
+        if (this.copLog) {
+          const ndp = Phaser.Math.Distance.Between(cop.sprite.x, cop.sprite.y, px, py);
+          console.log(`[t=${(this.time.now / 1000).toFixed(2)}] RESPAWN cop${this.cops.indexOf(cop)} (was ${Math.round(dp)}px) -> ${Math.round(ndp)}px`);
+        }
+      }
+    }
+  }
+
+  // Find an off-screen road node near the player, biased to the bearing the cop is
+  // currently coming from (so it re-enters from the same side), and drop the cop there
+  // facing the player with fresh state. Returns false if no valid off-screen spot.
+  _tryRespawnCop(cop, px, py) {
+    const base = Math.atan2(cop.sprite.y - py, cop.sprite.x - px);
+    const angOffsets = [0, 0.5, -0.5, 1.0, -1.0, 1.6, -1.6, 2.3, -2.3, Math.PI];
+    for (const off of angOffsets) {
+      const ang = base + off;
+      for (let d = this.respawnBandMin; d <= this.respawnBandMax; d += 200) {
+        const tx = Phaser.Math.Clamp(px + Math.cos(ang) * d, 120, WORLD_WIDTH - 120);
+        const ty = Phaser.Math.Clamp(py + Math.sin(ang) * d, 120, WORLD_HEIGHT - 120);
+        const p  = this.navGrid.pos(this.navGrid.nearestNode(tx, ty));
+        if (this._offCamera(p.x, p.y, this.respawnMargin)) {
+          this._placeCop(cop, p.x, p.y, px, py);
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  // Hard-reset a cop at (x,y) facing the player, clearing all transient chase state.
+  _placeCop(cop, x, y, px, py) {
+    cop.sprite.body.reset(x, y);     // moves the body + zeroes its velocity
+    cop.vx = 0; cop.vy = 0;
+    cop.facing = Math.atan2(py - y, px - x);
+    cop.sprite.setRotation(cop.facing + Math.PI / 2);
+    cop._trail = [];
+    cop.pursuitMode = 'LONE'; cop.convoyLeader = null;
+    cop._blindT = 0; cop._modeTimer = 0; cop._searchNode = null;
+    const a = cop.ai;
+    a._unstuck = null; a._stuckTime = 0; a._losTimer = 0;
+    a._path = null; a._goalNode = -1; a._aimHist = [];
   }
 
   _buildWorld() {
@@ -670,6 +745,7 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
       sepRadius: this.sepRadius, sepStrength: this.sepStrength,
       rbStart: this.rbStart, rbFull: this.rbFull, rbGrip: this.rbGrip,
       rbTurnMult: this.rbTurnMult, rbSpeedBoost: this.rbSpeedBoost,
+      respawnEnabled: this.respawnEnabled, respawnDist: this.respawnDist, respawnTime: this.respawnTime,
       searchSpeed: this.searchSpeed, searchDepth: this.searchDepth, searchMaxDepth: this.searchMaxDepth,
       coverageTTL: this.coverageTTL, searchDirBias: this.searchDirBias,
       searchDwell: this.searchDwell, searchStall: this.searchStall,
@@ -731,6 +807,11 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
     rejoin.add(this.copTuning, 'rbTurnMult', 1.0,  3.0, 0.1).name('Turn × at full').onChange(apply);
     rejoin.add(this.copTuning, 'rbSpeedBoost', 0,  400, 10).name('Speed boost at full').onChange(apply);
 
+    const respawn = gui.addFolder('Respawn (lost cops)');
+    respawn.add(this.copTuning, 'respawnEnabled').name('Respawn lost cops').onChange(apply);
+    respawn.add(this.copTuning, 'respawnDist', 500, 3000, 50).name('Lost distance (px)').onChange(apply);
+    respawn.add(this.copTuning, 'respawnTime',   1,   12, 0.5).name('Lost time (s)').onChange(apply);
+
     gui.add({ copyStats: () => {
       const t = this.copTuning;
       console.log(`// --- Cop handling (CopCar stats) ---
@@ -746,12 +827,13 @@ convoyEnabled: ${t.convoyEnabled}, followGap: ${t.followGap},
 // --- Separation + rejoin band + search (GameScene) ---
 sepRadius: ${t.sepRadius}, sepStrength: ${t.sepStrength},
 rbStart: ${t.rbStart}, rbFull: ${t.rbFull}, rbGrip: ${t.rbGrip}, rbTurnMult: ${t.rbTurnMult}, rbSpeedBoost: ${t.rbSpeedBoost},
+respawnEnabled: ${t.respawnEnabled}, respawnDist: ${t.respawnDist}, respawnTime: ${t.respawnTime},
 searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${t.searchMaxDepth}, coverageTTL: ${t.coverageTTL}, searchDirBias: ${t.searchDirBias}, searchDwell: ${t.searchDwell}, searchStall: ${t.searchStall}`);
     } }, 'copyStats').name('Copy Cop Stats → Console');
 
-    // Persist across refresh. Key bumped to v13: Tier-1 rejoin band replaces the old
-    // speed-only rubber band (rbStart/rbFull/rbGrip/rbTurnMult/rbSpeedBoost).
-    this._persistPanel(gui, 'gd_copTuning13');
+    // Persist across refresh. Key bumped to v14: Tier-2 respawn dials added
+    // (respawnEnabled / respawnDist / respawnTime).
+    this._persistPanel(gui, 'gd_copTuning14');
 
     gui.domElement.style.position = 'fixed';
     gui.domElement.style.top  = '8px';
@@ -799,6 +881,9 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
     this.rbGrip = t.rbGrip;
     this.rbTurnMult = t.rbTurnMult;
     this.rbSpeedBoost = t.rbSpeedBoost;
+    this.respawnEnabled = t.respawnEnabled;
+    this.respawnDist = t.respawnDist;
+    this.respawnTime = t.respawnTime;
     this.searchSpeed = t.searchSpeed;
     this.searchDepth = t.searchDepth;
     this.searchMaxDepth = t.searchMaxDepth;
@@ -934,6 +1019,10 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
       this._applyRejoinBand(cop, Phaser.Math.Distance.Between(cop.sprite.x, cop.sprite.y, px, py));
       cop.update(delta, target);
     }
+
+    // Tier-2 rejoin: a cop that's been far + not chasing + off-screen for a while is
+    // relocated off-screen near the player instead of grinding all the way back.
+    if (state === PursuitState.ACTIVE) this._respawnLostCops(px, py, dt);
 
     // Once every cop has reached the station, the area is fully clear
     if (state === PursuitState.RETURNING) {
