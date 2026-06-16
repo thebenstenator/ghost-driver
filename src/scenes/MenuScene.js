@@ -20,7 +20,22 @@ export class MenuScene extends Phaser.Scene {
       fontFamily: 'monospace', fontSize: '18px', color: '#9aa0b5',
     }).setOrigin(0.5);
 
-    // --- Cop-count options (uniform-width buttons) ---
+    // --- Pursuit Mode (the escalating heat/level chase) ---
+    const pm = this.add.text(cx, 196, '▶ PURSUIT MODE', {
+      fontFamily: 'monospace', fontSize: '28px', fontStyle: 'bold', color: '#0a0a0f',
+      backgroundColor: '#39ff14', align: 'center', fixedWidth: 300, padding: { x: 0, y: 12 },
+    }).setOrigin(0.5).setInteractive({ useHandCursor: true });
+    pm.on('pointerover', () => pm.setBackgroundColor('#5fff4a'));
+    pm.on('pointerout',  () => pm.setBackgroundColor('#39ff14'));
+    pm.on('pointerdown', () => this._start(1, true));
+    this.add.text(cx, 240, 'starts at 1 cop — escalates with heat', {
+      fontFamily: 'monospace', fontSize: '13px', color: '#6a6a7a',
+    }).setOrigin(0.5);
+
+    // --- Legacy free-test: fixed cop count, no escalation ---
+    this.add.text(cx, 286, '— or free-test a fixed cop count —', {
+      fontFamily: 'monospace', fontSize: '13px', color: '#6a6a7a',
+    }).setOrigin(0.5);
     const options = [
       { label: 'Drive alone', n: 0 },
       { label: '1 Cop',       n: 1 },
@@ -28,18 +43,18 @@ export class MenuScene extends Phaser.Scene {
       { label: '3 Cops',      n: 3 },
     ];
     options.forEach((opt, i) => {
-      const t = this.add.text(cx, 205 + i * 60, opt.label, {
-        fontFamily: 'monospace', fontSize: '26px', color: '#ffffff',
+      const t = this.add.text(cx, 320 + i * 46, opt.label, {
+        fontFamily: 'monospace', fontSize: '20px', color: '#ffffff',
         backgroundColor: '#1a1a24', align: 'center',
-        fixedWidth: 240, padding: { x: 0, y: 10 },
+        fixedWidth: 200, padding: { x: 0, y: 7 },
       }).setOrigin(0.5).setInteractive({ useHandCursor: true });
       t.on('pointerover', () => t.setColor('#ffd23f'));
       t.on('pointerout',  () => t.setColor('#ffffff'));
       t.on('pointerdown', () => this._start(opt.n));
     });
 
-    this.add.text(cx, 205 + 4 * 60 + 4, 'click, or press 0 – 3', {
-      fontFamily: 'monospace', fontSize: '15px', color: '#6a6a7a',
+    this.add.text(cx, 320 + 4 * 46 + 2, 'click, or press 0 – 3', {
+      fontFamily: 'monospace', fontSize: '13px', color: '#6a6a7a',
     }).setOrigin(0.5);
 
     // --- Controls reference ---
@@ -76,13 +91,14 @@ export class MenuScene extends Phaser.Scene {
     });
 
     // --- Keyboard shortcuts ---
+    this.input.keyboard.on('keydown-P',     () => this._start(1, true)); // P → Pursuit Mode
     this.input.keyboard.on('keydown-ZERO',  () => this._start(0));
     this.input.keyboard.on('keydown-ONE',   () => this._start(1));
     this.input.keyboard.on('keydown-TWO',   () => this._start(2));
     this.input.keyboard.on('keydown-THREE', () => this._start(3));
   }
 
-  _start(copCount) {
-    this.scene.start('GameScene', { copCount, autostart: true });
+  _start(copCount, pursuitMode = false) {
+    this.scene.start('GameScene', { copCount, autostart: true, pursuitMode });
   }
 }

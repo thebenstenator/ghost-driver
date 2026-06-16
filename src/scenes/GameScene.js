@@ -6,6 +6,7 @@ import { NavGrid } from '../ai/NavGrid.js';
 import { segmentClear } from '../ai/lineOfSight.js';
 import { PursuitDirector } from '../ai/PursuitDirector.js';
 import { Pursuit, PursuitState } from '../systems/Pursuit.js';
+import { PursuitLevel } from '../systems/PursuitLevel.js';
 import { BustMeter } from '../systems/BustMeter.js';
 import {
   WORLD_WIDTH, WORLD_HEIGHT,
@@ -33,6 +34,9 @@ export class GameScene extends Phaser.Scene {
     this.copCount = (data && Number.isInteger(data.copCount)) ? data.copCount : 3;
     // First load starts paused; restarts (R) pass autostart so they drop into play
     this._autostart = !!(data && data.autostart);
+    // Pursuit Mode: escalating heat/level system (starts at 1 cop and grows). When
+    // off, the legacy fixed-cop-count chase runs unchanged. Persisted across R.
+    this.pursuitMode = !!(data && data.pursuitMode);
   }
 
   create() {
@@ -114,19 +118,30 @@ export class GameScene extends Phaser.Scene {
     // Station the cops withdraw to once the heat cools (SE corner, for testing)
     this.station    = this.navGrid.pos(this.navGrid.index(this.navGrid.cols - 1, this.navGrid.rows - 1));
 
+    // Escalation brain (Pursuit Mode only). Heat → level → cop cap; reinforcements
+    // trickle in toward the cap on a timer + an instant one each level-up.
+    this.pursuitLevel  = this.pursuitMode ? new PursuitLevel() : null;
+    this._reinforceTimer = 0;
+
     // Spawn the chosen number of cops, approaching from different sides. The player
     // starts at (cx,cy), so each cop faces that point — east faces west, west faces
-    // east, south faces north — instead of all facing north.
+    // east, south faces north — instead of all facing north. Pursuit Mode starts with
+    // ONE cop and escalates; legacy mode uses the menu's fixed count.
     const cx = WORLD_WIDTH / 2, cy = WORLD_HEIGHT / 2;
     const spawnPts = [
       { x: cx - 504, y: cy },        // west
       { x: cx + 504, y: cy },        // east
       { x: cx,        y: cy + 504 }, // south (brought in closer, was +1008)
     ];
-    for (let i = 0; i < this.copCount && i < spawnPts.length; i++) {
+    const startCops = this.pursuitMode ? 1 : this.copCount;
+    for (let i = 0; i < startCops && i < spawnPts.length; i++) {
       const cop = this._spawnCop(spawnPts[i].x, spawnPts[i].y);
       cop.facing = Math.atan2(cy - spawnPts[i].y, cx - spawnPts[i].x); // face the player's start
       cop.sprite.setRotation(cop.facing + Math.PI / 2);
+    }
+    if (this.pursuitLevel) {                 // start the chase at the level-1 profile
+      this.pursuit.cooldownDuration = this.pursuitLevel.cfg().cooldown;
+      this._applyLevelTuning();
     }
 
     // The chase is already underway when the mission starts (if there are cops)
@@ -150,13 +165,15 @@ export class GameScene extends Phaser.Scene {
       this._setupDebugOverlay();
       this._setupTunePanel();
       this._setupCopTunePanel();
+      if (this.pursuitLevel) this._setupPursuitPanel();
     }
 
     // Tear down the DOM tuning panels when the scene restarts / returns to menu,
     // otherwise they stack up duplicates on every R / menu cycle.
     this.events.once('shutdown', () => {
-      if (this.gui)    this.gui.destroy();
-      if (this.copGui) this.copGui.destroy();
+      if (this.gui)       this.gui.destroy();
+      if (this.copGui)    this.copGui.destroy();
+      if (this.pursuitGui) this.pursuitGui.destroy();
     });
 
     // Start paused on first load; launching from the menu (autostart) plays now.
@@ -173,7 +190,14 @@ export class GameScene extends Phaser.Scene {
       backgroundColor: '#000000aa', padding: { x: 3, y: 1 },
     }).setOrigin(0.5, 1).setDepth(60) : null;
     this.physics.add.collider(cop.sprite, this.walls);
-    this.physics.add.collider(cop.sprite, this.car.sprite);
+    // Player↔cop contact: bump heat in Pursuit Mode (the "minor collision" escalator),
+    // throttled so a sustained scrape doesn't spike it every frame.
+    this.physics.add.collider(cop.sprite, this.car.sprite, () => {
+      if (this.pursuitLevel && this.time.now - (this._lastRamAt || 0) > 600) {
+        this._lastRamAt = this.time.now;
+        this.pursuitLevel.addHeat(this.pursuitLevel.ramHeat);
+      }
+    });
     // Cops bump off each other rather than stacking
     for (const other of this.cops) this.physics.add.collider(cop.sprite, other.sprite);
     this.cops.push(cop);
@@ -401,6 +425,117 @@ export class GameScene extends Phaser.Scene {
     a._path = null; a._goalNode = -1; a._aimHist = [];
   }
 
+  // --- Pursuit Mode: escalation + reinforcement (only runs when pursuitLevel exists) -
+  // Push the current level's aggression knobs onto the cops + director + ditch timer.
+  _applyLevelTuning() {
+    const c = this.pursuitLevel.cfg();
+    for (const cop of this.cops) cop.ai.reactionTime = c.reaction;
+    this.director.boxTriggerSpeed = c.boxTrigger;
+    this.pursuit.cooldownDuration = c.cooldown;
+  }
+
+  // Advance heat → level, dispatch/retire cops toward the level cap. `state` is the
+  // pursuit state this frame. Heat rises in ACTIVE, freezes in pre-ditch cooldown,
+  // bleeds once ditched/standing down — so a brief LOS flicker can't bleed a level.
+  _updatePursuitLevel(state, dt) {
+    const P = this.pursuitLevel;
+    const phase = state === PursuitState.ACTIVE ? 'ACTIVE'
+                : (state === PursuitState.SEARCH && !this.pursuit.ditched) ? 'HOLD'
+                : 'BLEED';
+    const dLevel = P.update(phase, dt);
+    if (dLevel !== 0) this._applyLevelTuning();
+
+    const cap = P.cfg().cap;
+    // Level-up: immediately call in one reinforcement (then the timer fills the rest).
+    if (dLevel > 0 && this.cops.length < cap && state === PursuitState.ACTIVE) {
+      this._dispatchReinforcement();
+      this._reinforceTimer = P.cfg().reinforce;
+    }
+    // Bled down a level: retire the extra cop(s) — they peel off the chase.
+    if (dLevel < 0) while (this.cops.length > cap) this._retireFarthestCop();
+
+    // Trickle reinforcements up to the cap while actively pursuing.
+    if (state === PursuitState.ACTIVE && this.cops.length < cap) {
+      this._reinforceTimer -= dt;
+      if (this._reinforceTimer <= 0) {
+        this._dispatchReinforcement();
+        this._reinforceTimer = P.cfg().reinforce;
+      }
+    } else if (this.cops.length >= cap) {
+      this._reinforceTimer = P.cfg().reinforce; // hold full until a slot opens
+    }
+  }
+
+  // Create a fresh cop off-screen near the player (reuses the Tier-2 placement) and
+  // drop it into the active pursuit — "dispatch a unit from that direction".
+  _dispatchReinforcement() {
+    const px = this.car.sprite.x, py = this.car.sprite.y;
+    const cop = this._spawnCop(px, py);     // temporary position; relocated below
+    cop.ai.reactionTime = this.pursuitLevel.cfg().reaction;
+    // Bias the spawn to a random bearing so reinforcements don't all come from one spot.
+    cop.sprite.setPosition(px + Math.cos(Math.random() * Math.PI * 2) * this.respawnBandMax,
+                           py + Math.sin(Math.random() * Math.PI * 2) * this.respawnBandMax);
+    if (!this._tryRespawnCop(cop, px, py)) {
+      // No off-screen spot found — place at a clamped band point facing the player.
+      const a = Math.random() * Math.PI * 2;
+      const x = Phaser.Math.Clamp(px + Math.cos(a) * this.respawnBandMin, 120, WORLD_WIDTH - 120);
+      const y = Phaser.Math.Clamp(py + Math.sin(a) * this.respawnBandMin, 120, WORLD_HEIGHT - 120);
+      const p = this.navGrid.pos(this.navGrid.nearestNode(x, y));
+      this._placeCop(cop, p.x, p.y, px, py);
+    }
+    if (this.copLog) console.log(`[t=${(this.time.now / 1000).toFixed(2)}] DISPATCH cop${this.cops.length - 1} (L${this.pursuitLevel.level}, ${this.cops.length} active)`);
+  }
+
+  // Remove the cop farthest from the player from the active pursuit (used on bleed-down).
+  _retireFarthestCop() {
+    const px = this.car.sprite.x, py = this.car.sprite.y;
+    let far = null, fd = -Infinity;
+    for (const cop of this.cops) {
+      const d = Phaser.Math.Distance.Between(cop.sprite.x, cop.sprite.y, px, py);
+      if (d > fd) { fd = d; far = cop; }
+    }
+    if (!far) return;
+    this.cops = this.cops.filter(c => c !== far);
+    if (far.modeLabel) far.modeLabel.destroy();
+    far.sprite.destroy();
+    if (this.copLog) console.log(`[t=${(this.time.now / 1000).toFixed(2)}] RETIRE cop (L${this.pursuitLevel.level}, ${this.cops.length} active)`);
+  }
+
+  // Dev panel for the escalation feel. Binds straight to the live PursuitLevel (and its
+  // per-level config rows), so there's no conflict with the cop-tuning panel.
+  _setupPursuitPanel() {
+    const P = this.pursuitLevel;
+    const gui = new GUI({ title: 'Pursuit Levels', width: 270 });
+    this.pursuitGui = gui;
+    gui.close();
+
+    const heat = gui.addFolder('Heat');
+    heat.add(P, 'activeRate', 0, 5, 0.1).name('Heat/s (active)');
+    heat.add(P, 'bleedRate',  0, 10, 0.5).name('Bleed/s (ditched)');
+    heat.add(P, 'ramHeat',    0, 30, 1).name('Heat per ram');
+    heat.add(P, 'heatFloor',  0, 100, 5).name('Heat floor');
+    // heatToL2 is thresholds[2]; bind via a proxy so the array index is editable.
+    const proxy = { heatToL2: P.thresholds[2] };
+    heat.add(proxy, 'heatToL2', 5, 200, 5).name('Heat → L2').onChange(v => { P.thresholds[2] = v; });
+
+    const l1 = gui.addFolder('Level 1');
+    l1.add(P.config[1], 'cap', 1, 8, 1).name('Cop cap');
+    l1.add(P.config[1], 'reinforce', 2, 40, 1).name('Reinforce (s)');
+    l1.add(P.config[1], 'cooldown', 5, 60, 1).name('Cooldown (s)').onChange(() => this._applyLevelTuning());
+
+    const l2 = gui.addFolder('Level 2');
+    l2.add(P.config[2], 'cap', 1, 8, 1).name('Cop cap');
+    l2.add(P.config[2], 'reinforce', 2, 40, 1).name('Reinforce (s)');
+    l2.add(P.config[2], 'cooldown', 5, 60, 1).name('Cooldown (s)').onChange(() => this._applyLevelTuning());
+
+    this._persistPanel(gui, 'gd_pursuitLevel1');
+
+    gui.domElement.style.position = 'fixed';
+    gui.domElement.style.top  = '8px';
+    gui.domElement.style.left = '320px';
+    gui.domElement.style.zIndex = '9999';
+  }
+
   _buildWorld() {
     // Asphalt ground
     this.add.rectangle(
@@ -467,7 +602,7 @@ export class GameScene extends Phaser.Scene {
     this.shiftKey  = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.SHIFT);
 
     // Restart any time (same cop count); new run drops straight into play
-    this.input.keyboard.on('keydown-R', () => this.scene.restart({ copCount: this.copCount, autostart: true }));
+    this.input.keyboard.on('keydown-R', () => this.scene.restart({ copCount: this.copCount, autostart: true, pursuitMode: this.pursuitMode }));
     // Back to the menu
     this.input.keyboard.on('keydown-M', () => this.scene.start('MenuScene'));
     // Pause toggle
@@ -981,6 +1116,10 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
     }
     this._prevState = state;
 
+    // Pursuit Mode: advance heat/level and dispatch/retire reinforcements. Runs before
+    // the director so a cop dispatched this frame is included in coordination/targets.
+    if (this.pursuitLevel) this._updatePursuitLevel(state, dt);
+
     // Per-cop target depends on pursuit state:
     //  ACTIVE    → chase the player
     //  SEARCH    → converge on last-known, then sweep-search outward (area stays hot)
@@ -1082,7 +1221,8 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
       this.cooldownText.setText('');
     } else if (state === PursuitState.ACTIVE || hunting) {
       // Hunting = they just lost sight and are still charging — read as pursuit.
-      this.statusText.setText('● PURSUIT').setColor('#ff3b3b');
+      const lv = this.pursuitLevel ? ` · L${this.pursuitLevel.level}` : '';
+      this.statusText.setText(`● PURSUIT${lv}`).setColor('#ff3b3b');
       this.cooldownText.setText('');
     } else if (state === PursuitState.SEARCH && !this.pursuit.ditched) {
       this.statusText.setText('EVADING').setColor('#ffd23f');
