@@ -174,7 +174,15 @@ export class CopAI {
       if (this.reactionTime > 0 && dist > this.ramRange) {
         const lagFrames = Math.min(this._aimHist.length - 1, Math.round(this.reactionTime / dt));
         const past = this._aimHist[this._aimHist.length - 1 - lagFrames];
-        aimX = past.x; aimY = past.y;
+        // Only commit to the stale position if the cop can actually drive there in a
+        // straight line. After you round a corner the lagged point sits THROUGH the
+        // building corner — aiming at it drove the cop face-first into the wall (the
+        // "bumper cop suddenly swerved into a wall"). When it's blocked, turn with the
+        // player's real position instead. The juke still works in the open: the cop
+        // commits to your old heading and overshoots where the line is clear.
+        if (!this.rects || segmentClear(cx, cy, past.x, past.y, this.rects)) {
+          aimX = past.x; aimY = past.y;
+        }
       }
     }
     cop.aiTarget = { x: aimX, y: aimY };
