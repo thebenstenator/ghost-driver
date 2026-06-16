@@ -85,6 +85,11 @@ export class GameScene extends Phaser.Scene {
     this.respawnBandMin = 1000; // nearest it will reappear from the player
     this.respawnBandMax = 1800; // farthest it will look for an off-screen spot
     this.respawnMargin  = 110;  // px a relocation spot must clear the camera view by
+    this.respawnCooldown = 6.0; // s before a just-respawned cop can respawn again (anti-thrash —
+                                // when zoomed out, off-screen spots are far, so a cop can land
+                                // still-"lost" and otherwise re-trigger every few seconds)
+    this.respawnMinGain = 350;  // a relocation must be at least this much closer than the cop's
+                                // current distance, or it's not worth doing (skip and wait)
     // Breadcrumb trails — each cop records its recent path so blind teammates can
     // convoy-follow a known-drivable route (see PursuitDirector._convoyTarget).
     this.trailSpacing = 35;            // px of travel between recorded trail points
@@ -341,13 +346,15 @@ export class GameScene extends Phaser.Scene {
   _respawnLostCops(px, py, dt) {
     if (!this.respawnEnabled) return;
     for (const cop of this.cops) {
+      cop._respawnCd = Math.max(0, (cop._respawnCd || 0) - dt);
       const dp = Phaser.Math.Distance.Between(cop.sprite.x, cop.sprite.y, px, py);
       const lost = dp > this.respawnDist && cop.pursuitMode !== 'DIRECT';
       cop._lostT = lost ? (cop._lostT || 0) + dt : 0;
-      if (cop._lostT > this.respawnTime &&
+      if (cop._lostT > this.respawnTime && cop._respawnCd <= 0 &&
           this._offCamera(cop.sprite.x, cop.sprite.y, this.respawnMargin) &&
           this._tryRespawnCop(cop, px, py)) {
         cop._lostT = 0;
+        cop._respawnCd = this.respawnCooldown;
         if (this.copLog) {
           const ndp = Phaser.Math.Distance.Between(cop.sprite.x, cop.sprite.y, px, py);
           console.log(`[t=${(this.time.now / 1000).toFixed(2)}] RESPAWN cop${this.cops.indexOf(cop)} (was ${Math.round(dp)}px) -> ${Math.round(ndp)}px`);
@@ -360,6 +367,7 @@ export class GameScene extends Phaser.Scene {
   // currently coming from (so it re-enters from the same side), and drop the cop there
   // facing the player with fresh state. Returns false if no valid off-screen spot.
   _tryRespawnCop(cop, px, py) {
+    const cur  = Phaser.Math.Distance.Between(cop.sprite.x, cop.sprite.y, px, py);
     const base = Math.atan2(cop.sprite.y - py, cop.sprite.x - px);
     const angOffsets = [0, 0.5, -0.5, 1.0, -1.0, 1.6, -1.6, 2.3, -2.3, Math.PI];
     for (const off of angOffsets) {
@@ -368,7 +376,10 @@ export class GameScene extends Phaser.Scene {
         const tx = Phaser.Math.Clamp(px + Math.cos(ang) * d, 120, WORLD_WIDTH - 120);
         const ty = Phaser.Math.Clamp(py + Math.sin(ang) * d, 120, WORLD_HEIGHT - 120);
         const p  = this.navGrid.pos(this.navGrid.nearestNode(tx, ty));
-        if (this._offCamera(p.x, p.y, this.respawnMargin)) {
+        // Must be off-screen AND a real improvement — otherwise warping is pointless
+        // (the "was 1605 -> 1610" no-op). Nearest valid spot wins (we scan d ascending).
+        if (Phaser.Math.Distance.Between(p.x, p.y, px, py) < cur - this.respawnMinGain &&
+            this._offCamera(p.x, p.y, this.respawnMargin)) {
           this._placeCop(cop, p.x, p.y, px, py);
           return true;
         }
