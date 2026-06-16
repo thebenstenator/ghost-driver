@@ -46,6 +46,10 @@ export class PursuitDirector {
     this.convoyMaxHops   = 2;    // max relay length; longer chains fall back to own route
     this.convoyMaxFactor = 1.6;  // if the chain route is > this × straight-line dist, go direct
     this.convoyHold      = 0.5;  // s a CONVOY/LONE decision sticks before flipping (anti-flicker)
+    this.convoyMinBlind  = 0.8;  // s a cop must be CONTINUOUSLY blind before it'll switch to convoy.
+                                 // A cop that just lost sight keeps pursuing the player's position
+                                 // (continue the chase) rather than instantly being yanked onto a
+                                 // teammate's trail and swerving off — only genuinely-lost cops relay.
   }
 
   // Call once per frame during ACTIVE pursuit. Sets cop.role (for HUD/telemetry),
@@ -128,6 +132,13 @@ export class PursuitDirector {
     const n = cops.length;
     if (n === 0) return;
 
+    // Track how long each cop has been continuously blind — convoy only engages once
+    // a cop has genuinely lost the player, not the instant its sight-ray clips a wall.
+    for (let i = 0; i < n; i++) {
+      const c = cops[i];
+      c._blindT = c.hasLOS ? 0 : (c._blindT || 0) + dt;
+    }
+
     // Desired mode/leader for each cop this frame.
     const desired = new Array(n).fill('LONE');
     const dLeader = new Array(n).fill(null);
@@ -151,7 +162,10 @@ export class PursuitDirector {
       }
       for (let i = 0; i < n; i++) {
         if (leader[i] === -2) desired[i] = 'DIRECT';
-        else if (leader[i] >= 0 && cost[i] <= this._dist(cops[i], px, py) * this.convoyMaxFactor) {
+        // Only relay once the cop has been blind a beat — otherwise it stays LONE and
+        // keeps pursuing the player's position (the chase continues through the blink).
+        else if (leader[i] >= 0 && cops[i]._blindT >= this.convoyMinBlind &&
+                 cost[i] <= this._dist(cops[i], px, py) * this.convoyMaxFactor) {
           desired[i] = 'CONVOY'; dLeader[i] = cops[leader[i]];
         }
       }

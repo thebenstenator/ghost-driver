@@ -50,7 +50,7 @@ export class CopAI {
                                  // hard redirect, e.g. when you round a corner). Below this,
                                  // ordinary chase corrections aren't slowed.
     this.turnBrakeSpeed   = 160; // px/s — speed cap at a 90°+ turn (tight enough to stay on road)
-    this.losGrace         = 0.5; // s — after the cop's OWN sight line breaks, keep beelining
+    this.losGrace         = 0.9; // s — after the cop's OWN sight line breaks, keep beelining
                                  // straight at the player this long before falling back to the
                                  // road path. A momentary clip (you round a corner) otherwise
                                  // snaps it CHASE→PURSUE and it peels off toward an intersection
