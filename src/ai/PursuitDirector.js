@@ -10,6 +10,7 @@ export const CopState = {
   PURSUE:    'PURSUE',
   BOX_FRONT: 'BOX_F',
   BOX_REAR:  'BOX_R',
+  CUTOFF:    'CUTOFF',
 };
 
 // PursuitDirector — the coordination brain for an active chase.
@@ -45,6 +46,21 @@ export class PursuitDirector {
     this._frontCop       = null; // current box slot holders (sticky, see _pickBoxers)
     this._rearCop        = null;
 
+    // --- Cutoff (interceptor) ---
+    // ONE lead cop peels off the single-file train and aims at a road node AHEAD of
+    // the player, so the pack converges from two points instead of tailing in a line.
+    // Sticky + node-snapped (no flank thrash, no wall-grinding). Dev-toggleable so it
+    // can be A/B'd against pure pursue. BOX always outranks it (see _pickCutoff).
+    this.cutoffEnabled    = true;  // dev toggle; flip off to compare against pure pursue
+    this.cutoffMax        = 1;     // only ever ONE interceptor
+    this.cutoffMinSpeed   = 180;   // player must be moving this fast to bother intercepting
+    this.cutoffLeadBase   = 260;   // px ahead at zero speed
+    this.cutoffLeadPerSpd = 0.6;   // + this × player speed
+    this.cutoffLeadMin    = 220;
+    this.cutoffLeadMax    = 900;
+    this.cutoffHysteresis = 80;    // px along-advantage a challenger needs to steal the role
+    this._cutoffCop       = null;  // sticky holder
+
     // --- Convoy relay (how a blind cop reaches the player) ---
     this.convoyEnabled   = false; // off by default — playtested better without the relay
                                   // churn; toggle on via Cop Tuning → Convoy
@@ -73,6 +89,9 @@ export class PursuitDirector {
     let frontCop = null, rearCop = null;
     if (boxing) ({ frontCop, rearCop } = this._pickBoxers(cops, px, py, h));
 
+    // One interceptor cuts to a road node ahead (BOX > CUTOFF > PURSUE).
+    const cutoffCop = this._pickCutoff(cops, playerCar, px, py, h, frontCop, rearCop);
+
     for (const cop of cops) {
       let target;
       if (cop === frontCop) {
@@ -81,6 +100,9 @@ export class PursuitDirector {
       } else if (cop === rearCop) {
         cop.role = CopState.BOX_REAR;
         target = this._clearTarget(px, py, { x: px - Math.cos(h) * this.boxBehind, y: py - Math.sin(h) * this.boxBehind });
+      } else if (cop === cutoffCop) {
+        cop.role = CopState.CUTOFF;
+        target = this._cutoffTarget(px, py, h, playerCar.getSpeed());
       } else {
         cop.role = CopState.PURSUE;
         target = { x: px, y: py };           // everyone just chases the player's real position
@@ -137,6 +159,52 @@ export class PursuitDirector {
 
     this._frontCop = frontCop; this._rearCop = rearCop;
     return { frontCop, rearCop };
+  }
+
+  // --- Cutoff (interceptor) -----------------------------------------------------
+  // Pick the single sticky interceptor, or null. Suppressed entirely when boxing,
+  // when fewer than 2 cops are live, when disabled, or when the player is too slow
+  // to be worth getting ahead of. The cop most BEHIND the player (lowest _along) is
+  // the best interceptor — it has the most to gain by cutting forward; the most-
+  // advanced cop stays a PURSUE tail so we never strip the only cop behind the player.
+  // Sticky with the same hysteresis damping the box slots use (no frame-to-frame swap).
+  _pickCutoff(cops, playerCar, px, py, h, frontCop, rearCop) {
+    if (!this.cutoffEnabled || cops.length < 2 || frontCop || rearCop ||
+        playerCar.getSpeed() <= this.cutoffMinSpeed) {
+      this._cutoffCop = null;
+      return null;
+    }
+    const cand = cops.filter(c => c !== frontCop && c !== rearCop);
+    if (cand.length < 2) { this._cutoffCop = null; return null; } // keep ≥1 as the tail
+
+    const along = c => this._along(c, px, py, h);
+    // Best raw candidate = most behind (min along), but never the single most-advanced.
+    const mostAhead = cand.reduce((a, b) => (along(b) > along(a) ? b : a));
+    let best = null;
+    for (const c of cand) {
+      if (c === mostAhead) continue;                         // reserve the lead cop as tail
+      if (!best || along(c) < along(best)) best = c;
+    }
+    if (!best) { this._cutoffCop = null; return null; }
+
+    // Keep the current holder unless a challenger is more-behind by the hysteresis margin.
+    let cutoff = (this._cutoffCop && cand.includes(this._cutoffCop) && this._cutoffCop !== mostAhead)
+      ? this._cutoffCop : best;
+    if (best !== cutoff && along(best) < along(cutoff) - this.cutoffHysteresis) cutoff = best;
+
+    this._cutoffCop = cutoff;
+    return cutoff;
+  }
+
+  // Lead point ahead of the player along their heading, snapped to the nearest road
+  // node that is forward of the player — so the interceptor nav-paths to a real
+  // intersection on drivable road (never a point inside a building).
+  _cutoffTarget(px, py, h, speed) {
+    const lead = Math.min(this.cutoffLeadMax,
+      Math.max(this.cutoffLeadMin, this.cutoffLeadBase + speed * this.cutoffLeadPerSpd));
+    const lx = px + Math.cos(h) * lead, ly = py + Math.sin(h) * lead;
+    const idx = this.nav.nearestNodeAhead(lx, ly, px, py, h);
+    return this.nav.pos(idx);
   }
 
   // --- Visibility chain (DIRECT / CONVOY / LONE) --------------------------------

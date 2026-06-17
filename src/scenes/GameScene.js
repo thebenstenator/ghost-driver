@@ -983,6 +983,9 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
       boxTriggerSpeed: this.director.boxTriggerSpeed, boxEngageRange: this.director.boxEngageRange,
       boxAhead: this.director.boxAhead, boxBehind: this.director.boxBehind,
       convoyEnabled: this.director.convoyEnabled, followGap: this.director.followGap,
+      cutoffEnabled: this.director.cutoffEnabled, cutoffMinSpeed: this.director.cutoffMinSpeed,
+      cutoffLeadBase: this.director.cutoffLeadBase, cutoffLeadMax: this.director.cutoffLeadMax,
+      cutoffHysteresis: this.director.cutoffHysteresis,
     };
 
     const gui = new GUI({ title: 'Cop Tuning', width: 300 });
@@ -1027,6 +1030,13 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
     pack.add(this.copTuning, 'searchDwell',    0,  4,  0.1).name('Search dwell (s)').onChange(apply);
     pack.add(this.copTuning, 'searchStall',    1,  8,  0.5).name('Search give-up (s)').onChange(apply);
 
+    const cutoff = gui.addFolder('Cutoff (interceptor)');
+    cutoff.add(this.copTuning, 'cutoffEnabled').name('Interceptor on').onChange(apply);
+    cutoff.add(this.copTuning, 'cutoffMinSpeed',   0,  500, 10).name('Min player speed').onChange(apply);
+    cutoff.add(this.copTuning, 'cutoffLeadBase',   0,  800, 10).name('Lead base (px)').onChange(apply);
+    cutoff.add(this.copTuning, 'cutoffLeadMax',  200, 1500, 25).name('Lead max (px)').onChange(apply);
+    cutoff.add(this.copTuning, 'cutoffHysteresis', 0,  300, 5).name('Role stickiness (px)').onChange(apply);
+
     const convoy = gui.addFolder('Convoy (blind cops)');
     convoy.add(this.copTuning, 'convoyEnabled').name('Convoy following').onChange(apply);
     convoy.add(this.copTuning, 'followGap',   30,  300, 10).name('Follow gap behind leader').onChange(apply);
@@ -1055,6 +1065,8 @@ arriveRadius: ${t.arriveRadius}, senseDist: ${t.senseDist}, directRange: ${t.dir
 // --- Formation + convoy (PursuitDirector) ---
 boxTriggerSpeed: ${t.boxTriggerSpeed}, boxEngageRange: ${t.boxEngageRange}, boxAhead: ${t.boxAhead}, boxBehind: ${t.boxBehind},
 convoyEnabled: ${t.convoyEnabled}, followGap: ${t.followGap},
+// --- Cutoff (interceptor) ---
+cutoffEnabled: ${t.cutoffEnabled}, cutoffMinSpeed: ${t.cutoffMinSpeed}, cutoffLeadBase: ${t.cutoffLeadBase}, cutoffLeadMax: ${t.cutoffLeadMax}, cutoffHysteresis: ${t.cutoffHysteresis},
 // --- Separation + rejoin band + search (GameScene) ---
 sepRadius: ${t.sepRadius}, sepStrength: ${t.sepStrength},
 rbStart: ${t.rbStart}, rbFull: ${t.rbFull}, rbGrip: ${t.rbGrip}, rbTurnMult: ${t.rbTurnMult}, rbSpeedBoost: ${t.rbSpeedBoost},
@@ -1062,9 +1074,9 @@ respawnEnabled: ${t.respawnEnabled}, respawnDist: ${t.respawnDist}, respawnTime:
 searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${t.searchMaxDepth}, coverageTTL: ${t.coverageTTL}, searchDirBias: ${t.searchDirBias}, searchDwell: ${t.searchDwell}, searchStall: ${t.searchStall}`);
     } }, 'copyStats').name('Copy Cop Stats → Console');
 
-    // Persist across refresh. Key bumped to v14: Tier-2 respawn dials added
-    // (respawnEnabled / respawnDist / respawnTime).
-    this._persistPanel(gui, 'gd_copTuning14');
+    // Persist across refresh. Key bumped to v15: Cutoff (interceptor) dials added
+    // (cutoffEnabled / cutoffMinSpeed / cutoffLeadBase / cutoffLeadMax / cutoffHysteresis).
+    this._persistPanel(gui, 'gd_copTuning15');
 
     gui.domElement.style.position = 'fixed';
     gui.domElement.style.top  = '8px';
@@ -1128,6 +1140,11 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
     this.director.boxBehind = t.boxBehind;
     this.director.convoyEnabled = t.convoyEnabled;
     this.director.followGap = t.followGap;
+    this.director.cutoffEnabled = t.cutoffEnabled;
+    this.director.cutoffMinSpeed = t.cutoffMinSpeed;
+    this.director.cutoffLeadBase = t.cutoffLeadBase;
+    this.director.cutoffLeadMax = t.cutoffLeadMax;
+    this.director.cutoffHysteresis = t.cutoffHysteresis;
   }
 
   update(_time, delta) {
