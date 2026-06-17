@@ -135,14 +135,15 @@ export class GameScene extends Phaser.Scene {
     this._reinforceTimer = this.pursuitLevel ? this.pursuitLevel.cfg().reinforce : 0;
 
     // Spawn the chosen number of cops, approaching from different sides. The player
-    // starts at (cx,cy), so each cop faces that point — east faces west, west faces
-    // east, south faces north — instead of all facing north. Pursuit Mode starts with
-    // ONE cop and escalates; legacy mode uses the menu's fixed count.
+    // starts at (cx,cy), so each cop faces that point — south faces north, west faces
+    // east, east faces west — instead of all facing north. Pursuit Mode starts with
+    // ONE cop (spawnPts[0] = south, so the lone chaser comes from behind a north-bound
+    // player) and escalates; legacy mode uses the menu's fixed count.
     const cx = WORLD_WIDTH / 2, cy = WORLD_HEIGHT / 2;
     const spawnPts = [
+      { x: cx,        y: cy + 504 }, // south (the Pursuit-Mode lone cop)
       { x: cx - 504, y: cy },        // west
       { x: cx + 504, y: cy },        // east
-      { x: cx,        y: cy + 504 }, // south (brought in closer, was +1008)
     ];
     const startCops = this.pursuitMode ? 1 : this.copCount;
     for (let i = 0; i < startCops && i < spawnPts.length; i++) {
