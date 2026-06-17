@@ -117,9 +117,6 @@ export class GameScene extends Phaser.Scene {
                                        // before fanning out — a sub-second LOS blip can't spin a cop around
     this.searchStall = 2;              // s of no progress toward a search node before a cop ABANDONS it
                                        // (can't reach it — wedged in an alley / node behind a wall) and re-picks
-    this.huntLead    = 240;            // px ahead of last-known (along the player's last heading) a
-                                       // blind cop aims while the pursuit is still ACTIVE — so it flows
-                                       // DOWN the street you took instead of stopping where it lost you
     // Shared search-coverage map: time (search clock) each nav node was last SEEN
     // by any cop. Cops paint what they can see and head for the least-covered
     // node, so they divide the area instead of re-checking the same streets.
@@ -256,18 +253,16 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
-  // Goal for a cop still in an ACTIVE chase but WITHOUT its own sight line. When some
-  // OTHER cop can see the player, last-known is the live chase point → head straight
-  // in (rejoin the action). When nobody sees the player, last-known is frozen where it
-  // was last spotted, so aim a little DOWN the street they were taking (a node ahead of
-  // last-known along the last heading) — the cop flows past the corner instead of
-  // stopping dead where it lost you. CopAI routes there on the road network.
-  _huntGoal(anyLOS) {
+  // Goal for a cop still in an ACTIVE chase but WITHOUT its own sight line: drive to
+  // the LAST-KNOWN location and see if it can re-acquire en route. Nothing clever — no
+  // projecting ahead of where the player went (that aimed the cop at a node around the
+  // corner, off to its side, so a cop two blocks back mid-street steered into the wall).
+  // Last-known is the live chase point whenever ANY cop can see the player (it's updated
+  // every sighting) and the frozen last sighting otherwise, so this also pulls a blind
+  // cop toward an in-progress chase. CopAI routes there on the road network.
+  _huntGoal() {
     const lk = this.pursuit.lastKnown;
-    if (anyLOS) return { x: lk.x, y: lk.y };
-    const d = this.pursuit.lastKnownDir;
-    const lx = lk.x + Math.cos(d) * this.huntLead, ly = lk.y + Math.sin(d) * this.huntLead;
-    return this.navGrid.pos(this.navGrid.nearestNodeAhead(lx, ly, lk.x, lk.y, d));
+    return { x: lk.x, y: lk.y };
   }
 
   // Where a cop drives once it's lost the trail (SEARCH). It heads for the
@@ -1009,7 +1004,7 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
       respawnEnabled: this.respawnEnabled, respawnDist: this.respawnDist, respawnTime: this.respawnTime,
       searchSpeed: this.searchSpeed, searchDepth: this.searchDepth, searchMaxDepth: this.searchMaxDepth,
       coverageTTL: this.coverageTTL, searchDirBias: this.searchDirBias,
-      searchDwell: this.searchDwell, searchStall: this.searchStall, huntLead: this.huntLead,
+      searchDwell: this.searchDwell, searchStall: this.searchStall,
       boxTriggerSpeed: this.director.boxTriggerSpeed, boxEngageRange: this.director.boxEngageRange,
       boxAhead: this.director.boxAhead, boxBehind: this.director.boxBehind,
       convoyEnabled: this.director.convoyEnabled, followGap: this.director.followGap,
@@ -1056,7 +1051,6 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
     pack.add(this.copTuning, 'searchDirBias',  0,  150, 5).name('Escape-dir bias').onChange(apply);
     pack.add(this.copTuning, 'searchDwell',    0,  4,  0.1).name('Search dwell (s)').onChange(apply);
     pack.add(this.copTuning, 'searchStall',    1,  8,  0.5).name('Search give-up (s)').onChange(apply);
-    pack.add(this.copTuning, 'huntLead',       0,  600, 10).name('Blind lead-ahead (px)').onChange(apply);
 
     const convoy = gui.addFolder('Convoy (blind cops)');
     convoy.add(this.copTuning, 'convoyEnabled').name('Convoy following').onChange(apply);
@@ -1090,12 +1084,12 @@ convoyEnabled: ${t.convoyEnabled}, followGap: ${t.followGap},
 sepRadius: ${t.sepRadius}, sepStrength: ${t.sepStrength},
 rbStart: ${t.rbStart}, rbFull: ${t.rbFull}, rbGrip: ${t.rbGrip}, rbTurnMult: ${t.rbTurnMult}, rbSpeedBoost: ${t.rbSpeedBoost},
 respawnEnabled: ${t.respawnEnabled}, respawnDist: ${t.respawnDist}, respawnTime: ${t.respawnTime},
-searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${t.searchMaxDepth}, coverageTTL: ${t.coverageTTL}, searchDirBias: ${t.searchDirBias}, searchDwell: ${t.searchDwell}, searchStall: ${t.searchStall}, huntLead: ${t.huntLead}`);
+searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${t.searchMaxDepth}, coverageTTL: ${t.coverageTTL}, searchDirBias: ${t.searchDirBias}, searchDwell: ${t.searchDwell}, searchStall: ${t.searchStall}`);
     } }, 'copyStats').name('Copy Cop Stats → Console');
 
-    // Persist across refresh. Key bumped to v15: blind-cop hunt goal added (huntLead)
-    // alongside the losGrace removal / GOAL-vs-PATH chase rework.
-    this._persistPanel(gui, 'gd_copTuning15');
+    // Persist across refresh. Key bumped to v16: huntLead removed (blind cops now go
+    // straight to last-known, no forward projection).
+    this._persistPanel(gui, 'gd_copTuning16');
 
     gui.domElement.style.position = 'fixed';
     gui.domElement.style.top  = '8px';
@@ -1153,7 +1147,6 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
     this.searchDirBias = t.searchDirBias;
     this.searchDwell = t.searchDwell;
     this.searchStall = t.searchStall;
-    this.huntLead = t.huntLead;
     this.director.boxTriggerSpeed = t.boxTriggerSpeed;
     this.director.boxEngageRange = t.boxEngageRange;
     this.director.boxAhead = t.boxAhead;
@@ -1272,7 +1265,7 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
       // target; a cop WITHOUT its own sight line heads for a drivable last-known goal
       // (never the live position, which may be inside a building) and lets CopAI route
       // there on the road network. Keeps the chase priority while the cop is blind.
-      if      (state === PursuitState.ACTIVE)    target = cop.hasLOS ? cop.dirTarget : this._huntGoal(anyLOS);
+      if      (state === PursuitState.ACTIVE)    target = cop.hasLOS ? cop.dirTarget : this._huntGoal();
       else if (state === PursuitState.SEARCH)    target = this._cooldownTarget(cop);
       else if (state === PursuitState.RETURNING) target = this.station;
       // Separation spreads cops apart so they don't pile up — but a CONVOY follower is
