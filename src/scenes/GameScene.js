@@ -765,8 +765,10 @@ export class GameScene extends Phaser.Scene {
 
   // Pursuit-Mode heat meter: thin bar under the status. Fill colour deepens with level
   // (yellow→deep red); turns BLUE while heat is paused (pre-ditch cooldown / lost LOS)
-  // or bleeding down during withdraw. Transparent track. Flashes "REINFORCEMENTS
-  // INCOMING" on each dispatch. `state` selects the colour phase.
+  // or bleeding down during withdraw. Every cleared level stays filled as the base, so
+  // each new level's colour BUILDS ON TOP of the previous one instead of refilling an
+  // empty track. Flashes "REINFORCEMENTS INCOMING" on each dispatch. `state` selects
+  // the colour phase.
   _drawHeatBar(state) {
     const g = this.heatGfx;
     g.clear();
@@ -779,18 +781,29 @@ export class GameScene extends Phaser.Scene {
     const P = this.pursuitLevel;
     const frac = P.heatFraction();
     const rising = state === PursuitState.ACTIVE;
-    const lvCol = GameScene.HEAT_COLORS[Math.min(P.level, 5) - 1];
+    const lvIdx = Math.min(P.level, 5) - 1;
+    const lvCol = GameScene.HEAT_COLORS[lvIdx];
     const col = rising ? lvCol : 0x4a90ff;   // blue while paused / bleeding
 
-    // Transparent track — just a thin border so empty reads as background.
+    // Track border — thin outline so empty reads as background.
     g.lineStyle(1, 0xffffff, 0.22); g.strokeRect(x, y, w, h);
+
+    // Base layer: every already-cleared level keeps its colour across the full bar, so
+    // at level N the whole track reads as the N-1 colour and the current level's
+    // progress layers over it (the "building on top" effect).
+    if (lvIdx > 0) { g.fillStyle(GameScene.HEAT_COLORS[lvIdx - 1], 0.95); g.fillRect(x, y, w, h); }
+
+    // Current level's progress on top of the base.
     g.fillStyle(col, 0.95); g.fillRect(x, y, w * frac, h);
 
-    // Reinforcement flash: white pulse over the fill + the warning label, fading out.
+    // Width of the visibly-filled bar (full once a base exists, else just the fill).
+    const filledW = lvIdx > 0 ? w : w * frac;
+
+    // Reinforcement flash: white pulse over the filled bar + the warning label, fading.
     const flashT = (this._reinforceFlashUntil || 0) - this.time.now;
     if (flashT > 0) {
       const a = Math.min(flashT / 1400, 1);
-      g.fillStyle(0xffffff, a * 0.6); g.fillRect(x, y, w * frac, h);
+      g.fillStyle(0xffffff, a * 0.6); g.fillRect(x, y, filledW, h);
       this.reinforceText.setPosition(width / 2, y + 18).setColor('#ff5a1a').setAlpha(a);
     } else {
       this.reinforceText.setAlpha(0);
