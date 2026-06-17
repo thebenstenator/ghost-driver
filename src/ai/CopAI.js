@@ -50,12 +50,6 @@ export class CopAI {
                                  // hard redirect, e.g. when you round a corner). Below this,
                                  // ordinary chase corrections aren't slowed.
     this.turnBrakeSpeed   = 160; // px/s — speed cap at a 90°+ turn (tight enough to stay on road)
-    this.losGrace         = 0.9; // s — after the cop's OWN sight line breaks, keep beelining
-                                 // straight at the player this long before falling back to the
-                                 // road path. A momentary clip (you round a corner) otherwise
-                                 // snaps it CHASE→PURSUE and it peels off toward an intersection
-                                 // — the lone-cop "swerve" while the rest of the pack still sees you.
-    this._losTimer        = 0;   // remaining grace; reset to losGrace whenever the line is clear
 
     // Cached node path + which node we're heading to
     this._path     = null;
@@ -121,20 +115,14 @@ export class CopAI {
     }
 
     const clearToTarget = !this.rects || segmentClear(cx, cy, target.x, target.y, this.rects);
-    // Per-cop sight grace: hold the direct chase for losGrace seconds after the line
-    // breaks, so a brief corner-clip keeps the cop driving at you instead of snapping
-    // onto a road path that can double back. BUT if we're actually grinding a wall with
-    // no clear line, drop the grace immediately and route around — riding the grace
-    // into a building is what caused the constant wall-grind. A sustained block also
-    // falls through to nav-path once the grace runs out.
-    if (clearToTarget) this._losTimer = this.losGrace;
-    else if (blocked)  this._losTimer = 0;
-    else               this._losTimer = Math.max(0, this._losTimer - dt);
-    const effectiveClear = clearToTarget || this._losTimer > 0;
 
-    // Beeline straight at the target only when close (clear sight within chaseRange,
-    // or point-blank). Otherwise follow the road network so we corner properly.
-    const beeline = dist <= this.directRange || (effectiveClear && dist <= this.chaseRange);
+    // Beeline straight at the target only when the line is GENUINELY clear right now
+    // (within chaseRange) or point-blank. No sight-grace: when the line is blocked the
+    // cop navigates the road network toward its target instead of driving at a point
+    // behind a wall. The "keep the chase alive through an occlusion" job is handled
+    // upstream — a blind cop is fed a drivable last-known goal, not the live position
+    // inside the building — so beelining at an unseen target is never correct here.
+    const beeline = dist <= this.directRange || (clearToTarget && dist <= this.chaseRange);
     if (!beeline) {
       // --- Navigate the road network, one intersection at a time ---
       const copNode  = this.nav.nearestNode(cx, cy);
