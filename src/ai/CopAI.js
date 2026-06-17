@@ -116,13 +116,15 @@ export class CopAI {
 
     const clearToTarget = !this.rects || segmentClear(cx, cy, target.x, target.y, this.rects);
 
-    // Beeline straight at the target only when the line is GENUINELY clear right now
-    // (within chaseRange) or point-blank. No sight-grace: when the line is blocked the
-    // cop navigates the road network toward its target instead of driving at a point
-    // behind a wall. The "keep the chase alive through an occlusion" job is handled
-    // upstream — a blind cop is fed a drivable last-known goal, not the live position
-    // inside the building — so beelining at an unseen target is never correct here.
-    const beeline = dist <= this.directRange || (clearToTarget && dist <= this.chaseRange);
+    // Beeline (drive straight at the point, cutting across the world) is ONLY correct
+    // when the cop can actually SEE the player — then the target IS the player and a
+    // clear line is a real chase lane. When the cop is BLIND its target is a GUESS
+    // (last-known / search node / hunt goal); beelining at a guess and trusting a thin
+    // clear centreline makes a fast car with a real turn radius cut building corners
+    // (the wall-grind). So a blind cop ALWAYS navigates the road graph, which corners
+    // at intersections and brakes for them. Point-blank (directRange) still rams
+    // regardless, for contact.
+    const beeline = dist <= this.directRange || (cop.hasLOS && clearToTarget && dist <= this.chaseRange);
     if (!beeline) {
       // --- Navigate the road network, one intersection at a time ---
       const copNode  = this.nav.nearestNode(cx, cy);

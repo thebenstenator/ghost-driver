@@ -189,6 +189,9 @@ function run(name, route, skill, copSpeed = 590, copBackPx = 700, seconds = 26, 
       target = lastKnown;
     }
 
+    // CopAI beelines only when it can actually SEE the player; blind, it navigates the
+    // road graph. Mirror GameScene's per-cop perception flag so the sim drives the same.
+    cop.hasLOS = rawSees;
     cop.update(dt * 1000, target);
     integrate(cop, dt);
 
