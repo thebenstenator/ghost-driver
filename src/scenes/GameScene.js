@@ -116,6 +116,8 @@ export class GameScene extends Phaser.Scene {
     // convoy-follow a known-drivable route (see PursuitDirector._convoyTarget).
     this.trailSpacing = 35;            // px of travel between recorded trail points
     this.trailMax     = 36;            // points kept per cop (~1260px of trail)
+    this.interceptAheadDist = 850;     // px down the player's travel that an 'ahead-of-travel'
+                                       // unit (interceptor) spawns, to set up a head-on
     this.searchSpeed = 250;            // cop speed cap while searching (clean corners)
     this.searchDepth = 2;              // STARTING search radius (blocks out from last-known)
     this.searchMaxDepth = 10;          // search grows out to this many blocks as ground is checked
@@ -592,10 +594,22 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
-  // Enter a freshly spawned cop according to its def's placement strategy. 'ahead-of-
-  // travel' (interceptor) is added with that unit; default / 'flank-offscreen' drops it
-  // on a road node a few blocks out at a random bearing, facing you.
+  // Enter a freshly spawned cop according to its def's placement strategy. This only
+  // picks WHERE it appears — the cop then drives with the same shared CopAI brain.
   _placeByStrategy(cop, px, py) {
+    if (cop.unitDef.placement === 'ahead-of-travel') {
+      // Interceptor entry: drop it on a road node down the player's predicted travel,
+      // facing back toward the player, so it sets up a head-on. `nearestNodeAhead` keeps
+      // the node in front of the player (never behind), and _placeCop faces it at you.
+      const car = this.car;
+      const dir = car.getSpeed() > 40 ? Math.atan2(car.vy, car.vx) : car.facing;
+      const tx  = px + Math.cos(dir) * this.interceptAheadDist;
+      const ty  = py + Math.sin(dir) * this.interceptAheadDist;
+      const p   = this.navGrid.pos(this.navGrid.nearestNodeAhead(tx, ty, px, py, dir));
+      this._placeCop(cop, p.x, p.y, px, py);
+      return;
+    }
+    // flank-offscreen (default): a road node a few blocks out at a random bearing.
     const ang = Math.random() * Math.PI * 2;
     const d   = 450 + Math.random() * 250;
     const tx  = Phaser.Math.Clamp(px + Math.cos(ang) * d, 120, WORLD_WIDTH  - 120);

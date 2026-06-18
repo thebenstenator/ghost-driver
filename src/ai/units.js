@@ -57,6 +57,36 @@ export const UNITS = {
     priority:   0,
     ability:    null,
   },
+
+  // Interceptor (L3+). Faster, more aggressive patrol that ENTERS ahead of the player
+  // and drives a head-on. CRITICAL: it shares the SAME brain (CopAI.getControls) as every
+  // other cop — it differs ONLY in (1) these handling numbers, (2) its placement strategy
+  // ('ahead-of-travel'), and (3) the GOAL it's handed. The head-on is NOT new steering: it
+  // spawns ahead facing you and chases the shared target, so the existing LOS-gated beeline
+  // makes contact. `ai` is left at the baseline so its decision-making is identical to
+  // patrol's — the only differences are speed/aggression (tune the rest in the testbed).
+  // health/mass are carried for the (deferred) ram-disabling; priority keeps it on the
+  // chase over filler patrols on bleed-down.
+  interceptor: {
+    name: 'Interceptor',
+    handling: {
+      maxSpeed:       560,   // faster than patrol (495) so it can get ahead / close a head-on
+      acceleration:   430,   // more aggressive pickup
+      gripLow:        0.6,
+      gripHigh:       0.22,  // a touch grippier at speed to hold its fast line
+      gripSpeedRef:   480,
+      turnSpeedLow:   2.5,
+      turnSpeed:      5,
+      minSteerFactor: 0.8,
+    },
+    ai:         {},                  // SAME decision tunables as patrol (identical brain)
+    placement:  'ahead-of-travel',
+    role:       'intercept',
+    health:     160,                 // survives most rams; a full mutual head-on can drop it
+    mass:       1.0,
+    priority:   2,                   // threat unit — retired last
+    ability:    'intercept',
+  },
 };
 
 // Resolve a unit type to a def, falling back to patrol for an unknown key. A level
