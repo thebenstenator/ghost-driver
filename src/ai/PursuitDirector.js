@@ -10,6 +10,10 @@ export const CopState = {
   PURSUE:    'PURSUE',
   BOX_FRONT: 'BOX_F',
   BOX_REAR:  'BOX_R',
+  // Committed overtake-and-block maneuver (aggressive units only): sprint AHEAD, then
+  // ease in front to brake-check the player. Transient + single-holder, like a box.
+  OVERTAKE:  'OVERTAKE',
+  BLOCK:     'BLOCK',
 };
 
 // PursuitDirector — the coordination brain for an active chase.
@@ -45,6 +49,33 @@ export class PursuitDirector {
     this._frontCop       = null; // current box slot holders (sticky, see _pickBoxers)
     this._rearCop        = null;
 
+    // --- Overtake-and-block maneuver (aggressive units only; see _updateManeuver) ---
+    // The fix for "a faster cop just rides my bumper": its speed edge is SPENT on a
+    // committed maneuver (sprint ahead → brake-check) that opens a counterplay window
+    // and feeds the box/bust loop, instead of grinding the player. At most ONE cop runs
+    // it at a time, and it COMMITS until a clear success/failure (no per-frame churn —
+    // the lesson from the reverted cutoff role). It only sets a drivable GOAL + a speed
+    // cap for the shared CopAI; it is never new steering.
+    this.maneuverTrigSpeed = 220;  // only block when the player is at least this fast (the grind case)
+    this.maneuverRange     = 460;  // cop must be within this of the player to start/own a maneuver
+    this.maneuverBehind    = 20;   // px the cop must be BEHIND the player to start an overtake
+    this.overtakeAhead     = 260;  // px ahead of the player the overtaker sprints to (full speed)
+    this.overtakeSide      = 55;   // px lateral offset so it swings WIDE around you, not through you
+    this.overtakeDone      = 50;   // px ahead the cop must reach to switch OVERTAKE → BLOCK
+    this.blockAhead        = 90;   // px ahead the blocker sits to cut you off
+    this.blockSpeedFactor  = 0.55; // blocker eases to this fraction of your speed (brake-check)
+    this.blockMinSpeed     = 150;  // …but never below this (don't dead-stop in front)
+    this.blockedSpeed      = 170;  // your speed below which the block SUCCEEDED → hand to box/bust
+    this.blockLost         = -140; // along-heading value below which the blocker has FALLEN behind (fail)
+    this.maneuverMaxTime   = 5.0;  // s a maneuver may run before timing out (fail)
+    this.maneuverCooldown  = 4.0;  // s after a maneuver before that cop can start another
+    // Drafting (plain tail): a faster aggressive unit matches the player's pace rather
+    // than grinding the bumper — speed is reserved for the maneuver. Only bites at speed.
+    this.draftMinSpeed     = 150;  // below this the cop closes freely (slow play is box/bust's job)
+    this.draftGap          = 110;  // px behind the player a drafting cop settles (one car length)
+    this.draftMargin       = 70;   // px/s over the player's speed it may use to close when farther back
+    this._maneuverHolder   = null; // the single cop currently running a maneuver
+
     // --- Convoy relay (how a blind cop reaches the player) ---
     this.convoyEnabled   = false; // off by default — playtested better without the relay
                                   // churn; toggle on via Cop Tuning → Convoy
@@ -63,10 +94,15 @@ export class PursuitDirector {
   update(cops, playerCar, dt) {
     const px = playerCar.sprite.x, py = playerCar.sprite.y;
     const h  = this._heading(playerCar);
+    const speed = playerCar.getSpeed();
 
     // How each cop reaches the player (visibility chain) — computed first so a CONVOY
     // cop can override its target with the leader's trail.
     this._assignConvoy(cops, px, py, dt);
+
+    // Committed maneuver (single holder) — the aggressive overtake/brake-check. Resolved
+    // before boxing so the holder is excluded from a box slot.
+    const holder = this._updateManeuver(cops, px, py, h, speed, dt);
 
     // Event: do we sandwich the player this frame, and if so, who blocks?
     const boxing = this._updateBox(cops, playerCar, px, py, dt);
@@ -74,8 +110,30 @@ export class PursuitDirector {
     if (boxing) ({ frontCop, rearCop } = this._pickBoxers(cops, px, py, h));
 
     for (const cop of cops) {
-      let target;
-      if (cop === frontCop) {
+      let target, speedCap = Infinity;
+
+      if (cop === holder && cop._maneuver) {
+        // Committed maneuver wins over box/pursue. It only chooses WHERE (a drivable
+        // point ahead) and a throttle CAP — the shared CopAI still does the driving.
+        const m = cop._maneuver;
+        if (m.phase === 'OVERTAKE') {
+          cop.role = CopState.OVERTAKE;     // sprint past at full speed to get ahead
+          // Swing WIDE to the side the cop is already on, so it pulls alongside and
+          // around rather than bumping through you on the centreline. _clearTarget keeps
+          // the offset point out of a building.
+          const perp = h + Math.PI / 2;
+          const lat  = (cop.sprite.x - px) * Math.cos(perp) + (cop.sprite.y - py) * Math.sin(perp);
+          const side = lat >= 0 ? 1 : -1;
+          target = this._clearTarget(px, py, {
+            x: px + Math.cos(h) * this.overtakeAhead + Math.cos(perp) * this.overtakeSide * side,
+            y: py + Math.sin(h) * this.overtakeAhead + Math.sin(perp) * this.overtakeSide * side,
+          });
+        } else {
+          cop.role = CopState.BLOCK;        // ease in front to brake-check
+          target = this._clearTarget(px, py, { x: px + Math.cos(h) * this.blockAhead, y: py + Math.sin(h) * this.blockAhead });
+          speedCap = Math.max(this.blockMinSpeed, speed * this.blockSpeedFactor);
+        }
+      } else if (cop === frontCop) {
         cop.role = CopState.BOX_FRONT;
         target = this._clearTarget(px, py, { x: px + Math.cos(h) * this.boxAhead, y: py + Math.sin(h) * this.boxAhead });
       } else if (cop === rearCop) {
@@ -84,6 +142,17 @@ export class PursuitDirector {
       } else {
         cop.role = CopState.PURSUE;
         target = { x: px, y: py };           // everyone just chases the player's real position
+        // Drafting: a plainly-tailing aggressive unit matches the player's pace rather
+        // than grinding the bumper (speed is reserved for the maneuver). Only at speed —
+        // when the player is slow the cop must close freely for the box/bust to do its job.
+        if (this._isAggressive(cop) && speed > this.draftMinSpeed) {
+          const along = this._along(cop, px, py, h);
+          const d = this._dist(cop, px, py);
+          if (along < 0 && d < this.maneuverRange) {
+            const over = d - this.draftGap;
+            speedCap = speed + this.draftMargin * Phaser.Math.Clamp(over / 200, 0, 1);
+          }
+        }
       }
 
       // CONVOY override: a blind cop relays toward a teammate's drivable trail rather
@@ -93,8 +162,58 @@ export class PursuitDirector {
         if (ct) target = ct;
       }
       cop.dirTarget = target;
+      cop.maneuverSpeedCap = speedCap;   // consumed by GameScene as the ACTIVE speed cap
     }
   }
+
+  // The committed overtake-and-block maneuver. At most ONE cop holds it; once started it
+  // COMMITS (OVERTAKE → BLOCK) until a clear success/failure, then that cop cools down —
+  // no per-frame re-optimisation (the churn that sank the reverted cutoff role). Aggressive
+  // units only. Returns the current holder (or null).
+  _updateManeuver(cops, px, py, h, speed, dt) {
+    for (const c of cops) c._maneuverCd = Math.max(0, (c._maneuverCd || 0) - dt);
+
+    let holder = this._maneuverHolder;
+    // Drop a holder that vanished or lost sight (it can't run a positional maneuver blind).
+    if (holder && (!cops.includes(holder) || !holder.hasLOS || !holder._maneuver)) {
+      if (holder._maneuver) { holder._maneuver = null; holder._maneuverCd = this.maneuverCooldown; }
+      holder = this._maneuverHolder = null;
+    }
+
+    if (holder) {
+      const m = holder._maneuver;
+      m.t += dt;
+      const along = this._along(holder, px, py, h);          // + ahead of player · − behind
+      if (m.phase === 'OVERTAKE' && along > this.overtakeDone) m.phase = 'BLOCK';
+      const success  = speed < this.blockedSpeed;            // player slowed → hand off to box/bust
+      const fellBack = m.phase === 'BLOCK' && along < this.blockLost;
+      const timedOut = m.t > this.maneuverMaxTime;
+      if (success || fellBack || timedOut) {
+        holder._maneuver = null;
+        holder._maneuverCd = this.maneuverCooldown;
+        holder = this._maneuverHolder = null;
+      }
+    }
+
+    // TRIGGER: no holder → pick the best-placed aggressive unit (behind, close, off CD)
+    // while the player is fast. Decided ONCE; then it commits above.
+    if (!holder && speed >= this.maneuverTrigSpeed) {
+      let best = null, bestAlong = -Infinity;
+      for (const c of cops) {
+        if (!this._isAggressive(c) || (c._maneuverCd || 0) > 0 || !c.hasLOS) continue;
+        const d = this._dist(c, px, py);
+        if (d > this.maneuverRange) continue;
+        const along = this._along(c, px, py, h);
+        if (along > -this.maneuverBehind) continue;          // must be genuinely behind to overtake
+        if (along > bestAlong) { bestAlong = along; best = c; } // closest-to-even → best shot at passing
+      }
+      if (best) { best._maneuver = { phase: 'OVERTAKE', t: 0 }; holder = this._maneuverHolder = best; }
+    }
+    return holder;
+  }
+
+  // A unit whose speed edge must be expressed as committed maneuvers, not tailgating.
+  _isAggressive(cop) { return !!(cop.unitDef && cop.unitDef.ability === 'intercept'); }
 
   // --- Box event ----------------------------------------------------------------
   // Enter when the player is slow OR a cop is pinning them, and >=2 cops are close

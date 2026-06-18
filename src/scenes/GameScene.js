@@ -625,7 +625,7 @@ export class GameScene extends Phaser.Scene {
       cop.sprite.destroy();
     }
     this.cops = [];
-    this.director._frontCop = this.director._rearCop = null;
+    this.director._frontCop = this.director._rearCop = this.director._maneuverHolder = null;
   }
 
   // Spawn-control panel: unit type + count + Spawn / Clear. Changing the type rebuilds
@@ -1500,8 +1500,11 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
         target = this._clampWorld(target);
       }
       // Full speed while chasing OR hunting; capped only for sustained search / withdrawal.
+      // In ACTIVE the director may impose a maneuver/drafting cap (overtake-block, anti-
+      // bumper-grind) — honour it so a fast unit spends its speed on maneuvers, not tailing.
       const slow = (state === PursuitState.SEARCH && !hunting) || state === PursuitState.RETURNING;
-      cop.ai.speedCap = slow ? this.searchSpeed : Infinity;
+      cop.ai.speedCap = slow ? this.searchSpeed
+        : (state === PursuitState.ACTIVE && cop.maneuverSpeedCap != null ? cop.maneuverSpeedCap : Infinity);
       // Tier-1 rejoin: blend handling toward near-kinematic the farther this cop is.
       this._applyRejoinBand(cop, Phaser.Math.Distance.Between(cop.sprite.x, cop.sprite.y, px, py));
       cop.update(delta, target);
