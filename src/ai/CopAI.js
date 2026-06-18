@@ -16,11 +16,14 @@ import { segmentClear } from './lineOfSight.js';
 // Cops run a high minSteerFactor (kinematic-ish grip), so steering never dies at
 // low speed. A small failsafe reverses out of a genuine physics wedge.
 export class CopAI {
-  constructor(navGrid, rects = null) {
+  constructor(navGrid, rects = null, overrides = null) {
     this.nav   = navGrid;
     this.rects = rects;
 
     // --- Tunables ---
+    // Defaults below are the baseline "patrol" brain. A unit type can override any of
+    // them via its def's `ai` block (applied at the end of this block, before the
+    // internal path/aim state is set up so that state is never clobbered).
     this.steerDeadzone    = 0.05;
     this.directRange      = 60;  // within this, aim straight at the target even if blocked. Kept
                                  // small (true point-blank) — a larger zone drove cops into walls
@@ -50,6 +53,11 @@ export class CopAI {
                                  // hard redirect, e.g. when you round a corner). Below this,
                                  // ordinary chase corrections aren't slowed.
     this.turnBrakeSpeed   = 160; // px/s — speed cap at a 90°+ turn (tight enough to stay on road)
+
+    // Per-unit-type overrides (from the UnitDef's `ai` block). Curated tunable keys
+    // only — applied here so they win over the defaults but never touch the internal
+    // path/aim state initialized below.
+    if (overrides) Object.assign(this, overrides);
 
     // Cached node path + which node we're heading to
     this._path     = null;
@@ -129,10 +137,26 @@ export class CopAI {
       // --- Navigate the road network, one intersection at a time ---
       const copNode  = this.nav.nearestNode(cx, cy);
       const goalNode = this.nav.nearestNode(target.x, target.y);
-      if (!this._path || goalNode !== this._goalNode) {
+      if (!this._path) {
         this._path = this.nav.findPath(copNode, goalNode);
         this._goalNode = goalNode;
         this._wpIndex = this._path.length > 1 ? 1 : 0; // path[0] is where we are
+      } else if (goalNode !== this._goalNode) {
+        // GOAL CHANGED — and this is where the swerve was born. The shared last-known
+        // snaps to the player's LIVE position the instant a teammate regains sight, so a
+        // blind cop's goal can teleport around a corner in one frame. Rebuilding the path
+        // from scratch (and snapping the aim to a fresh path[1]) swings the wheel sideways
+        // MID-STREET into the building corner. Instead, ANCHOR to the node we're already
+        // committed to driving toward (it's clear from here — we were already going there)
+        // and re-route only the TAIL beyond it. We keep heading to the current waypoint,
+        // then follow the new path, so the redirect happens AT the open intersection, never
+        // cutting across a corner. (Rule 1: goal decides WHERE; the path stays drivable.
+        // Rule 3: no sideways anticipation toward a relayed live position.)
+        const anchor = this._wpIndex < this._path.length ? this._path[this._wpIndex] : copNode;
+        const tail   = this.nav.findPath(anchor, goalNode);
+        this._path     = anchor === copNode ? tail : [copNode, ...tail];
+        this._goalNode = goalNode;
+        this._wpIndex  = this._path.length > 1 ? 1 : 0;
       }
 
       // Advance to the next node once we've reached the current one.
