@@ -208,8 +208,8 @@ export class GameScene extends Phaser.Scene {
     if (!this._autostart) this._togglePause();
   }
 
-  _spawnCop(x, y) {
-    const cop = new CopCar(this, x, y, this.navGrid, this.losRects);
+  _spawnCop(x, y, unitType = 'patrol') {
+    const cop = new CopCar(this, x, y, this.navGrid, this.losRects, unitType);
     this.worldLayer.add(cop.sprite);   // world layer → rendered by main cam, not the UI cam
     cop.searchSlot = this.cops.length; // 0,1,2… — its angular sector when searching
     // Floating debug label so each cop's AI state is visible in the world (dev only)
@@ -510,11 +510,29 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
+  // Which unit type to dispatch next, so the active pack fills toward the level's
+  // ROSTER composition instead of a flat count. Walks the roster (threat order is the
+  // authoring order) and returns the first type the pack is short on; falls back to
+  // patrol once every roster slot is met (or the roster is empty). A roster type whose
+  // def doesn't exist yet (e.g. interceptor pre-Phase-D) resolves to a placeholder
+  // patrol in `_spawnCop`/`unitDef`, so today this still produces an all-patrol pack —
+  // identical to before the UnitDef refactor — while the plumbing is roster-ready.
+  _nextReinforcementType() {
+    const roster = this.pursuitLevel.cfg().roster;
+    if (!roster) return 'patrol';
+    const have = {};
+    for (const cop of this.cops) have[cop.unitType] = (have[cop.unitType] || 0) + 1;
+    for (const type of Object.keys(roster)) {
+      if ((have[type] || 0) < roster[type]) return type;
+    }
+    return 'patrol';
+  }
+
   // Create a fresh cop off-screen near the player (reuses the Tier-2 placement) and
   // drop it into the active pursuit — "dispatch a unit from that direction".
   _dispatchReinforcement() {
     const px = this.car.sprite.x, py = this.car.sprite.y;
-    const cop = this._spawnCop(px, py);     // temporary position; relocated below
+    const cop = this._spawnCop(px, py, this._nextReinforcementType()); // temp position; relocated below
     cop.ai.reactionTime = this.pursuitLevel.cfg().reaction;
     // Bias the spawn to a random bearing so reinforcements don't all come from one spot.
     cop.sprite.setPosition(px + Math.cos(Math.random() * Math.PI * 2) * this.respawnBandMax,

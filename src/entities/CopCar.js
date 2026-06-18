@@ -1,52 +1,47 @@
 import { Vehicle } from './Vehicle.js';
 import { CopAI } from '../ai/CopAI.js';
+import { UNITS, unitDef } from '../ai/units.js';
 
 // A pursuing cop car. Same physics as the player, driven by a CopAI.
 //
 // ── HOW TO TUNE A COP ──────────────────────────────────────────────────────
-// Cop *handling* (speed, grip, steering, drift) is tuned here, in the `stats`
-// object below — each key overrides the corresponding Vehicle default, so you
-// can give a cop any handling profile relative to the player. This is the
-// preferred way to balance a cop: change numbers here, not in the physics.
+// A cop is now defined by a UNIT TYPE (see `src/ai/units.js`). The type's def
+// carries its `handling` (→ Vehicle stats), its `ai` overrides (→ CopAI tunables),
+// and metadata (placement/role/health/mass). To tune an existing type, edit its
+// def; to add a new kind of cop, add a def — don't hardcode numbers here.
 //
-// Cop *behaviour* (how it decides to drive — pursuit, cornering aggression,
-// stuck recovery, approach/ram) is tuned by the constants in CopAI's
-// constructor. Pursuit-level / per-unit variety will eventually pass a config
-// in here; for now this is the single "level 1 patrol" profile.
+// Cop *behaviour* (how it decides to drive — pursuit, cornering, stuck recovery,
+// approach/ram) lives in CopAI; the def's `ai` block overrides those tunables
+// per-type. `unitType` defaults to 'patrol' so existing callers are unchanged.
 // ───────────────────────────────────────────────────────────────────────────
 export class CopCar extends Vehicle {
-  constructor(scene, x, y, navGrid, rects = null) {
+  constructor(scene, x, y, navGrid, rects = null, unitType = 'patrol') {
+    const def = unitDef(unitType);
+    const look = def.appearance || {};
     super(scene, x, y, {
       texture: 'player_car',
-      displayWidth: 38,
-      displayHeight: 60,
-      bodySize: 30,
+      displayWidth:  look.displayWidth  ?? 38,
+      displayHeight: look.displayHeight ?? 60,
+      bodySize:      look.bodySize      ?? 30,
       depth: 9,
-      tint: 0xffffff,   // flat white silhouette so cops pop against the dark map
+      tint:     look.tint ?? 0xffffff,  // flat white silhouette so cops pop against the dark map
       tintFill: true,
-      stats: {
-        // Top-speed dial. The player's nominal 600 is never reached — drag caps
-        // their REAL top at ~450. This cap + the matched acceleration put the cop's
-        // real top just under the player's, so you can edge away on a straight.
-        maxSpeed:     495,
-        acceleration: 350,
-        // Near-kinematic grip — velocity tracks facing almost instantly, so there
-        // is no drift lag to wash the cop wide into a building. This is what lets
-        // the path-follower thread the tight grid. (Player is 0.14/0.03 — the cop
-        // is deliberately planted/on-rails; the player is the one who drifts.)
-        gripLow:      0.6,  // player 0.14
-        gripHigh:     0.2,  // player 0.03 — looser at speed so it slides through fast corners
-        gripSpeedRef: 480,
-        turnSpeedLow: 2.5,  // player 2.2
-        turnSpeed:    5,    // player 1.2 — turns hard at speed (tuned for tight corners)
-        // Near-full steering authority at any speed so the path-follower can
-        // always turn (player is 0 — can't pivot in place). This is what makes
-        // the controller deadlock-proof.
-        minSteerFactor: 0.8,
-      },
+      stats: { ...def.handling },       // the type's handling profile (merged over Vehicle defaults)
     });
 
-    this.ai = new CopAI(navGrid, rects);
+    // Identity + (future) combat stats from the def. health/mass are carried now but
+    // unused until ram-disabling (§7) is wired — keeping them here so the def is the
+    // single source once that lands.
+    // Tag the RESOLVED type so unitType always names a real, defined unit: an unknown
+    // roster key (e.g. `interceptor` before its def exists) is a placeholder patrol, so
+    // it reports as a patrol. Once the real def lands, the same key resolves to itself.
+    this.unitType = UNITS[unitType] ? unitType : 'patrol';
+    this.unitDef  = def;
+    this.health   = def.health;
+    this.maxHealth = def.health;
+    this.mass     = def.mass;
+
+    this.ai = new CopAI(navGrid, rects, def.ai);
     this.aiTarget = { x, y }; // current steering target, for debug draw
     // Base handling — the "in the fight" profile. When a cop falls far behind, the
     // scene's Tier-1 rejoin blend lerps the LIVE stats from these toward a near-

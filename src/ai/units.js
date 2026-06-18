@@ -1,0 +1,67 @@
+// Cop UNIT TYPES — the single source of truth for what a cop IS.
+//
+// Until now there was one implicit cop: CopCar hardcoded a "patrol" handling block
+// and CopAI hardcoded its tunables. Every pursuit level could only differ in cop
+// COUNT, never composition. A UnitDef makes a cop type explicit DATA so levels can
+// reference a real mix (see each level's `roster` in PursuitLevel) and the dispatcher
+// can fill toward that composition.
+//
+// ── UnitDef shape ────────────────────────────────────────────────────────────
+//   handling : overrides merged onto Vehicle's defaults → becomes CopCar.stats.
+//              CopCar copies these into BOTH the live fields AND the base* fields the
+//              Tier-1 rejoin blend reads, so the def OWNS the in-the-fight baseline.
+//   ai       : overrides merged onto CopAI's tunables (directRange, chaseRange,
+//              cornerMinSpeed, …). Empty ⇒ the unit uses CopAI's defaults. Per-level
+//              `reaction` is still applied by the scene on top of this (level-scoped).
+//   appearance: optional sprite overrides (size/tint). Omitted ⇒ CopCar's defaults.
+//   placement: how the unit ENTERS the chase when dispatched (see GameScene dispatch):
+//              'flank-offscreen' = today's behavior (warp to an off-screen road node
+//              near the player). 'ahead-of-travel' / 'static-placed' / 'aerial' are
+//              future strategies for purpose-built units (interceptor/roadblock/heli).
+//   role     : default behavior bias (informational for now; the director/abilities
+//              act on it later). 'pursue' = the baseline chase.
+//   health   : damage soaked before disabled (§7 — carried now, UNUSED until ram
+//              disabling is wired). mass: ram-exchange weight (same — carried, unused).
+//   priority : retirement order on bleed-down — LOWER is retired first (filler goes,
+//              threat units stay). Patrol is the baseline filler at 0.
+//   ability  : optional special hook key (interceptor head-on, spike drop, …). null
+//              for the plain pursuer.
+//
+// NOTE: this is deliberately a PURE-REFACTOR catalog — `patrol` reproduces the exact
+// values CopCar/CopAI used before, so the chase is byte-for-byte unchanged. New types
+// (interceptor, heavy, spike, …) are added here as they're built, one level at a time.
+export const UNITS = {
+  patrol: {
+    name: 'Patrol',
+    handling: {
+      // Top-speed dial — real top (~450 after drag) sits just under the player's, so
+      // you can edge away on a straight. acceleration matched to that cap.
+      maxSpeed:       495,
+      acceleration:   350,
+      // Near-kinematic grip: velocity tracks facing almost instantly, so no drift lag
+      // washes the cop wide into a building. (Player is 0.14/0.03 — the cop is planted.)
+      gripLow:        0.6,
+      gripHigh:       0.2,
+      gripSpeedRef:   480,
+      turnSpeedLow:   2.5,
+      turnSpeed:      5,
+      // Near-full steering authority at any speed so the path-follower can always turn
+      // (player is 0 — can't pivot in place). This is what makes the cop deadlock-proof.
+      minSteerFactor: 0.8,
+    },
+    ai:         {},                  // baseline brain — all CopAI defaults
+    placement:  'flank-offscreen',
+    role:       'pursue',
+    health:     100,
+    mass:       1.0,
+    priority:   0,
+    ability:    null,
+  },
+};
+
+// Resolve a unit type to a def, falling back to patrol for an unknown key. A level
+// roster may name a type (e.g. `interceptor`) before that type's def exists yet — the
+// dispatcher then spawns a placeholder patrol, exactly as it did before this refactor.
+export function unitDef(type) {
+  return UNITS[type] || UNITS.patrol;
+}
