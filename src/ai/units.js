@@ -69,6 +69,7 @@ export const UNITS = {
   // chase over filler patrols on bleed-down.
   interceptor: {
     name: 'Interceptor',
+    appearance: { tint: 0xff7a00 },  // vivid orange flat silhouette — distinct from white patrols
     handling: {
       maxSpeed:       560,   // faster than patrol (495) so it can get ahead / close a head-on
       acceleration:   430,   // more aggressive pickup

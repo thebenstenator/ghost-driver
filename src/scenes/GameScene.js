@@ -559,16 +559,22 @@ export class GameScene extends Phaser.Scene {
     const px = this.car.sprite.x, py = this.car.sprite.y;
     const cop = this._spawnCop(px, py, this._nextReinforcementType()); // temp position; relocated below
     cop.ai.reactionTime = this.pursuitLevel.cfg().reaction;
-    // Bias the spawn to a random bearing so reinforcements don't all come from one spot.
-    cop.sprite.setPosition(px + Math.cos(Math.random() * Math.PI * 2) * this.respawnBandMax,
-                           py + Math.sin(Math.random() * Math.PI * 2) * this.respawnBandMax);
-    if (!this._tryRespawnCop(cop, px, py)) {
-      // No off-screen spot found — place at a clamped band point facing the player.
-      const a = Math.random() * Math.PI * 2;
-      const x = Phaser.Math.Clamp(px + Math.cos(a) * this.respawnBandMin, 120, WORLD_WIDTH - 120);
-      const y = Phaser.Math.Clamp(py + Math.sin(a) * this.respawnBandMin, 120, WORLD_HEIGHT - 120);
-      const p = this.navGrid.pos(this.navGrid.nearestNode(x, y));
-      this._placeCop(cop, p.x, p.y, px, py);
+    if (cop.unitDef.placement === 'ahead-of-travel') {
+      // Interceptor enters AHEAD for a head-on, not from the flank.
+      this._placeAhead(cop, px, py);
+    } else {
+      // Flank-offscreen: bias the spawn to a random bearing so reinforcements don't all
+      // come from one spot.
+      cop.sprite.setPosition(px + Math.cos(Math.random() * Math.PI * 2) * this.respawnBandMax,
+                             py + Math.sin(Math.random() * Math.PI * 2) * this.respawnBandMax);
+      if (!this._tryRespawnCop(cop, px, py)) {
+        // No off-screen spot found — place at a clamped band point facing the player.
+        const a = Math.random() * Math.PI * 2;
+        const x = Phaser.Math.Clamp(px + Math.cos(a) * this.respawnBandMin, 120, WORLD_WIDTH - 120);
+        const y = Phaser.Math.Clamp(py + Math.sin(a) * this.respawnBandMin, 120, WORLD_HEIGHT - 120);
+        const p = this.navGrid.pos(this.navGrid.nearestNode(x, y));
+        this._placeCop(cop, p.x, p.y, px, py);
+      }
     }
     this._reinforceFlashUntil = this.time.now + 1400;   // HUD flash near the heat bar
     if (this.copLog) console.log(`[t=${(this.time.now / 1000).toFixed(2)}] DISPATCH cop${this.cops.length - 1} (L${this.pursuitLevel.level}, ${this.cops.length} active)`);
@@ -1003,7 +1009,19 @@ this.boxTriggerSpeed = ${d.boxTriggerSpeed}; this.boxReleaseSpeed = ${d.boxRelea
       color: '#39ff14',
       backgroundColor: '#00000099',
       padding: { x: 6, y: 4 }
-    }).setScrollFactor(0).setDepth(100);
+    }).setScrollFactor(0).setDepth(100).setInteractive({ useHandCursor: true });
+    // Collapsible: click the box (or press H) to fold it to a one-line header — handy
+    // when the stats block covers the action during a playtest.
+    this._statsCollapsed = false;
+    const toggle = () => { this._statsCollapsed = !this._statsCollapsed; };
+    this.debugText.on('pointerdown', toggle);
+    this.input.keyboard.on('keydown-H', toggle);
+  }
+
+  // Keep the click hit-area matching the (variable-size) text after each setText.
+  _syncStatsHit() {
+    const i = this.debugText.input;
+    if (i && i.hitArea) { i.hitArea.width = this.debugText.width; i.hitArea.height = this.debugText.height; }
   }
 
   _setupHud() {
@@ -1203,8 +1221,14 @@ this.boxTriggerSpeed = ${d.boxTriggerSpeed}; this.boxReleaseSpeed = ${d.boxRelea
 
   // Dev-only top-left text overlay: fps/speed/state + nearest-cop AI + controls.
   _drawDebugText(state, spectating, speed) {
+    if (this._statsCollapsed) {
+      this.debugText.setText('▸ stats (H)');
+      this._syncStatsHit();
+      return;
+    }
     const view = this.camFocusIndex === 0 ? 'PLAYER' : `COP ${this.camFocusIndex - 1}`;
     const lines = [
+      '▾ stats — click / H to hide',
       `FPS:   ${Math.round(this.game.loop.actualFps)}`,
       `Speed: ${Math.round(speed)} px/s`,
       `Cops:  ${this.cops.length}`,
@@ -1231,8 +1255,9 @@ this.boxTriggerSpeed = ${d.boxTriggerSpeed}; this.boxReleaseSpeed = ${d.boxRelea
       }
     }
     if (this.car.isDrifting) lines.push('[HANDBRAKE DRIFT]');
-    lines.push('', 'WASD / Arrows — Drive', 'Space — Handbrake', 'Shift — Brake', 'P — Pause', 'C — Cop decision log', 'V — Cycle camera', 'R — Restart', 'M — Menu');
+    lines.push('', 'WASD / Arrows — Drive', 'Space — Handbrake', 'Shift — Brake', 'P — Pause', 'C — Cop decision log', 'V — Cycle camera', 'H — Toggle stats', 'R — Restart', 'M — Menu');
     this.debugText.setText(lines);
+    this._syncStatsHit();
   }
 
   _setupTunePanel() {
