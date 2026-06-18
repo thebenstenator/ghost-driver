@@ -68,6 +68,10 @@ export class CopAI {
     // --- Unstuck maneuver (wall-wedge extraction) ---
     this.unstuckBackTime = 0.5; // s reversing while turning
     this.unstuckFwdTime  = 0.4; // s forward while turning (committed) before re-evaluating
+    this.unstuckProx     = 110; // px — DON'T unstick when this close to the target. The cop is
+                                // effectively AT its goal (e.g. pinning the player against a wall
+                                // during a box); backing up to "recover" would abandon the pin.
+                                // Wedge recovery is only for being stuck FAR from the goal.
     this._unstuck    = null;    // active maneuver: { phase:'BACK'|'FWD', t }
     this._stuckTime  = 0;       // how long we've been wedged (far from target, not moving)
     this._unstuckDir = 1;       // turn direction; alternates each attempt
@@ -78,7 +82,6 @@ export class CopAI {
     const cx = cop.sprite.x, cy = cop.sprite.y;
     const speed = cop.getSpeed();
     const dist  = Phaser.Math.Distance.Between(cx, cy, target.x, target.y);
-    const blocked = !!(cop.sprite.body.blocked && !cop.sprite.body.blocked.none);
 
     let aimX = target.x, aimY = target.y;
     let limit = Math.min(this.maxApproachSpeed, this.speedCap);
@@ -110,12 +113,12 @@ export class CopAI {
       cop.debug = { mode: m.phase === 'BACK' ? 'UNSTK_BK' : 'UNSTK_FW', speed, dist, bend: 0, cornerLimit: 0, angleErr: 0 };
       return controls;
     }
-    // Wedge detection: barely moving while it wants to drive — either far from a target
-    // (classic wedge) OR physically jammed against a wall at close range (the dist<100
-    // grind that the old "dist>100" gate ignored, so a cop pinned on a corner a few px
-    // from the player ground forever). `blocked` distinguishes a real jam from simply
-    // sitting still near the target.
-    if (speed < 30 && (dist > 100 || blocked)) this._stuckTime += dt; else this._stuckTime = 0;
+    // Wedge detection: barely moving while it wants to drive AND it's still far from its
+    // goal. The old gate also fired at close range (`|| blocked`) to dislodge a cop jammed
+    // on a corner near the player — but that's exactly a BOX pin, and K-turning out of it
+    // abandoned the pin (and read as the "unstick steals the box" psychosis). Now a cop
+    // within unstickProx of its target is treated as arrived: it presses, it never reverses.
+    if (speed < 30 && dist > this.unstuckProx) this._stuckTime += dt; else this._stuckTime = 0;
     if (this._stuckTime > 0.35) {
       this._unstuckDir = -this._unstuckDir; // alternate so a retry tries the other way
       this._unstuck = { phase: 'BACK', t: this.unstuckBackTime };

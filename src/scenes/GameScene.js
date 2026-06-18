@@ -191,6 +191,7 @@ export class GameScene extends Phaser.Scene {
       if (this.sandbox) {
         this._setupTestbedPanel();              // spawn/clear chosen unit types
         this._setupUnitTunePanel(this._testbed.unitType); // tune the selected type's def
+        this._setupManeuverPanel();             // tune director maneuver/box behavior
       } else {
         this._setupCopTunePanel();
         if (this.pursuitLevel) this._setupPursuitPanel();
@@ -219,6 +220,7 @@ export class GameScene extends Phaser.Scene {
       if (this.pursuitGui) this.pursuitGui.destroy();
       if (this.testbedGui) this.testbedGui.destroy();
       if (this.unitGui)    this.unitGui.destroy();
+      if (this.maneuverGui) this.maneuverGui.destroy();
     });
 
     // Start paused on first load; launching from the menu (autostart) plays now.
@@ -625,7 +627,7 @@ export class GameScene extends Phaser.Scene {
       cop.sprite.destroy();
     }
     this.cops = [];
-    this.director._frontCop = this.director._rearCop = this.director._maneuverHolder = null;
+    this.director._maneuverHolder = null;
   }
 
   // Spawn-control panel: unit type + count + Spawn / Clear. Changing the type rebuilds
@@ -643,6 +645,55 @@ export class GameScene extends Phaser.Scene {
     gui.domElement.style.position = 'fixed';
     gui.domElement.style.top  = '8px';
     gui.domElement.style.left = '8px';
+    gui.domElement.style.zIndex = '9999';
+  }
+
+  // Live tuning for the director's maneuver/box behavior (drafting, overtake-and-block,
+  // box-v2 crash-and-hold). Binds straight to the live PursuitDirector fields, so changes
+  // take effect immediately. Persisted across refresh.
+  _setupManeuverPanel() {
+    const d = this.director;
+    const gui = new GUI({ title: 'Maneuvers', width: 290 });
+    this.maneuverGui = gui;
+    gui.close();
+
+    const draft = gui.addFolder('Drafting (anti-bumper-grind)');
+    draft.add(d, 'draftMinSpeed', 0, 400, 10).name('Only draft above (px/s)');
+    draft.add(d, 'draftGap',      0, 300, 5).name('Follow distance (px)');
+    draft.add(d, 'draftMargin',   0, 200, 5).name('Close-up speed margin');
+
+    const trig = gui.addFolder('Overtake — trigger');
+    trig.add(d, 'maneuverTrigSpeed', 0, 500, 10).name('Only if player above (px/s)');
+    trig.add(d, 'maneuverRange',     100, 1200, 20).name('Cop within (px)');
+    trig.add(d, 'maneuverBehind',    0, 300, 5).name('Must be behind by (px)');
+    trig.add(d, 'maneuverCooldown',  0, 12, 0.5).name('Cooldown between (s)');
+    trig.add(d, 'maneuverMaxTime',   1, 12, 0.5).name('Give up after (s)');
+
+    const exec = gui.addFolder('Overtake — execution');
+    exec.add(d, 'overtakeAhead', 80, 600, 10).name('Sprint-to ahead (px)');
+    exec.add(d, 'overtakeSide',  0, 200, 5).name('Swing-wide side (px)');
+    exec.add(d, 'overtakeBoost', 0, 500, 10).name('Speed boost (px/s)');
+    exec.add(d, 'overtakeDone',  0, 200, 5).name('Ahead-by to start block (px)');
+
+    const block = gui.addFolder('Block / brake-check');
+    block.add(d, 'blockAhead',       0, 300, 5).name('Sit ahead by (px)');
+    block.add(d, 'blockSpeedFactor', 0.1, 1.0, 0.05).name('Ease to × your speed');
+    block.add(d, 'blockMinSpeed',    0, 400, 10).name('…but ≥ (px/s)');
+    block.add(d, 'blockedSpeed',     0, 400, 10).name('Success: you slow below');
+    block.add(d, 'blockLost',        -400, 0, 10).name('Fail: fell behind (along)');
+
+    const box = gui.addFolder('Box v2 (crash-and-hold)');
+    box.add(d, 'boxTriggerSpeed', 0, 400, 10).name('Box when below (px/s)');
+    box.add(d, 'boxReleaseSpeed', 0, 500, 10).name('Break box above (px/s)');
+    box.add(d, 'boxEngageRange',  100, 1000, 20).name('Join box within (px)');
+    box.add(d, 'boxCloseMargin',  0, 400, 10).name('Rear close speed margin');
+    box.add(d, 'boxContactGap',   0, 150, 5).name('Rear hold gap (px)');
+
+    this._persistPanel(gui, 'gd_maneuverTune_v1');
+
+    gui.domElement.style.position = 'fixed';
+    gui.domElement.style.top  = '8px';
+    gui.domElement.style.left = '630px';
     gui.domElement.style.zIndex = '9999';
   }
 
@@ -1507,6 +1558,12 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
         : (state === PursuitState.ACTIVE && cop.maneuverSpeedCap != null ? cop.maneuverSpeedCap : Infinity);
       // Tier-1 rejoin: blend handling toward near-kinematic the farther this cop is.
       this._applyRejoinBand(cop, Phaser.Math.Distance.Between(cop.sprite.x, cop.sprite.y, px, py));
+      // Overtake speed boost: a committed overtaker gets extra top-end so it can actually
+      // pass the player. Applied AFTER the rejoin band (which rewrites maxSpeed from base),
+      // and raises the AI's approach cap to match so maxApproachSpeed isn't the bottleneck.
+      const boost = (state === PursuitState.ACTIVE) ? (cop.maneuverBoost || 0) : 0;
+      cop.maxSpeed += boost;
+      cop.ai.maxApproachSpeed = cop.ai.baseApproach + boost;
       cop.update(delta, target);
     }
 
