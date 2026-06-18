@@ -70,6 +70,16 @@ export class MenuScene extends Phaser.Scene {
       align: 'center', lineSpacing: 10,
     }).setOrigin(0.5);
 
+    // --- Dev-only: Cop Testbed (sandbox) entry, bottom-right. Spawn + tune individual
+    // cop unit types with no pursuit level in the loop. Only meaningful with dev panels,
+    // so it shows/hides with the dev toggle. ---
+    const tb = this.add.text(GAME_WIDTH - 16, GAME_HEIGHT - 18, '🔧 cop testbed →', {
+      fontFamily: 'monospace', fontSize: '15px', color: '#ffd23f',
+    }).setOrigin(1, 0.5).setInteractive({ useHandCursor: true });
+    tb.on('pointerover', () => tb.setColor('#ffe98a'));
+    tb.on('pointerout',  () => tb.setColor('#ffd23f'));
+    tb.on('pointerdown', () => this.scene.start('GameScene', { sandbox: true, autostart: true }));
+
     // --- Dev mode toggle (bottom-left corner) ---
     // Off by default. When on, the chase shows tuning panels + AI overlays; when off,
     // playtesters get a clean screen. Persisted, so it survives restarts.
@@ -82,12 +92,14 @@ export class MenuScene extends Phaser.Scene {
       devBox.setColor(this._devOn ? (hover ? '#5fff4a' : '#39ff14') : (hover ? '#9aa0b5' : '#6a6a7a'));
     };
     renderDev();
+    tb.setVisible(this._devOn);            // testbed entry only when dev mode is on
     devBox.on('pointerover', () => renderDev(true));
     devBox.on('pointerout',  () => renderDev(false));
     devBox.on('pointerdown', () => {
       this._devOn = !this._devOn;
       GameScene.setDevMode(this._devOn);
       renderDev(true);
+      tb.setVisible(this._devOn);
     });
 
     // --- Keyboard shortcuts ---

@@ -4,6 +4,8 @@ import { PlayerCar } from '../entities/PlayerCar.js';
 import { CopCar } from '../entities/CopCar.js';
 import { NavGrid } from '../ai/NavGrid.js';
 import { segmentClear } from '../ai/lineOfSight.js';
+import { CopAI } from '../ai/CopAI.js';
+import { UNITS } from '../ai/units.js';
 import { PursuitDirector } from '../ai/PursuitDirector.js';
 import { Pursuit, PursuitState } from '../systems/Pursuit.js';
 import { PursuitLevel } from '../systems/PursuitLevel.js';
@@ -37,6 +39,10 @@ export class GameScene extends Phaser.Scene {
     // Pursuit Mode: escalating heat/level system (starts at 1 cop and grows). When
     // off, the legacy fixed-cop-count chase runs unchanged. Persisted across R.
     this.pursuitMode = !!(data && data.pursuitMode);
+    // Sandbox / cop testbed (dev-only): no escalation, no auto-dispatch — you spawn
+    // chosen unit TYPES by hand and tune their def live. Cops are pinned to a relentless
+    // ACTIVE chase (no ditch/return/bust) so a unit is always exercising its behavior.
+    this.sandbox = !!(data && data.sandbox);
   }
 
   create() {
@@ -44,6 +50,9 @@ export class GameScene extends Phaser.Scene {
     // tuning panels are suppressed for a clean playtest screen. Read FIRST — cop spawn
     // and HUD setup below branch on it. Game logic is identical either way.
     this.devMode = GameScene.isDevMode();
+    // The testbed is reached from a dev-only menu button, so it always wants the dev
+    // overlays/panels regardless of the persisted toggle.
+    if (this.sandbox) this.devMode = true;
 
     this.physics.world.setBounds(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
     this.cameras.main.setBounds(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
@@ -145,7 +154,7 @@ export class GameScene extends Phaser.Scene {
       { x: cx - 504, y: cy },        // west
       { x: cx + 504, y: cy },        // east
     ];
-    const startCops = this.pursuitMode ? 1 : this.copCount;
+    const startCops = this.sandbox ? 0 : (this.pursuitMode ? 1 : this.copCount);
     for (let i = 0; i < startCops && i < spawnPts.length; i++) {
       const cop = this._spawnCop(spawnPts[i].x, spawnPts[i].y);
       cop.facing = Math.atan2(cy - spawnPts[i].y, cx - spawnPts[i].x); // face the player's start
@@ -177,8 +186,13 @@ export class GameScene extends Phaser.Scene {
     if (this.devMode) {
       this._setupDebugOverlay();
       this._setupTunePanel();
-      this._setupCopTunePanel();
-      if (this.pursuitLevel) this._setupPursuitPanel();
+      if (this.sandbox) {
+        this._setupTestbedPanel();              // spawn/clear chosen unit types
+        this._setupUnitTunePanel(this._testbed.unitType); // tune the selected type's def
+      } else {
+        this._setupCopTunePanel();
+        if (this.pursuitLevel) this._setupPursuitPanel();
+      }
     }
 
     // --- HUD camera ---------------------------------------------------------------
@@ -201,6 +215,8 @@ export class GameScene extends Phaser.Scene {
       if (this.gui)       this.gui.destroy();
       if (this.copGui)    this.copGui.destroy();
       if (this.pursuitGui) this.pursuitGui.destroy();
+      if (this.testbedGui) this.testbedGui.destroy();
+      if (this.unitGui)    this.unitGui.destroy();
     });
 
     // Start paused on first load; launching from the menu (autostart) plays now.
@@ -564,6 +580,168 @@ export class GameScene extends Phaser.Scene {
     if (this.copLog) console.log(`[t=${(this.time.now / 1000).toFixed(2)}] RETIRE cop (L${this.pursuitLevel.level}, ${this.cops.length} active)`);
   }
 
+  // --- Cop testbed (sandbox mode) --------------------------------------------------
+  // Hand-driven roster for developing/tuning a single unit type, with no pursuit level
+  // or dispatcher in the loop. Spawn N cops of a chosen TYPE, each entered via its
+  // placement strategy; Clear wipes them.
+  _testbedSpawn(type, count) {
+    const px = this.car.sprite.x, py = this.car.sprite.y;
+    for (let i = 0; i < count; i++) {
+      const cop = this._spawnCop(px, py, type);
+      this._placeByStrategy(cop, px, py);
+    }
+  }
+
+  // Enter a freshly spawned cop according to its def's placement strategy. 'ahead-of-
+  // travel' (interceptor) is added with that unit; default / 'flank-offscreen' drops it
+  // on a road node a few blocks out at a random bearing, facing you.
+  _placeByStrategy(cop, px, py) {
+    const ang = Math.random() * Math.PI * 2;
+    const d   = 450 + Math.random() * 250;
+    const tx  = Phaser.Math.Clamp(px + Math.cos(ang) * d, 120, WORLD_WIDTH  - 120);
+    const ty  = Phaser.Math.Clamp(py + Math.sin(ang) * d, 120, WORLD_HEIGHT - 120);
+    const p   = this.navGrid.pos(this.navGrid.nearestNode(tx, ty));
+    this._placeCop(cop, p.x, p.y, px, py);
+  }
+
+  // Remove every cop (sprites, labels, stale director slot refs).
+  _clearCops() {
+    for (const cop of this.cops) {
+      if (cop.modeLabel) cop.modeLabel.destroy();
+      cop.sprite.destroy();
+    }
+    this.cops = [];
+    this.director._frontCop = this.director._rearCop = null;
+  }
+
+  // Spawn-control panel: unit type + count + Spawn / Clear. Changing the type rebuilds
+  // the Unit Tuning panel onto that type's def.
+  _setupTestbedPanel() {
+    this._testbed = this._testbed || { unitType: 'patrol', count: 2 };
+    const gui = new GUI({ title: 'Cop Testbed', width: 240 });
+    this.testbedGui = gui;
+    gui.add(this._testbed, 'unitType', Object.keys(UNITS)).name('Unit type')
+       .onChange(t => this._setupUnitTunePanel(t));
+    gui.add(this._testbed, 'count', 1, 8, 1).name('Count');
+    gui.add({ spawn: () => this._testbedSpawn(this._testbed.unitType, this._testbed.count) }, 'spawn')
+       .name('▶ Spawn');
+    gui.add({ clear: () => this._clearCops() }, 'clear').name('✕ Clear all');
+    gui.domElement.style.position = 'fixed';
+    gui.domElement.style.top  = '8px';
+    gui.domElement.style.left = '8px';
+    gui.domElement.style.zIndex = '9999';
+  }
+
+  // Per-type tuning: binds a panel to UNITS[type]'s def (handling + the def-eligible AI
+  // tunables), writes changes back to the DEF (so future spawns inherit them) AND to
+  // every live cop of that type, persists per type, and dumps a paste-ready def block.
+  // Rebuilt when the selected type changes.
+  _setupUnitTunePanel(type) {
+    if (this.unitGui) { this.unitGui.destroy(); this.unitGui = null; }
+    const def = UNITS[type];
+    const h = def.handling;
+    // Effective AI tunables = CopAI defaults overlaid with this def's `ai` overrides.
+    const ai = new CopAI(this.navGrid, this.losRects, def.ai);
+
+    const t = this._unitTuning = {
+      maxSpeed: h.maxSpeed, acceleration: h.acceleration,
+      gripLow: h.gripLow, gripHigh: h.gripHigh, gripSpeedRef: h.gripSpeedRef,
+      turnSpeedLow: h.turnSpeedLow, turnSpeed: h.turnSpeed, minSteerFactor: h.minSteerFactor,
+      maxApproachSpeed: ai.maxApproachSpeed, cornerMinSpeed: ai.cornerMinSpeed,
+      brakeDecel: ai.brakeDecel, arriveRadius: ai.arriveRadius, senseDist: ai.senseDist,
+      directRange: ai.directRange, chaseRange: ai.chaseRange, reactionTime: ai.reactionTime,
+      ramRange: ai.ramRange, turnBrakeAngle: ai.turnBrakeAngle, turnBrakeSpeed: ai.turnBrakeSpeed,
+    };
+
+    const gui = new GUI({ title: `Unit: ${def.name}`, width: 300 });
+    this.unitGui = gui;
+    const apply = () => this._applyUnitTuning(type);
+
+    const drive = gui.addFolder('Handling');
+    drive.add(t, 'maxSpeed',       100, 1200, 10).name('Max Speed').onChange(apply);
+    drive.add(t, 'acceleration',   10, 1500,  5).name('Acceleration').onChange(apply);
+    drive.add(t, 'turnSpeedLow',   0.5, 8.0, 0.05).name('Turn Speed low').onChange(apply);
+    drive.add(t, 'turnSpeed',      0.5, 8.0, 0.05).name('Turn Speed high').onChange(apply);
+    drive.add(t, 'minSteerFactor', 0,   1.0, 0.05).name('Low-speed steer floor').onChange(apply);
+
+    const grip = gui.addFolder('Grip');
+    grip.add(t, 'gripLow',      0.02,  1.0, 0.01).name('Grip (low speed)').onChange(apply);
+    grip.add(t, 'gripHigh',     0.005, 1.0, 0.005).name('Grip (high speed)').onChange(apply);
+    grip.add(t, 'gripSpeedRef', 50,    600, 5).name('High-speed grip at').onChange(apply);
+
+    const aiF = gui.addFolder('Driving AI');
+    aiF.add(t, 'maxApproachSpeed', 200, 800, 10).name('Straight speed').onChange(apply);
+    aiF.add(t, 'cornerMinSpeed',   80,  500, 5).name('Corner min speed').onChange(apply);
+    aiF.add(t, 'brakeDecel',       100, 800, 10).name('Brake planning').onChange(apply);
+    aiF.add(t, 'arriveRadius',     30,  150, 5).name('Node arrive radius').onChange(apply);
+    aiF.add(t, 'senseDist',        200, 1000, 20).name('Corner sense ahead').onChange(apply);
+    aiF.add(t, 'directRange',      50,  400, 10).name('Direct-aim range').onChange(apply);
+    aiF.add(t, 'chaseRange',       150, 2000, 25).name('Beeline range (else paths)').onChange(apply);
+    aiF.add(t, 'reactionTime',     0,   0.5, 0.01).name('Reaction lag (s)').onChange(apply);
+    aiF.add(t, 'ramRange',         40,  200, 5).name('Ram aim range').onChange(apply);
+    aiF.add(t, 'turnBrakeAngle',   0.3, 1.6, 0.05).name('Turn-brake angle').onChange(apply);
+    aiF.add(t, 'turnBrakeSpeed',   60,  400, 10).name('Turn-brake speed').onChange(apply);
+
+    gui.add({ copy: () => this._copyUnitDef(type) }, 'copy').name('Copy UnitDef → Console');
+
+    this._persistPanel(gui, `gd_unitTune_${type}_v1`);
+    this._applyUnitTuning(type); // sync def + live cops to the (possibly restored) values
+
+    gui.domElement.style.position = 'fixed';
+    gui.domElement.style.top  = '8px';
+    gui.domElement.style.left = '320px';
+    gui.domElement.style.zIndex = '9999';
+  }
+
+  // Push the live unit-tuning object into the type's DEF (future spawns) and into every
+  // live cop of that type (live + base handling fields, plus the AI tunables).
+  _applyUnitTuning(type) {
+    const t = this._unitTuning, def = UNITS[type];
+    Object.assign(def.handling, {
+      maxSpeed: t.maxSpeed, acceleration: t.acceleration,
+      gripLow: t.gripLow, gripHigh: t.gripHigh, gripSpeedRef: t.gripSpeedRef,
+      turnSpeedLow: t.turnSpeedLow, turnSpeed: t.turnSpeed, minSteerFactor: t.minSteerFactor,
+    });
+    Object.assign(def.ai, {
+      maxApproachSpeed: t.maxApproachSpeed, baseApproach: t.maxApproachSpeed,
+      cornerMinSpeed: t.cornerMinSpeed, brakeDecel: t.brakeDecel, arriveRadius: t.arriveRadius,
+      senseDist: t.senseDist, directRange: t.directRange, chaseRange: t.chaseRange,
+      reactionTime: t.reactionTime, ramRange: t.ramRange,
+      turnBrakeAngle: t.turnBrakeAngle, turnBrakeSpeed: t.turnBrakeSpeed,
+    });
+    for (const cop of this.cops) {
+      if (cop.unitType !== type) continue;
+      cop.baseMaxSpeed = t.maxSpeed; cop.maxSpeed = t.maxSpeed; cop.acceleration = t.acceleration;
+      cop.baseGripLow = t.gripLow; cop.gripLow = t.gripLow;
+      cop.baseGripHigh = t.gripHigh; cop.gripHigh = t.gripHigh; cop.gripSpeedRef = t.gripSpeedRef;
+      cop.baseTurnSpeedLow = t.turnSpeedLow; cop.turnSpeedLow = t.turnSpeedLow;
+      cop.baseTurnSpeed = t.turnSpeed; cop.turnSpeed = t.turnSpeed; cop.minSteerFactor = t.minSteerFactor;
+      const a = cop.ai;
+      a.maxApproachSpeed = t.maxApproachSpeed; a.baseApproach = t.maxApproachSpeed;
+      a.cornerMinSpeed = t.cornerMinSpeed; a.brakeDecel = t.brakeDecel; a.arriveRadius = t.arriveRadius;
+      a.senseDist = t.senseDist; a.directRange = t.directRange; a.chaseRange = t.chaseRange;
+      a.reactionTime = t.reactionTime; a.ramRange = t.ramRange;
+      a.turnBrakeAngle = t.turnBrakeAngle; a.turnBrakeSpeed = t.turnBrakeSpeed;
+    }
+  }
+
+  // Dump a paste-ready handling/ai block for the type's def in src/ai/units.js.
+  _copyUnitDef(type) {
+    const t = this._unitTuning;
+    console.log(`// --- UNITS.${type} (paste handling/ai into src/ai/units.js) ---
+    handling: {
+      maxSpeed: ${t.maxSpeed}, acceleration: ${t.acceleration},
+      gripLow: ${t.gripLow}, gripHigh: ${t.gripHigh}, gripSpeedRef: ${t.gripSpeedRef},
+      turnSpeedLow: ${t.turnSpeedLow}, turnSpeed: ${t.turnSpeed}, minSteerFactor: ${t.minSteerFactor},
+    },
+    ai: {
+      maxApproachSpeed: ${t.maxApproachSpeed}, baseApproach: ${t.maxApproachSpeed}, cornerMinSpeed: ${t.cornerMinSpeed},
+      brakeDecel: ${t.brakeDecel}, arriveRadius: ${t.arriveRadius}, senseDist: ${t.senseDist},
+      directRange: ${t.directRange}, chaseRange: ${t.chaseRange}, reactionTime: ${t.reactionTime},
+      ramRange: ${t.ramRange}, turnBrakeAngle: ${t.turnBrakeAngle}, turnBrakeSpeed: ${t.turnBrakeSpeed},
+    },`);
+  }
+
   // Dev panel for the escalation feel. Binds straight to the live PursuitLevel (and its
   // per-level config rows), so there's no conflict with the cop-tuning panel.
   _setupPursuitPanel() {
@@ -673,7 +851,7 @@ export class GameScene extends Phaser.Scene {
     this.shiftKey  = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.SHIFT);
 
     // Restart any time (same cop count); new run drops straight into play
-    this.input.keyboard.on('keydown-R', () => this.scene.restart({ copCount: this.copCount, autostart: true, pursuitMode: this.pursuitMode }));
+    this.input.keyboard.on('keydown-R', () => this.scene.restart({ copCount: this.copCount, autostart: true, pursuitMode: this.pursuitMode, sandbox: this.sandbox }));
     // Back to the menu
     this.input.keyboard.on('keydown-M', () => this.scene.start('MenuScene'));
     // Pause toggle
@@ -1231,7 +1409,11 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
     // --- Pursuit state machine. `aware` (grace) keeps it ACTIVE through flickers;
     // only a real line of sight (`anyLOS`) moves the last-known marker, so a juke
     // behind a building commits the cops to where they GENUINELY last saw you. ---
-    const state = this.pursuit.update(anyAware, anyLOS, px, py, dt);
+    // Sandbox pins the pursuit ACTIVE (force awareness) so spawned units relentlessly
+    // chase — no ditch/search/return — keeping a unit always exercising its behavior
+    // while you tune it. lastKnown still only moves on a REAL sighting, so blind-nav is
+    // unchanged. (Cops still navigate to last-known when they personally lose sight.)
+    const state = this.pursuit.update(this.sandbox || anyAware, anyLOS, px, py, dt);
     if (this.pursuit.justDitched) this._flashGhost();
     // Player's heading/speed at the last REAL sighting (the search/track vector).
     if (anyLOS) {
@@ -1337,7 +1519,9 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
     // --- Bust meter (lose condition) ---
     // Pinned = actively pursued, a cop right on you, and you're slow (boxed/stopped).
     const playerSpeed = this.car.getSpeed();
-    const pinned = state === PursuitState.ACTIVE &&
+    // No arrest in the testbed — getting boxed shouldn't pause physics mid-tune.
+    const pinned = !this.sandbox &&
+                   state === PursuitState.ACTIVE &&
                    nearestCopDist < this.bust.pinDistance &&
                    playerSpeed < this.bust.pinSpeed;
     this.bust.update(pinned, delta / 1000);
