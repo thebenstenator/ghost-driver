@@ -554,25 +554,33 @@ export class GameScene extends Phaser.Scene {
     this.pursuitGui = gui;
     gui.close();
 
-    const heat = gui.addFolder('Heat');
+    const relevel = () => this._applyLevelTuning();
+
+    const heat = gui.addFolder('Heat / Bleed');
     heat.add(P, 'activeRate', 0, 5, 0.1).name('Heat/s (active)');
-    heat.add(P, 'bleedRate',  0, 10, 0.5).name('Bleed/s (ditched)');
     heat.add(P, 'ramHeat',    0, 30, 1).name('Heat per ram');
-    heat.add(P, 'heatFloor',  0, 100, 5).name('Heat floor');
-    heat.add(P, 'levelSpan',  10, 120, 5).name('Heat per level');
-    heat.add(P, 'bleedLevels', 0.5, 4, 0.5).name('Bleed depth (levels)');
+    heat.add(P, 'heatFloor',  0, 200, 5).name('Heat floor');
+    heat.add(P.bleed, 'fastFrac', 0, 1, 0.05).name('Bleed fast: ½level frac');
+    heat.add(P.bleed, 'fastRate', 0, 20, 0.5).name('Bleed fast rate /s');
+    heat.add(P.bleed, 'slowRate', 0, 5, 0.1).name('Bleed slow rate /s');
 
-    const l1 = gui.addFolder('Level 1');
-    l1.add(P.config[1], 'cap', 1, 8, 1).name('Cop cap');
-    l1.add(P.config[1], 'reinforce', 2, 40, 1).name('Reinforce (s)');
-    l1.add(P.config[1], 'cooldown', 5, 60, 1).name('Cooldown (s)').onChange(() => this._applyLevelTuning());
+    // One folder per level — every lever live. `span` (time to next level) is omitted
+    // on the top level (nothing to escalate to). reaction/cooldown/boxTrigger re-apply
+    // to the live cops/director on change. Rosters are data (the intended unit mix);
+    // until the unit TYPES exist the scene fills toward `cap` with placeholder patrols.
+    for (let lv = 1; lv <= P.maxLevel; lv++) {
+      const L = P.levels[lv];
+      const f = gui.addFolder(`Level ${lv}`);
+      if (lv < P.maxLevel) f.add(L, 'span', 5, 600, 5).name('Time to next (s)');
+      f.add(L, 'cap',        1, 20,  1).name('Cop cap');
+      f.add(L, 'reinforce',  2, 40,  1).name('Reinforce (s)');
+      f.add(L, 'cooldown',   5, 90,  1).name('Cooldown (s)').onChange(relevel);
+      f.add(L, 'reaction',   0, 0.5, 0.01).name('Reaction (s)').onChange(relevel);
+      f.add(L, 'boxTrigger', 0, 400, 10).name('Box trigger spd').onChange(relevel);
+      f.close();
+    }
 
-    const l2 = gui.addFolder('Level 2');
-    l2.add(P.config[2], 'cap', 1, 8, 1).name('Cop cap');
-    l2.add(P.config[2], 'reinforce', 2, 40, 1).name('Reinforce (s)');
-    l2.add(P.config[2], 'cooldown', 5, 60, 1).name('Cooldown (s)').onChange(() => this._applyLevelTuning());
-
-    this._persistPanel(gui, 'gd_pursuitLevel2'); // bumped: levelSpan/bleedLevels replace heatToL2
+    this._persistPanel(gui, 'gd_pursuitLevel3'); // bumped: per-level spans + bleed profile + L1-5
 
     gui.domElement.style.position = 'fixed';
     gui.domElement.style.top  = '8px';
