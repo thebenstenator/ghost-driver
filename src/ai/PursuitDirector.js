@@ -60,11 +60,11 @@ export class PursuitDirector {
     // the lesson from the reverted cutoff role). It only sets a drivable GOAL + a speed
     // cap for the shared CopAI; it is never new steering.
     this.maneuverTrigSpeed = 220;  // only block when the player is at least this fast (the grind case)
-    this.maneuverRange     = 460;  // cop must be within this of the player to start/own a maneuver
+    this.maneuverRange     = 160;  // cop must be within this of the player to start/own a maneuver
     this.maneuverBehind    = 20;   // px the cop must be BEHIND the player to start an overtake
     this.overtakeAhead     = 260;  // px ahead of the player the overtaker sprints to (full speed)
     this.overtakeSide      = 28;   // px lateral offset so it swings around you, not through you
-    this.overtakeBoost     = 220;  // EXTRA top speed (px/s) while overtaking, so it can actually pass
+    this.overtakeBoost     = 100;  // EXTRA top speed (px/s) while overtaking, so it can actually pass
     this.overtakeDone      = 50;   // px ahead the cop must reach to switch OVERTAKE → BLOCK
     this.blockAhead        = 90;   // px ahead the blocker sits to cut you off
     this.blockSpeedFactor  = 0.55; // blocker eases to this fraction of your speed (brake-check)
@@ -72,11 +72,11 @@ export class PursuitDirector {
     this.blockedSpeed      = 170;  // your speed below which the block SUCCEEDED → hand to box/bust
     this.blockLost         = -140; // along-heading value below which the blocker has FALLEN behind (fail)
     this.maneuverMaxTime   = 5.0;  // s a maneuver may run before timing out (fail)
-    this.maneuverCooldown  = 4.0;  // s after a maneuver before that cop can start another
+    this.maneuverCooldown  = 12.0; // s after a maneuver before that cop can start another
     // Drafting (plain tail): a faster aggressive unit matches the player's pace rather
     // than grinding the bumper — speed is reserved for the maneuver. Only bites at speed.
     this.draftMinSpeed     = 150;  // below this the cop closes freely (slow play is box/bust's job)
-    this.draftGap          = 55;   // px behind the player a drafting cop settles (about a car length)
+    this.draftGap          = 15;   // px behind the player a drafting cop settles (right on the bumper)
     this.draftMargin       = 70;   // px/s over the player's speed it may use to close when farther back
     this._maneuverHolder   = null; // the single cop currently running a maneuver
 

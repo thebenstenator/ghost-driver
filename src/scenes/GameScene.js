@@ -118,6 +118,8 @@ export class GameScene extends Phaser.Scene {
     this.trailMax     = 36;            // points kept per cop (~1260px of trail)
     this.interceptAheadDist = 850;     // px down the player's travel that an 'ahead-of-travel'
                                        // unit (interceptor) spawns, to set up a head-on
+    this.interceptEntrySpeed = 260;    // px/s an ahead-spawned interceptor enters AT (rolling toward
+                                       // you for the head-on, not parked) — moderate, not full speed
     this.searchSpeed = 250;            // cop speed cap while searching (clean corners)
     this.searchDepth = 2;              // STARTING search radius (blocks out from last-known)
     this.searchMaxDepth = 10;          // search grows out to this many blocks as ground is checked
@@ -434,9 +436,12 @@ export class GameScene extends Phaser.Scene {
       const dp = Phaser.Math.Distance.Between(cop.sprite.x, cop.sprite.y, px, py);
       const lost = dp > this.respawnDist && cop.pursuitMode !== 'DIRECT';
       cop._lostT = lost ? (cop._lostT || 0) + dt : 0;
+      // An 'ahead-of-travel' unit (interceptor) that's fallen behind respawns AHEAD to
+      // retry the head-on, not behind via the flank relocator — that's its whole loop.
+      const ahead = cop.unitDef && cop.unitDef.placement === 'ahead-of-travel';
       if (cop._lostT > this.respawnTime && cop._respawnCd <= 0 &&
           this._offCamera(cop.sprite.x, cop.sprite.y, this.respawnMargin) &&
-          this._tryRespawnCop(cop, px, py)) {
+          (ahead ? this._placeAhead(cop, px, py) : this._tryRespawnCop(cop, px, py))) {
         cop._lostT = 0;
         cop._respawnCd = this.respawnCooldown;
         if (this.copLog) {
@@ -600,15 +605,7 @@ export class GameScene extends Phaser.Scene {
   // picks WHERE it appears — the cop then drives with the same shared CopAI brain.
   _placeByStrategy(cop, px, py) {
     if (cop.unitDef.placement === 'ahead-of-travel') {
-      // Interceptor entry: drop it on a road node down the player's predicted travel,
-      // facing back toward the player, so it sets up a head-on. `nearestNodeAhead` keeps
-      // the node in front of the player (never behind), and _placeCop faces it at you.
-      const car = this.car;
-      const dir = car.getSpeed() > 40 ? Math.atan2(car.vy, car.vx) : car.facing;
-      const tx  = px + Math.cos(dir) * this.interceptAheadDist;
-      const ty  = py + Math.sin(dir) * this.interceptAheadDist;
-      const p   = this.navGrid.pos(this.navGrid.nearestNodeAhead(tx, ty, px, py, dir));
-      this._placeCop(cop, p.x, p.y, px, py);
+      this._placeAhead(cop, px, py);   // interceptor head-on entry (and respawn retry)
       return;
     }
     // flank-offscreen (default): a road node a few blocks out at a random bearing.
@@ -618,6 +615,31 @@ export class GameScene extends Phaser.Scene {
     const ty  = Phaser.Math.Clamp(py + Math.sin(ang) * d, 120, WORLD_HEIGHT - 120);
     const p   = this.navGrid.pos(this.navGrid.nearestNode(tx, ty));
     this._placeCop(cop, p.x, p.y, px, py);
+  }
+
+  // 'ahead-of-travel' placement: drop a cop down the player's predicted travel, facing
+  // back at the player and ALREADY ROLLING toward them — so it reads as a car driving in
+  // for a head-on, not a parked wall. Used for the interceptor's initial entry AND its
+  // respawn-ahead retry. Prefers an off-screen node ahead (walking outward) so it doesn't
+  // pop in. Returns true (always places).
+  _placeAhead(cop, px, py) {
+    const car = this.car;
+    const dir = car.getSpeed() > 40 ? Math.atan2(car.vy, car.vx) : car.facing;
+    let spot = null;
+    for (let d = this.interceptAheadDist; d <= this.interceptAheadDist + 900; d += 150) {
+      const tx = px + Math.cos(dir) * d, ty = py + Math.sin(dir) * d;
+      const p  = this.navGrid.pos(this.navGrid.nearestNodeAhead(tx, ty, px, py, dir));
+      if (!spot) spot = p;
+      if (this._offCamera(p.x, p.y, 0)) { spot = p; break; } // first off-screen node ahead wins
+    }
+    this._placeCop(cop, spot.x, spot.y, px, py);
+    // Enter at a moderate closing speed (not full), along its facing (toward the player),
+    // so the head-on starts with momentum instead of from a dead stop.
+    const s = this.interceptEntrySpeed;
+    cop.vx = Math.cos(cop.facing) * s;
+    cop.vy = Math.sin(cop.facing) * s;
+    cop.sprite.body.setVelocity(cop.vx, cop.vy);
+    return true;
   }
 
   // Remove every cop (sprites, labels, stale director slot refs).
@@ -642,6 +664,17 @@ export class GameScene extends Phaser.Scene {
     gui.add({ spawn: () => this._testbedSpawn(this._testbed.unitType, this._testbed.count) }, 'spawn')
        .name('▶ Spawn');
     gui.add({ clear: () => this._clearCops() }, 'clear').name('✕ Clear all');
+
+    // Respawn-ahead retry (interceptor head-on loop). Binds straight to the live scene.
+    const rs = gui.addFolder('Respawn-ahead (interceptor)');
+    rs.add(this, 'respawnEnabled').name('Respawn lost cops');
+    rs.add(this, 'respawnDist',  400, 3000, 50).name('Fell-behind dist (px)');
+    rs.add(this, 'respawnTime',  0.5, 12, 0.5).name('…for this long (s)');
+    rs.add(this, 'respawnCooldown', 0, 20, 0.5).name('Respawn cooldown (s)');
+    rs.add(this, 'interceptAheadDist', 200, 2000, 25).name('Spawn-ahead dist (px)');
+    rs.add(this, 'interceptEntrySpeed', 0, 600, 10).name('Entry speed (px/s)');
+    rs.close();
+
     gui.domElement.style.position = 'fixed';
     gui.domElement.style.top  = '8px';
     gui.domElement.style.left = '8px';
@@ -689,12 +722,31 @@ export class GameScene extends Phaser.Scene {
     box.add(d, 'boxCloseMargin',  0, 400, 10).name('Rear close speed margin');
     box.add(d, 'boxContactGap',   0, 150, 5).name('Rear hold gap (px)');
 
-    this._persistPanel(gui, 'gd_maneuverTune_v1');
+    gui.add({ copy: () => this._copyManeuverStats() }, 'copy').name('Copy Maneuvers → Console');
+
+    this._persistPanel(gui, 'gd_maneuverTune_v2'); // bumped: draftGap/maneuverRange/cooldown/boost rebaked
 
     gui.domElement.style.position = 'fixed';
     gui.domElement.style.top  = '8px';
     gui.domElement.style.left = '630px';
     gui.domElement.style.zIndex = '9999';
+  }
+
+  // Dump the director's maneuver/box tuning, paste-ready for the PursuitDirector ctor.
+  _copyManeuverStats() {
+    const d = this.director;
+    console.log(`// --- Director maneuver/box tuning (paste into PursuitDirector constructor) ---
+// Drafting
+this.draftMinSpeed = ${d.draftMinSpeed}; this.draftGap = ${d.draftGap}; this.draftMargin = ${d.draftMargin};
+// Overtake — trigger
+this.maneuverTrigSpeed = ${d.maneuverTrigSpeed}; this.maneuverRange = ${d.maneuverRange}; this.maneuverBehind = ${d.maneuverBehind};
+this.maneuverCooldown = ${d.maneuverCooldown}; this.maneuverMaxTime = ${d.maneuverMaxTime};
+// Overtake — execution
+this.overtakeAhead = ${d.overtakeAhead}; this.overtakeSide = ${d.overtakeSide}; this.overtakeBoost = ${d.overtakeBoost}; this.overtakeDone = ${d.overtakeDone};
+// Block / brake-check
+this.blockAhead = ${d.blockAhead}; this.blockSpeedFactor = ${d.blockSpeedFactor}; this.blockMinSpeed = ${d.blockMinSpeed}; this.blockedSpeed = ${d.blockedSpeed}; this.blockLost = ${d.blockLost};
+// Box v2
+this.boxTriggerSpeed = ${d.boxTriggerSpeed}; this.boxReleaseSpeed = ${d.boxReleaseSpeed}; this.boxEngageRange = ${d.boxEngageRange}; this.boxCloseMargin = ${d.boxCloseMargin}; this.boxContactGap = ${d.boxContactGap};`);
   }
 
   // Per-type tuning: binds a panel to UNITS[type]'s def (handling + the def-eligible AI
