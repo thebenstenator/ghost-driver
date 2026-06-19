@@ -128,13 +128,13 @@ export class GameScene extends Phaser.Scene {
     // crashing into walls/each other, but ONLY mid-aggressive-action (the cost of choosing
     // to box/block/overtake) — ordinary driving into a wall is free.
     this.ramThreshold   = 150;  // relative impact speed (px/s) below which a hit does NOTHING
-    this.ramScale       = 0.22; // cop damage per px/s of relative impact above the threshold
+    this.ramScale       = 0.12; // cop damage per px/s of relative impact above the threshold
     this.ramContactDist = 40;   // px centre-distance counted as a player↔cop hit
     this.ramDmgCooldown = 0.4;  // s between damage ticks on one cop (so a single ram = one tick)
     this.selfImpactDrop = 45;   // px/s sudden speed loss in a frame that reads as a CRASH (> braking)
     this.selfScale      = 0.5;  // cop self-damage per px/s of crash, while mid-aggressive-action
     this.wreckDespawn   = 30;   // s a disabled wreck sits as an obstacle before it's removed
-    this.wreckMass      = 0.3;  // disabled cop body mass — light, so you shove it aside
+    this.wreckMass      = 0.8;  // disabled cop body mass — light, so you shove it aside
     this.disableReinforceMult = 1.3; // replacement after a disable takes this × the normal reinforce
     this.searchSpeed = 250;            // cop speed cap while searching (clean corners)
     this.searchDepth = 2;              // STARTING search radius (blocks out from last-known)
@@ -195,6 +195,10 @@ export class GameScene extends Phaser.Scene {
     // Debug graphics for AI steering targets + line of sight (dev only)
     this.aiDebug = this.devMode ? this.add.graphics().setDepth(50) : null;
     if (this.aiDebug) this.worldLayer.add(this.aiDebug);
+
+    // Per-cop health bars — drawn in world space above each damaged cop (see _drawHealthBars).
+    this.healthBars = this.add.graphics().setDepth(11);
+    this.worldLayer.add(this.healthBars);
 
     this._setupHud();
 
@@ -769,6 +773,23 @@ export class GameScene extends Phaser.Scene {
     if (expired) this.wrecks = this.wrecks.filter(w => w._wreckT <= this.wreckDespawn);
   }
 
+  // A small health bar floating above each DAMAGED cop (undamaged cops show none, so it
+  // stays clean and you only see it once a cop's taking hits). Green → yellow → red.
+  _drawHealthBars() {
+    const g = this.healthBars;
+    g.clear();
+    const w = 28, h = 4;
+    for (const cop of this.cops) {
+      const max = cop.maxHealth || 100;
+      if (cop.health >= max) continue;                 // full health → no bar
+      const frac = Phaser.Math.Clamp(cop.health / max, 0, 1);
+      const x = cop.sprite.x - w / 2, y = cop.sprite.y - 42;
+      g.fillStyle(0x000000, 0.6); g.fillRect(x - 1, y - 1, w + 2, h + 2);
+      const col = frac > 0.5 ? 0x39ff14 : frac > 0.25 ? 0xffd23f : 0xff3b3b;
+      g.fillStyle(col, 0.95); g.fillRect(x, y, w * frac, h);
+    }
+  }
+
   // Spawn-control panel: unit type + count + Spawn / Clear. Changing the type rebuilds
   // the Unit Tuning panel onto that type's def.
   _setupTestbedPanel() {
@@ -882,12 +903,27 @@ export class GameScene extends Phaser.Scene {
     dis.add(this, 'wreckMass',  0.05, 2, 0.05).name('Wreck mass (shove-ability)');
     dis.add(this, 'disableReinforceMult', 1, 3, 0.1).name('Replace delay ×');
 
-    this._persistPanel(gui, 'gd_healthTune_v1');
+    gui.add({ copy: () => this._copyHealthStats() }, 'copy').name('Copy Health → Console');
+
+    this._persistPanel(gui, 'gd_healthTune_v2'); // bumped: patrol health / ramScale / wreckMass rebaked
 
     gui.domElement.style.position = 'fixed';
     gui.domElement.style.top  = '8px';
     gui.domElement.style.left = '950px';
     gui.domElement.style.zIndex = '9999';
+  }
+
+  // Dump the cop-health tuning: per-type health/mass (for src/ai/units.js) + the scene's
+  // ram/disable model (for the GameScene defaults block), paste-ready.
+  _copyHealthStats() {
+    const perType = Object.keys(UNITS)
+      .map(k => `// UNITS.${k}: health: ${UNITS[k].health}, mass: ${UNITS[k].mass},`).join('\n');
+    console.log(`// --- Cop health / ramming tuning ---
+${perType}
+// --- GameScene ram/disable model ---
+this.ramThreshold = ${this.ramThreshold}; this.ramScale = ${this.ramScale}; this.ramContactDist = ${this.ramContactDist}; this.ramDmgCooldown = ${this.ramDmgCooldown};
+this.selfImpactDrop = ${this.selfImpactDrop}; this.selfScale = ${this.selfScale};
+this.wreckDespawn = ${this.wreckDespawn}; this.wreckMass = ${this.wreckMass}; this.disableReinforceMult = ${this.disableReinforceMult};`);
   }
 
   // Dump the director's maneuver/box tuning, paste-ready for the PursuitDirector ctor.
@@ -1887,6 +1923,7 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
     }
     this._drawBustBar();
     this._drawHeatBar(state);
+    this._drawHealthBars();
     if (this.devMode) this._drawCopCounter();
 
     // Dev overlay: LOS lines, steering targets, per-cop labels, search coverage.

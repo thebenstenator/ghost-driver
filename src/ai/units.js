@@ -52,7 +52,7 @@ export const UNITS = {
     ai:         {},                  // baseline brain — all CopAI defaults
     placement:  'flank-offscreen',
     role:       'pursue',
-    health:     100,
+    health:     150,
     mass:       1.0,
     priority:   0,
     ability:    null,
