@@ -18,14 +18,17 @@ export class CopCar extends Vehicle {
   constructor(scene, x, y, navGrid, rects = null, unitType = 'patrol') {
     const def = unitDef(unitType);
     const look = def.appearance || {};
+    const hasTexture = !!look.texture;   // a real per-type sprite → show the ART, don't flat-tint it
     super(scene, x, y, {
-      texture: 'player_car',
+      texture:       look.texture ?? 'player_car',
       displayWidth:  look.displayWidth  ?? 38,
       displayHeight: look.displayHeight ?? 60,
       bodySize:      look.bodySize      ?? 30,
       depth: 9,
-      tint:     look.tint ?? 0xffffff,  // flat white silhouette so cops pop against the dark map
-      tintFill: true,
+      // Only flat-tint the fallback silhouette (no art). Textured cops render as-is.
+      tint:     hasTexture ? null : (look.tint ?? 0xffffff),
+      tintFill: !hasTexture,
+      textureRotation: look.textureRotation ?? 0, // e.g. π for a front-down sprite
       stats: { ...def.handling },       // the type's handling profile (merged over Vehicle defaults)
     });
 

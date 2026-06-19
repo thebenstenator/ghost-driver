@@ -15,8 +15,11 @@ export class Vehicle {
       depth        = 10,
       tint         = null,
       tintFill     = false, // true = replace silhouette with a flat colour (visibility)
+      textureRotation = 0,  // radians added to the sprite rotation — for art that doesn't
+                            // point "up" at rotation 0 (e.g. a front-down sprite needs π)
       stats        = {},
     } = config;
+    this.textureRotation = textureRotation;
 
     this.scene  = scene;
     this.facing = facing;
@@ -66,7 +69,7 @@ export class Vehicle {
     this.sprite = scene.physics.add.image(x, y, texture);
     this.sprite.setCollideWorldBounds(true);
     this.sprite.setBounce(0);
-    this.sprite.setRotation(this.facing + Math.PI / 2);
+    this.sprite.setRotation(this.facing + Math.PI / 2 + this.textureRotation);
     this.sprite.setDisplaySize(displayWidth, displayHeight);
     this.sprite.setDepth(depth);
     if (tint !== null) {
@@ -240,6 +243,6 @@ export class Vehicle {
 
     // --- Write to physics body ---
     this.sprite.setVelocity(this.vx, this.vy);
-    this.sprite.setRotation(this.facing + Math.PI / 2);
+    this.sprite.setRotation(this.facing + Math.PI / 2 + this.textureRotation);
   }
 }
