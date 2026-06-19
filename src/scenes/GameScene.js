@@ -146,9 +146,9 @@ export class GameScene extends Phaser.Scene {
     this.ramContactDist = 40; // px centre-distance counted as a player↔cop hit
     this.ramDmgCooldown = 0.4; // s between damage ticks on one cop (so a single ram = one tick)
     this.selfImpactDrop = 200; // px/s sudden speed loss in a frame that reads as a CRASH (> braking)
-    this.selfScale = 0.5; // cop self-damage per px/s of crash, while mid-aggressive-action
+    this.selfScale = 0.12; // cop self-damage per px/s of crash, while mid-aggressive-action
     this.wreckDespawn = 30; // s a disabled wreck sits as an obstacle before it's removed
-    this.wreckMass = 0.8; // disabled cop body mass — light, so you shove it aside
+    this.wreckMass = 0.9; // disabled cop body mass — light, so you shove it aside
     this.disableReinforceMult = 1.3; // replacement after a disable takes this × the normal reinforce
     this.searchSpeed = 250; // cop speed cap while searching (clean corners)
     this.searchDepth = 2; // STARTING search radius (blocks out from last-known)
