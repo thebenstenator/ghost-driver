@@ -1121,17 +1121,16 @@ this.boxTriggerSpeed = ${d.boxTriggerSpeed}; this.boxReleaseSpeed = ${d.boxRelea
     this.tweens.add({ targets: this.ghostText, alpha: 0, scale: 1.4, duration: 1500, ease: 'Cubic.easeOut' });
   }
 
-  // Per-level heat-bar fill colours: yellow (L1) → deep red (L5).
-  // Distinct hue per level so they read apart at a glance: yellow → orange → red →
-  // magenta → violet (escalating, and none clashes with the blue paused state or the
-  // green player UI).
+  // Per-level heat-bar fill colours. Distinct hue per level so they read apart at a
+  // glance: yellow → orange → red → magenta → violet (escalating, and none clashes with
+  // the blue paused state or the green player UI).
   static HEAT_COLORS = [0xffe14d, 0xff9e1a, 0xff3b3b, 0xff36c0, 0x9b3cff];
 
-  // Pursuit-Mode heat meter: a SEGMENTED ladder of the 5 levels under the status. Each
-  // level is one segment in its own distinct colour — cleared levels solid, the current
-  // level filled by its in-level progress (BLUE while paused/bleeding), future levels a
-  // dim ghost so the whole ladder is always legible. The current level is ringed by a
-  // white marker so you can see where you are at a glance. Flashes on each dispatch.
+  // Pursuit-Mode heat meter: thin bar under the status. Fill colour deepens with level;
+  // turns BLUE while heat is paused (pre-ditch cooldown / lost LOS) or bleeding down
+  // during withdraw. Every cleared level stays filled as the base, so each new level's
+  // colour BUILDS ON TOP of the previous one instead of refilling an empty track. Flashes
+  // "REINFORCEMENTS INCOMING" on each dispatch. `state` selects the colour phase.
   _drawHeatBar(state) {
     const g = this.heatGfx;
     g.clear();
@@ -1144,40 +1143,38 @@ this.boxTriggerSpeed = ${d.boxTriggerSpeed}; this.boxReleaseSpeed = ${d.boxRelea
     const P = this.pursuitLevel;
     const frac = P.heatFraction();
     const rising = state === PursuitState.ACTIVE;
-    const lv = Math.min(P.level, 5);          // current level, 1..5
-    const n = 5, gap = 3;
-    const segW = (w - gap * (n - 1)) / n;
+    const lvIdx = Math.min(P.level, 5) - 1;
+    const lvCol = GameScene.HEAT_COLORS[lvIdx];
+    const col = rising ? lvCol : 0x4a90ff;   // blue while paused / bleeding
 
-    for (let i = 0; i < n; i++) {
-      const sx = x + i * (segW + gap), col = GameScene.HEAT_COLORS[i], level = i + 1;
-      g.fillStyle(col, 0.15); g.fillRect(sx, y, segW, h);          // dim ghost — full ladder always visible
-      if (level < lv) {
-        g.fillStyle(col, 0.95); g.fillRect(sx, y, segW, h);        // cleared level — solid
-      } else if (level === lv) {
-        const fc = rising ? col : 0x4a90ff;                        // current — progress fill (blue if paused)
-        g.fillStyle(fc, 0.95); g.fillRect(sx, y, segW * frac, h);
-      }
-    }
+    // Track border — thin outline so empty reads as background.
+    g.lineStyle(1, 0xffffff, 0.22); g.strokeRect(x, y, w, h);
 
-    // Current-level marker: a white ring around the active segment.
-    const msx = x + (lv - 1) * (segW + gap);
-    g.lineStyle(1.5, 0xffffff, 0.9); g.strokeRect(msx - 1.5, y - 1.5, segW + 3, h + 3);
+    // Base layer: every already-cleared level keeps its colour across the full bar, so
+    // at level N the whole track reads as the N-1 colour and the current level's
+    // progress layers over it (the "building on top" effect).
+    if (lvIdx > 0) { g.fillStyle(GameScene.HEAT_COLORS[lvIdx - 1], 0.95); g.fillRect(x, y, w, h); }
 
-    // Reinforcement flash: white pulse over the whole bar + the warning label, fading.
+    // Current level's progress on top of the base.
+    g.fillStyle(col, 0.95); g.fillRect(x, y, w * frac, h);
+
+    // Width of the visibly-filled bar (full once a base exists, else just the fill).
+    const filledW = lvIdx > 0 ? w : w * frac;
+
+    // Reinforcement flash: white pulse over the filled bar + the warning label, fading.
     const flashT = (this._reinforceFlashUntil || 0) - this.time.now;
     if (flashT > 0) {
       const a = Math.min(flashT / 1400, 1);
-      g.fillStyle(0xffffff, a * 0.5); g.fillRect(x, y, w, h);
+      g.fillStyle(0xffffff, a * 0.6); g.fillRect(x, y, filledW, h);
       this.reinforceText.setPosition(width / 2, y + 18).setColor('#ff5a1a').setAlpha(a);
     } else {
       this.reinforceText.setAlpha(0);
     }
 
-    const lvCol = rising ? GameScene.HEAT_COLORS[lv - 1] : 0x4a90ff;
     const label = !rising ? (state === PursuitState.SEARCH && !this.pursuit.ditched ? 'HOLD' : 'COOLING')
-                : P.atMax() ? 'MAX' : `L${lv}`;
+                : P.atMax() ? 'MAX HEAT' : 'HEAT';
     this.heatLabel.setText(label)
-      .setPosition(x - 8, y + h / 2).setColor(`#${lvCol.toString(16).padStart(6, '0')}`).setAlpha(0.95);
+      .setPosition(x - 8, y + h / 2).setColor(`#${col.toString(16).padStart(6, '0')}`).setAlpha(0.9);
   }
 
   // Dev-only deployment readout (top-right): total cops + how many are "special" (non-
