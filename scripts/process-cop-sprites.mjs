@@ -77,19 +77,36 @@ function process(name, margin = 10) {
   minX = Math.max(0, minX - margin); minY = Math.max(0, minY - margin);
   maxX = Math.min(w - 1, maxX + margin); maxY = Math.min(h - 1, maxY + margin);
   const cw = maxX - minX + 1, ch2 = maxY - minY + 1;
-  // Build cropped RGBA scanlines (filter 0).
-  const stride = cw * 4;
-  const img = Buffer.alloc(ch2 * (stride + 1));
-  for (let y = 0; y < ch2; y++) {
-    img[y * (stride + 1)] = 0;
-    for (let x = 0; x < cw; x++) {
-      const sx = minX + x, sy = minY + y, si = (sy * w + sx) * 3, a = alpha[sy * w + sx];
-      const di = y * (stride + 1) + 1 + x * 4;
-      img[di] = out[si]; img[di + 1] = out[si + 1]; img[di + 2] = out[si + 2]; img[di + 3] = a;
-    }
+  // Flat cropped RGBA.
+  const crop = new Float32Array(cw * ch2 * 4);
+  for (let y = 0; y < ch2; y++) for (let x = 0; x < cw; x++) {
+    const sx = minX + x, sy = minY + y, si = (sy * w + sx) * 3, a = alpha[sy * w + sx];
+    const di = (y * cw + x) * 4;
+    crop[di] = out[si]; crop[di + 1] = out[si + 1]; crop[di + 2] = out[si + 2]; crop[di + 3] = a;
   }
+  // Box-filter downscale so the stored texture is near display size — this is what kills
+  // the moiré/shimmer (the GPU was crushing a 1024px source to ~30px with no mip).
+  const MAX = 128, sc = Math.min(1, MAX / Math.max(cw, ch2));
+  const dw = Math.max(1, Math.round(cw * sc)), dh = Math.max(1, Math.round(ch2 * sc));
+  const small = Buffer.alloc(dw * dh * 4);
+  for (let y = 0; y < dh; y++) for (let x = 0; x < dw; x++) {
+    const x0 = Math.floor(x * cw / dw), x1 = Math.max(x0 + 1, Math.floor((x + 1) * cw / dw));
+    const y0 = Math.floor(y * ch2 / dh), y1 = Math.max(y0 + 1, Math.floor((y + 1) * ch2 / dh));
+    let r = 0, g = 0, b = 0, aw = 0, asum = 0, n = 0;
+    for (let yy = y0; yy < y1; yy++) for (let xx = x0; xx < x1; xx++) {
+      const i = (yy * cw + xx) * 4, a = crop[i + 3];
+      r += crop[i] * a; g += crop[i + 1] * a; b += crop[i + 2] * a; aw += a; asum += a; n++;
+    }
+    const di = (y * dw + x) * 4;
+    small[di] = aw ? Math.round(r / aw) : 0; small[di + 1] = aw ? Math.round(g / aw) : 0;
+    small[di + 2] = aw ? Math.round(b / aw) : 0; small[di + 3] = Math.round(asum / n);
+  }
+  // Encode the downscaled RGBA (filter 0 scanlines).
+  const stride = dw * 4;
+  const img = Buffer.alloc(dh * (stride + 1));
+  for (let y = 0; y < dh; y++) { img[y * (stride + 1)] = 0; small.copy(img, y * (stride + 1) + 1, y * stride, y * stride + stride); }
   const ihdr = Buffer.alloc(13);
-  ihdr.writeUInt32BE(cw, 0); ihdr.writeUInt32BE(ch2, 4);
+  ihdr.writeUInt32BE(dw, 0); ihdr.writeUInt32BE(dh, 4);
   ihdr[8] = 8; ihdr[9] = 6; // 8-bit, RGBA
   const png = Buffer.concat([
     Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
@@ -98,7 +115,7 @@ function process(name, margin = 10) {
     chunk('IEND', Buffer.alloc(0)),
   ]);
   fs.writeFileSync(`${DIR}/${name}.png`, png);
-  console.log(`${name} -> ${cw}x${ch2}  aspect ${(cw / ch2).toFixed(3)}`);
+  console.log(`${name} -> texture ${dw}x${dh}  aspect ${(cw / ch2).toFixed(3)}`);
 }
 
 for (const n of ['cop_patrol', 'cop_interceptor', 'cop_heavy']) process(n);
