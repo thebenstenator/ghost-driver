@@ -1,39 +1,53 @@
-import Phaser from 'phaser';
-import GUI from 'lil-gui';
-import { PlayerCar } from '../entities/PlayerCar.js';
-import { CopCar } from '../entities/CopCar.js';
-import { NavGrid } from '../ai/NavGrid.js';
-import { segmentClear } from '../ai/lineOfSight.js';
-import { CopAI } from '../ai/CopAI.js';
-import { UNITS } from '../ai/units.js';
-import { PursuitDirector, CopState } from '../ai/PursuitDirector.js';
-import { Pursuit, PursuitState } from '../systems/Pursuit.js';
-import { PursuitLevel } from '../systems/PursuitLevel.js';
-import { BustMeter } from '../systems/BustMeter.js';
+import Phaser from "phaser";
+import GUI from "lil-gui";
+import { PlayerCar } from "../entities/PlayerCar.js";
+import { CopCar } from "../entities/CopCar.js";
+import { NavGrid } from "../ai/NavGrid.js";
+import { segmentClear } from "../ai/lineOfSight.js";
+import { CopAI } from "../ai/CopAI.js";
+import { UNITS } from "../ai/units.js";
+import { PursuitDirector, CopState } from "../ai/PursuitDirector.js";
+import { Pursuit, PursuitState } from "../systems/Pursuit.js";
+import { PursuitLevel } from "../systems/PursuitLevel.js";
+import { BustMeter } from "../systems/BustMeter.js";
 import {
-  WORLD_WIDTH, WORLD_HEIGHT,
-  GRID_COLS, GRID_ROWS, BLOCK, ROAD, MARGIN, GRID_STEP,
-} from '../config.js';
-import { BUILDINGS } from '../world/city.js';
+  WORLD_WIDTH,
+  WORLD_HEIGHT,
+  GRID_COLS,
+  GRID_ROWS,
+  BLOCK,
+  ROAD,
+  MARGIN,
+  GRID_STEP,
+} from "../config.js";
+import { BUILDINGS } from "../world/city.js";
 
 export class GameScene extends Phaser.Scene {
   constructor() {
-    super({ key: 'GameScene' });
+    super({ key: "GameScene" });
   }
 
   // Dev-mode flag, persisted in localStorage and toggled from the menu. Shared so the
   // menu checkbox and the scene read the exact same value.
-  static DEV_KEY = 'gd_devMode';
+  static DEV_KEY = "gd_devMode";
   static isDevMode() {
-    try { return localStorage.getItem(GameScene.DEV_KEY) === '1'; } catch (e) { return false; }
+    try {
+      return localStorage.getItem(GameScene.DEV_KEY) === "1";
+    } catch (e) {
+      return false;
+    }
   }
   static setDevMode(on) {
-    try { localStorage.setItem(GameScene.DEV_KEY, on ? '1' : '0'); } catch (e) { /* ignore */ }
+    try {
+      localStorage.setItem(GameScene.DEV_KEY, on ? "1" : "0");
+    } catch (e) {
+      /* ignore */
+    }
   }
 
   init(data) {
     // Cop count chosen in the menu (default 3 if launched directly)
-    this.copCount = (data && Number.isInteger(data.copCount)) ? data.copCount : 3;
+    this.copCount = data && Number.isInteger(data.copCount) ? data.copCount : 3;
     // First load starts paused; restarts (R) pass autostart so they drop into play
     this._autostart = !!(data && data.autostart);
     // Pursuit Mode: escalating heat/level system (starts at 1 cop and grows). When
@@ -72,124 +86,133 @@ export class GameScene extends Phaser.Scene {
     this.physics.add.collider(this.car.sprite, this.walls);
 
     // --- Cops + pursuit ---
-    this.navGrid    = new NavGrid();
-    this.director   = new PursuitDirector(this.navGrid, this.losRects);
-    this.cops       = [];
-    this.wrecks     = [];              // disabled cops, kept as inert obstacles until they despawn
-    this.sightRange = 900;             // px — cop spotting range in clear line
-    this.proximityRange = 70;          // px — sensed THROUGH walls only at point-blank (can't
-                                       // lose someone on your bumper). Kept small on purpose:
-                                       // a large value meant the cop could never lose you up
-                                       // close, so rounding a building could never break sight.
-                                       // Beyond this, spotting needs a clear line (sightRange).
-    this.awareGrace = 0.6;             // s — stay aware this long after last perceiving (memory)
-    this.sepRadius  = 80;              // separation: how close before cops repel
-    this.sepStrength = 150;            // separation: aim push strength
+    this.navGrid = new NavGrid();
+    this.director = new PursuitDirector(this.navGrid, this.losRects);
+    this.cops = [];
+    this.wrecks = []; // disabled cops, kept as inert obstacles until they despawn
+    this.sightRange = 900; // px — cop spotting range in clear line
+    this.proximityRange = 70; // px — sensed THROUGH walls only at point-blank (can't
+    // lose someone on your bumper). Kept small on purpose:
+    // a large value meant the cop could never lose you up
+    // close, so rounding a building could never break sight.
+    // Beyond this, spotting needs a clear line (sightRange).
+    this.awareGrace = 0.6; // s — stay aware this long after last perceiving (memory)
+    this.sepRadius = 80; // separation: how close before cops repel
+    this.sepStrength = 150; // separation: aim push strength
     // Tier-1 rejoin band: a cop that falls behind blends its HANDLING toward a near-
     // kinematic profile (not just speed) so it stops washing into walls and rejoins
     // cleanly. Blend ramps from rbStart (no change) to rbFull (max). Invisible in
     // practice — far cops are off-screen / screen-edge; you only feel that they
     // rejoin. This is the kinematic feel, used where it helps and can't be seen.
-    this.rbStart      = 700;  // px from player where the blend starts
-    this.rbFull       = 1500; // px from player where the blend is maxed
-    this.rbGrip       = 0.9;  // grip (low & high) at full blend — near on-rails
-    this.rbTurnMult   = 1.6;  // turn-rate multiplier at full blend
-    this.rbSpeedBoost = 90;   // px/s added to top speed at full blend
+    this.rbStart = 700; // px from player where the blend starts
+    this.rbFull = 1500; // px from player where the blend is maxed
+    this.rbGrip = 0.9; // grip (low & high) at full blend — near on-rails
+    this.rbTurnMult = 1.6; // turn-rate multiplier at full blend
+    this.rbSpeedBoost = 90; // px/s added to top speed at full blend
     // Tier-2 rejoin (respawn): a cop that's far AND not chasing AND off-screen for a
     // sustained beat is relocated off-screen near the player rather than grinding the
     // whole way back. No handling tune can close a map-width gap; this does, and it
     // sidesteps the fragile long-haul nav entirely (the genre-standard "dispatch a
     // fresh unit"). Hard off-camera gate on BOTH ends so there's never a visible pop-in.
     this.respawnEnabled = true;
-    this.respawnDist    = 1400; // px from player beyond which a non-chasing cop is "lost"
-    this.respawnTime    = 4.0;  // s a cop must stay lost+off-screen before it's relocated
+    this.respawnDist = 1400; // px from player beyond which a non-chasing cop is "lost"
+    this.respawnTime = 4.0; // s a cop must stay lost+off-screen before it's relocated
     this.respawnBandMin = 1000; // nearest it will reappear from the player
     this.respawnBandMax = 1800; // farthest it will look for an off-screen spot
-    this.respawnMargin  = 110;  // px a relocation spot must clear the camera view by
+    this.respawnMargin = 110; // px a relocation spot must clear the camera view by
     this.respawnCooldown = 6.0; // s before a just-respawned cop can respawn again (anti-thrash —
-                                // when zoomed out, off-screen spots are far, so a cop can land
-                                // still-"lost" and otherwise re-trigger every few seconds)
-    this.respawnMinGain = 350;  // a relocation must be at least this much closer than the cop's
-                                // current distance, or it's not worth doing (skip and wait)
-    this.respawnSpacing = 300;  // a relocation spot must clear other cops by this much, so several
-                                // reinforcements don't all surface on the same road
+    // when zoomed out, off-screen spots are far, so a cop can land
+    // still-"lost" and otherwise re-trigger every few seconds)
+    this.respawnMinGain = 350; // a relocation must be at least this much closer than the cop's
+    // current distance, or it's not worth doing (skip and wait)
+    this.respawnSpacing = 300; // a relocation spot must clear other cops by this much, so several
+    // reinforcements don't all surface on the same road
     // Breadcrumb trails — each cop records its recent path so blind teammates can
     // convoy-follow a known-drivable route (see PursuitDirector._convoyTarget).
-    this.trailSpacing = 35;            // px of travel between recorded trail points
-    this.trailMax     = 36;            // points kept per cop (~1260px of trail)
-    this.interceptAheadDist = 850;     // px down the player's travel that an 'ahead-of-travel'
-                                       // unit (interceptor) spawns, to set up a head-on
-    this.interceptEntrySpeed = 260;    // px/s an ahead-spawned interceptor enters AT (rolling toward
-                                       // you for the head-on, not parked) — moderate, not full speed
+    this.trailSpacing = 35; // px of travel between recorded trail points
+    this.trailMax = 36; // points kept per cop (~1260px of trail)
+    this.interceptAheadDist = 850; // px down the player's travel that an 'ahead-of-travel'
+    // unit (interceptor) spawns, to set up a head-on
+    this.interceptEntrySpeed = 260; // px/s an ahead-spawned interceptor enters AT (rolling toward
+    // you for the head-on, not parked) — moderate, not full speed
 
     // --- Cop health / ramming (scripted from velocities, NOT collider geometry) ---
     // Damage = relative impact speed, so a full head-on wrecks a patrol, a rear-end at
     // matched speed barely scratches it, a T-bone is between. Cops also hurt themselves
     // crashing into walls/each other, but ONLY mid-aggressive-action (the cost of choosing
     // to box/block/overtake) — ordinary driving into a wall is free.
-    this.ramThreshold   = 150;  // relative impact speed (px/s) below which a hit does NOTHING
-    this.ramScale       = 0.12; // cop damage per px/s of relative impact above the threshold
-    this.ramContactDist = 40;   // px centre-distance counted as a player↔cop hit
-    this.ramDmgCooldown = 0.4;  // s between damage ticks on one cop (so a single ram = one tick)
-    this.selfImpactDrop = 45;   // px/s sudden speed loss in a frame that reads as a CRASH (> braking)
-    this.selfScale      = 0.5;  // cop self-damage per px/s of crash, while mid-aggressive-action
-    this.wreckDespawn   = 30;   // s a disabled wreck sits as an obstacle before it's removed
-    this.wreckMass      = 0.8;  // disabled cop body mass — light, so you shove it aside
+    this.ramThreshold = 150; // relative impact speed (px/s) below which a hit does NOTHING
+    this.ramScale = 0.12; // cop damage per px/s of relative impact above the threshold
+    this.ramContactDist = 40; // px centre-distance counted as a player↔cop hit
+    this.ramDmgCooldown = 0.4; // s between damage ticks on one cop (so a single ram = one tick)
+    this.selfImpactDrop = 200; // px/s sudden speed loss in a frame that reads as a CRASH (> braking)
+    this.selfScale = 0.5; // cop self-damage per px/s of crash, while mid-aggressive-action
+    this.wreckDespawn = 30; // s a disabled wreck sits as an obstacle before it's removed
+    this.wreckMass = 0.8; // disabled cop body mass — light, so you shove it aside
     this.disableReinforceMult = 1.3; // replacement after a disable takes this × the normal reinforce
-    this.searchSpeed = 250;            // cop speed cap while searching (clean corners)
-    this.searchDepth = 2;              // STARTING search radius (blocks out from last-known)
-    this.searchMaxDepth = 10;          // search grows out to this many blocks as ground is checked
-    this.coverageTTL = 6;              // s a searched node stays "covered" before it's worth re-checking
-    this.searchDirBias = 75;           // how strongly the search leans toward the last-known escape
-                                       // direction (cops fan across the FORWARD arc, not full circle)
-    this.searchDwell = 1.2;            // s after losing the trail that EVERY cop heads to last-known
-                                       // before fanning out — a sub-second LOS blip can't spin a cop around
-    this.searchStall = 2;              // s of no progress toward a search node before a cop ABANDONS it
-                                       // (can't reach it — wedged in an alley / node behind a wall) and re-picks
+    this.searchSpeed = 250; // cop speed cap while searching (clean corners)
+    this.searchDepth = 2; // STARTING search radius (blocks out from last-known)
+    this.searchMaxDepth = 10; // search grows out to this many blocks as ground is checked
+    this.coverageTTL = 6; // s a searched node stays "covered" before it's worth re-checking
+    this.searchDirBias = 75; // how strongly the search leans toward the last-known escape
+    // direction (cops fan across the FORWARD arc, not full circle)
+    this.searchDwell = 1.2; // s after losing the trail that EVERY cop heads to last-known
+    // before fanning out — a sub-second LOS blip can't spin a cop around
+    this.searchStall = 2; // s of no progress toward a search node before a cop ABANDONS it
+    // (can't reach it — wedged in an alley / node behind a wall) and re-picks
     // Shared search-coverage map: time (search clock) each nav node was last SEEN
     // by any cop. Cops paint what they can see and head for the least-covered
     // node, so they divide the area instead of re-checking the same streets.
-    this.coverage    = new Float32Array(this.navGrid.cols * this.navGrid.rows).fill(-1e9);
+    this.coverage = new Float32Array(
+      this.navGrid.cols * this.navGrid.rows,
+    ).fill(-1e9);
     this._searchClock = 0;
     this._searchRadius = this.searchDepth; // current (expanding) radius this episode
-    this.pursuit    = new Pursuit(20, 30); // 20s to ditch, then 30s of hot search
+    this.pursuit = new Pursuit(20, 30); // 20s to ditch, then 30s of hot search
     // Station the cops withdraw to once the heat cools (SE corner, for testing)
-    this.station    = this.navGrid.pos(this.navGrid.index(this.navGrid.cols - 1, this.navGrid.rows - 1));
+    this.station = this.navGrid.pos(
+      this.navGrid.index(this.navGrid.cols - 1, this.navGrid.rows - 1),
+    );
 
     // Escalation brain (Pursuit Mode only). Heat → level → cop cap; reinforcements
     // trickle in toward the cap on a timer + an instant one each level-up.
-    this.pursuitLevel  = this.pursuitMode ? new PursuitLevel() : null;
+    this.pursuitLevel = this.pursuitMode ? new PursuitLevel() : null;
     // Seed the timer to the full interval so the 2nd cop arrives AFTER it, not instantly
     // (a 0 here dispatched a reinforcement on frame 1 → "started with 2 cops").
-    this._reinforceTimer = this.pursuitLevel ? this.pursuitLevel.cfg().reinforce : 0;
+    this._reinforceTimer = this.pursuitLevel
+      ? this.pursuitLevel.cfg().reinforce
+      : 0;
 
     // Spawn the chosen number of cops, approaching from different sides. The player
     // starts at (cx,cy), so each cop faces that point — south faces north, west faces
     // east, east faces west — instead of all facing north. Pursuit Mode starts with
     // ONE cop (spawnPts[0] = south, so the lone chaser comes from behind a north-bound
     // player) and escalates; legacy mode uses the menu's fixed count.
-    const cx = WORLD_WIDTH / 2, cy = WORLD_HEIGHT / 2;
+    const cx = WORLD_WIDTH / 2,
+      cy = WORLD_HEIGHT / 2;
     const spawnPts = [
-      { x: cx,        y: cy + 504 }, // south (the Pursuit-Mode lone cop)
-      { x: cx - 504, y: cy },        // west
-      { x: cx + 504, y: cy },        // east
+      { x: cx, y: cy + 504 }, // south (the Pursuit-Mode lone cop)
+      { x: cx - 504, y: cy }, // west
+      { x: cx + 504, y: cy }, // east
     ];
-    const startCops = this.sandbox ? 0 : (this.pursuitMode ? 1 : this.copCount);
+    const startCops = this.sandbox ? 0 : this.pursuitMode ? 1 : this.copCount;
     for (let i = 0; i < startCops && i < spawnPts.length; i++) {
       const cop = this._spawnCop(spawnPts[i].x, spawnPts[i].y);
       cop.facing = Math.atan2(cy - spawnPts[i].y, cx - spawnPts[i].x); // face the player's start
       cop.sprite.setRotation(cop.facing + Math.PI / 2);
     }
-    if (this.pursuitLevel) {                 // start the chase at the level-1 profile
+    if (this.pursuitLevel) {
+      // start the chase at the level-1 profile
       this.pursuit.cooldownDuration = this.pursuitLevel.cfg().cooldown;
       this._applyLevelTuning();
     }
 
     // The chase is already underway when the mission starts (if there are cops)
-    if (this.cops.length) this.pursuit.begin(this.car.sprite.x, this.car.sprite.y);
+    if (this.cops.length)
+      this.pursuit.begin(this.car.sprite.x, this.car.sprite.y);
 
     // Lose condition
-    this.bust   = new BustMeter();
+    this.bust = new BustMeter();
     this.busted = false;
 
     // Debug graphics for AI steering targets + line of sight (dev only)
@@ -211,10 +234,10 @@ export class GameScene extends Phaser.Scene {
       this._setupDebugOverlay();
       this._setupTunePanel();
       if (this.sandbox) {
-        this._setupTestbedPanel();              // spawn/clear chosen unit types
+        this._setupTestbedPanel(); // spawn/clear chosen unit types
         this._setupUnitTunePanel(this._testbed.unitType); // tune the selected type's def
-        this._setupManeuverPanel();             // tune director maneuver/box behavior
-        this._setupHealthPanel();               // tune cop health / ramming / disabling
+        this._setupManeuverPanel(); // tune director maneuver/box behavior
+        this._setupHealthPanel(); // tune cop health / ramming / disabling
       } else {
         this._setupCopTunePanel();
         if (this.pursuitLevel) this._setupPursuitPanel();
@@ -228,24 +251,33 @@ export class GameScene extends Phaser.Scene {
     // after all HUD objects exist (incl. the dev debugText).
     this.uiCamera = this.cameras.add(0, 0, this.scale.width, this.scale.height);
     this.uiCamera.setScroll(0, 0);
-    const hud = [this.statusText, this.cooldownText, this.ghostText, this.bustGfx,
-                 this.bustLabel, this.bustedText, this.pausedText, this.heatGfx, this.heatLabel,
-                 this.reinforceText];
+    const hud = [
+      this.statusText,
+      this.cooldownText,
+      this.ghostText,
+      this.bustGfx,
+      this.bustLabel,
+      this.bustedText,
+      this.pausedText,
+      this.heatGfx,
+      this.heatLabel,
+      this.reinforceText,
+    ];
     if (this.debugText) hud.push(this.debugText);
     if (this.copCountText) hud.push(this.copCountText);
-    this.cameras.main.ignore(hud);          // world cam skips HUD
-    this.uiCamera.ignore(this.worldLayer);  // UI cam skips the world (and its future children)
+    this.cameras.main.ignore(hud); // world cam skips HUD
+    this.uiCamera.ignore(this.worldLayer); // UI cam skips the world (and its future children)
 
     // Tear down the DOM tuning panels when the scene restarts / returns to menu,
     // otherwise they stack up duplicates on every R / menu cycle.
-    this.events.once('shutdown', () => {
-      if (this.gui)       this.gui.destroy();
-      if (this.copGui)    this.copGui.destroy();
+    this.events.once("shutdown", () => {
+      if (this.gui) this.gui.destroy();
+      if (this.copGui) this.copGui.destroy();
       if (this.pursuitGui) this.pursuitGui.destroy();
       if (this.testbedGui) this.testbedGui.destroy();
-      if (this.unitGui)    this.unitGui.destroy();
+      if (this.unitGui) this.unitGui.destroy();
       if (this.maneuverGui) this.maneuverGui.destroy();
-      if (this.healthGui)  this.healthGui.destroy();
+      if (this.healthGui) this.healthGui.destroy();
     });
 
     // Start paused on first load; launching from the menu (autostart) plays now.
@@ -253,15 +285,23 @@ export class GameScene extends Phaser.Scene {
     if (!this._autostart) this._togglePause();
   }
 
-  _spawnCop(x, y, unitType = 'patrol') {
+  _spawnCop(x, y, unitType = "patrol") {
     const cop = new CopCar(this, x, y, this.navGrid, this.losRects, unitType);
-    this.worldLayer.add(cop.sprite);   // world layer → rendered by main cam, not the UI cam
+    this.worldLayer.add(cop.sprite); // world layer → rendered by main cam, not the UI cam
     cop.searchSlot = this.cops.length; // 0,1,2… — its angular sector when searching
     // Floating debug label so each cop's AI state is visible in the world (dev only)
-    cop.modeLabel = this.devMode ? this.add.text(x, y, '', {
-      fontFamily: 'monospace', fontSize: '11px', color: '#ffffff',
-      backgroundColor: '#000000aa', padding: { x: 3, y: 1 },
-    }).setOrigin(0.5, 1).setDepth(60) : null;
+    cop.modeLabel = this.devMode
+      ? this.add
+          .text(x, y, "", {
+            fontFamily: "monospace",
+            fontSize: "11px",
+            color: "#ffffff",
+            backgroundColor: "#000000aa",
+            padding: { x: 3, y: 1 },
+          })
+          .setOrigin(0.5, 1)
+          .setDepth(60)
+      : null;
     if (cop.modeLabel) this.worldLayer.add(cop.modeLabel);
     this.physics.add.collider(cop.sprite, this.walls);
     // Player↔cop contact: bump heat in Pursuit Mode (the "minor collision" escalator),
@@ -273,7 +313,8 @@ export class GameScene extends Phaser.Scene {
       }
     });
     // Cops bump off each other rather than stacking
-    for (const other of this.cops) this.physics.add.collider(cop.sprite, other.sprite);
+    for (const other of this.cops)
+      this.physics.add.collider(cop.sprite, other.sprite);
     this.cops.push(cop);
     return cop;
   }
@@ -292,8 +333,16 @@ export class GameScene extends Phaser.Scene {
   _paintCoverage(cop, area) {
     for (const idx of area) {
       const p = this.navGrid.pos(idx);
-      const d = Phaser.Math.Distance.Between(cop.sprite.x, cop.sprite.y, p.x, p.y);
-      if (d <= this.sightRange && segmentClear(cop.sprite.x, cop.sprite.y, p.x, p.y, this.losRects)) {
+      const d = Phaser.Math.Distance.Between(
+        cop.sprite.x,
+        cop.sprite.y,
+        p.x,
+        p.y,
+      );
+      if (
+        d <= this.sightRange &&
+        segmentClear(cop.sprite.x, cop.sprite.y, p.x, p.y, this.losRects)
+      ) {
         this.coverage[idx] = this._searchClock;
       }
     }
@@ -325,7 +374,10 @@ export class GameScene extends Phaser.Scene {
     // to the LAST-KNOWN spot — no frontier fan yet. A sub-second LOS blip (you cut a
     // corner) then can't spin a cop around toward a far search node before the chase
     // resumes; only a genuinely lost trail fans them out.
-    if (this._searchClock < this.searchDwell) { cop._searchNode = null; return lk; }
+    if (this._searchClock < this.searchDwell) {
+      cop._searchNode = null;
+      return lk;
+    }
 
     const area = this._searchArea();
 
@@ -340,14 +392,23 @@ export class GameScene extends Phaser.Scene {
     // SAME wall, loop for 30s+. On abandon we mark it covered so nobody re-picks it.
     if (cop._searchNode != null && area.includes(cop._searchNode)) {
       const p = this.navGrid.pos(cop._searchNode);
-      const d = Phaser.Math.Distance.Between(cop.sprite.x, cop.sprite.y, p.x, p.y);
+      const d = Phaser.Math.Distance.Between(
+        cop.sprite.x,
+        cop.sprite.y,
+        p.x,
+        p.y,
+      );
       if (d >= ARRIVE) {
-        if (d < (cop._searchBest ?? Infinity) - 20) {            // closing in → keep committing
-          cop._searchBest = d; cop._searchStallSince = this._searchClock;
+        if (d < (cop._searchBest ?? Infinity) - 20) {
+          // closing in → keep committing
+          cop._searchBest = d;
+          cop._searchStallSince = this._searchClock;
         }
-        const stalled = (this._searchClock - (cop._searchStallSince ?? this._searchClock)) > this.searchStall;
+        const stalled =
+          this._searchClock - (cop._searchStallSince ?? this._searchClock) >
+          this.searchStall;
         if (!stalled) return p;
-        this.coverage[cop._searchNode] = this._searchClock;      // give up: mark covered, re-pick below
+        this.coverage[cop._searchNode] = this._searchClock; // give up: mark covered, re-pick below
       }
     }
 
@@ -359,26 +420,50 @@ export class GameScene extends Phaser.Scene {
     // arc so multiple cops split the likely area (1 cop -> straight down the escape
     // vector; N cops -> spread over ~180° centred on it) rather than one going the
     // opposite way. This makes the whole search prefer where you probably went.
-    const n      = Math.max(1, this.cops.length);
-    const fanDir = this.pursuit.lastKnownDir + ((cop.searchSlot || 0) - (n - 1) / 2) / n * Math.PI;
-    let best = area[0], bestCost = Infinity;
+    const n = Math.max(1, this.cops.length);
+    const fanDir =
+      this.pursuit.lastKnownDir +
+      (((cop.searchSlot || 0) - (n - 1) / 2) / n) * Math.PI;
+    let best = area[0],
+      bestCost = Infinity;
     for (const idx of area) {
       const p = this.navGrid.pos(idx);
       const recency = this._searchClock - this.coverage[idx];
-      const d   = Phaser.Math.Distance.Between(cop.sprite.x, cop.sprite.y, p.x, p.y);
-      const fwd = Math.abs(Phaser.Math.Angle.Wrap(Math.atan2(p.y - cop.sprite.y, p.x - cop.sprite.x) - cop.facing));
-      const dir = Math.abs(Phaser.Math.Angle.Wrap(Math.atan2(p.y - lk.y, p.x - lk.x) - fanDir));
+      const d = Phaser.Math.Distance.Between(
+        cop.sprite.x,
+        cop.sprite.y,
+        p.x,
+        p.y,
+      );
+      const fwd = Math.abs(
+        Phaser.Math.Angle.Wrap(
+          Math.atan2(p.y - cop.sprite.y, p.x - cop.sprite.x) - cop.facing,
+        ),
+      );
+      const dir = Math.abs(
+        Phaser.Math.Angle.Wrap(Math.atan2(p.y - lk.y, p.x - lk.x) - fanDir),
+      );
       if (d < 1) continue; // skip the node we're sitting on
-      let cost = 0.25 * d + 90 * fwd + this.searchDirBias * dir - Math.min(recency, 30) * 2;
+      let cost =
+        0.25 * d +
+        90 * fwd +
+        this.searchDirBias * dir -
+        Math.min(recency, 30) * 2;
       const neverSeen = this.coverage[idx] <= -1e8;
-      if (recency < this.coverageTTL) cost += 1e6;   // freshly covered — avoid
-      else if (!neverSeen)            cost += 3000;  // seen but stale — re-check only if no frontier left
+      if (recency < this.coverageTTL)
+        cost += 1e6; // freshly covered — avoid
+      else if (!neverSeen) cost += 3000; // seen but stale — re-check only if no frontier left
       // never-seen nodes (the expanding frontier) get no penalty, so they win
-      if (this.cops.some(o => o !== cop && o._searchNode === idx)) cost += 8000; // claimed by another cop
-      if (cost < bestCost) { bestCost = cost; best = idx; }
+      if (this.cops.some((o) => o !== cop && o._searchNode === idx))
+        cost += 8000; // claimed by another cop
+      if (cost < bestCost) {
+        bestCost = cost;
+        best = idx;
+      }
     }
     cop._searchNode = best;
-    cop._searchBest = Infinity; cop._searchStallSince = this._searchClock; // reset progress watch
+    cop._searchBest = Infinity;
+    cop._searchStallSince = this._searchClock; // reset progress watch
     return this.navGrid.pos(best);
   }
 
@@ -398,13 +483,15 @@ export class GameScene extends Phaser.Scene {
   // they spread out and surround the target instead of piling onto one point
   // and jamming each other.
   _separate(cop, target) {
-    const R = this.sepRadius, STRENGTH = this.sepStrength;
-    let sx = 0, sy = 0;
+    const R = this.sepRadius,
+      STRENGTH = this.sepStrength;
+    let sx = 0,
+      sy = 0;
     for (const other of this.cops) {
       if (other === cop) continue;
       const dx = cop.sprite.x - other.sprite.x;
       const dy = cop.sprite.y - other.sprite.y;
-      const d  = Math.hypot(dx, dy);
+      const d = Math.hypot(dx, dy);
       if (d > 0.001 && d < R) {
         const w = (R - d) / R; // stronger the closer they are
         sx += (dx / d) * w;
@@ -419,8 +506,17 @@ export class GameScene extends Phaser.Scene {
   // so the list stays short. Blind teammates follow this trail to relay in (convoy).
   _recordTrail(cop) {
     if (!cop._trail) cop._trail = [];
-    const t = cop._trail, last = t[t.length - 1];
-    if (!last || Phaser.Math.Distance.Between(last.x, last.y, cop.sprite.x, cop.sprite.y) >= this.trailSpacing) {
+    const t = cop._trail,
+      last = t[t.length - 1];
+    if (
+      !last ||
+      Phaser.Math.Distance.Between(
+        last.x,
+        last.y,
+        cop.sprite.x,
+        cop.sprite.y,
+      ) >= this.trailSpacing
+    ) {
       t.push({ x: cop.sprite.x, y: cop.sprite.y });
       if (t.length > this.trailMax) t.shift();
     }
@@ -432,19 +528,28 @@ export class GameScene extends Phaser.Scene {
   // reads them directly); the base copies on the cop are what we blend FROM, so the
   // tuning panel still owns the baseline.
   _applyRejoinBand(cop, dist) {
-    const f = Phaser.Math.Clamp((dist - this.rbStart) / Math.max(1, this.rbFull - this.rbStart), 0, 1);
-    cop.maxSpeed     = cop.baseMaxSpeed + this.rbSpeedBoost * f;
-    cop.gripLow      = Phaser.Math.Linear(cop.baseGripLow,  this.rbGrip, f);
-    cop.gripHigh     = Phaser.Math.Linear(cop.baseGripHigh, this.rbGrip, f);
-    const turnMult   = 1 + (this.rbTurnMult - 1) * f;
+    const f = Phaser.Math.Clamp(
+      (dist - this.rbStart) / Math.max(1, this.rbFull - this.rbStart),
+      0,
+      1,
+    );
+    cop.maxSpeed = cop.baseMaxSpeed + this.rbSpeedBoost * f;
+    cop.gripLow = Phaser.Math.Linear(cop.baseGripLow, this.rbGrip, f);
+    cop.gripHigh = Phaser.Math.Linear(cop.baseGripHigh, this.rbGrip, f);
+    const turnMult = 1 + (this.rbTurnMult - 1) * f;
     cop.turnSpeedLow = cop.baseTurnSpeedLow * turnMult;
-    cop.turnSpeed    = cop.baseTurnSpeed * turnMult;
+    cop.turnSpeed = cop.baseTurnSpeed * turnMult;
   }
 
   // Is a world point clear of the camera view by `margin` px (i.e. safely off-screen)?
   _offCamera(x, y, margin = 0) {
     const v = this.cameras.main.worldView;
-    return x < v.x - margin || x > v.right + margin || y < v.y - margin || y > v.bottom + margin;
+    return (
+      x < v.x - margin ||
+      x > v.right + margin ||
+      y < v.y - margin ||
+      y > v.bottom + margin
+    );
   }
 
   // Tier-2: relocate cops that have been lost (far + not chasing + off-screen) for a
@@ -456,20 +561,37 @@ export class GameScene extends Phaser.Scene {
     if (!this.respawnEnabled) return;
     for (const cop of this.cops) {
       cop._respawnCd = Math.max(0, (cop._respawnCd || 0) - dt);
-      const dp = Phaser.Math.Distance.Between(cop.sprite.x, cop.sprite.y, px, py);
-      const lost = dp > this.respawnDist && cop.pursuitMode !== 'DIRECT';
+      const dp = Phaser.Math.Distance.Between(
+        cop.sprite.x,
+        cop.sprite.y,
+        px,
+        py,
+      );
+      const lost = dp > this.respawnDist && cop.pursuitMode !== "DIRECT";
       cop._lostT = lost ? (cop._lostT || 0) + dt : 0;
       // An 'ahead-of-travel' unit (interceptor) that's fallen behind respawns AHEAD to
       // retry the head-on, not behind via the flank relocator — that's its whole loop.
-      const ahead = cop.unitDef && cop.unitDef.placement === 'ahead-of-travel';
-      if (cop._lostT > this.respawnTime && cop._respawnCd <= 0 &&
-          this._offCamera(cop.sprite.x, cop.sprite.y, this.respawnMargin) &&
-          (ahead ? this._placeAhead(cop, px, py) : this._tryRespawnCop(cop, px, py))) {
+      const ahead = cop.unitDef && cop.unitDef.placement === "ahead-of-travel";
+      if (
+        cop._lostT > this.respawnTime &&
+        cop._respawnCd <= 0 &&
+        this._offCamera(cop.sprite.x, cop.sprite.y, this.respawnMargin) &&
+        (ahead
+          ? this._placeAhead(cop, px, py)
+          : this._tryRespawnCop(cop, px, py))
+      ) {
         cop._lostT = 0;
         cop._respawnCd = this.respawnCooldown;
         if (this.copLog) {
-          const ndp = Phaser.Math.Distance.Between(cop.sprite.x, cop.sprite.y, px, py);
-          console.log(`[t=${(this.time.now / 1000).toFixed(2)}] RESPAWN cop${this.cops.indexOf(cop)} (was ${Math.round(dp)}px) -> ${Math.round(ndp)}px`);
+          const ndp = Phaser.Math.Distance.Between(
+            cop.sprite.x,
+            cop.sprite.y,
+            px,
+            py,
+          );
+          console.log(
+            `[t=${(this.time.now / 1000).toFixed(2)}] RESPAWN cop${this.cops.indexOf(cop)} (was ${Math.round(dp)}px) -> ${Math.round(ndp)}px`,
+          );
         }
       }
     }
@@ -479,22 +601,45 @@ export class GameScene extends Phaser.Scene {
   // currently coming from (so it re-enters from the same side), and drop the cop there
   // facing the player with fresh state. Returns false if no valid off-screen spot.
   _tryRespawnCop(cop, px, py) {
-    const cur  = Phaser.Math.Distance.Between(cop.sprite.x, cop.sprite.y, px, py);
+    const cur = Phaser.Math.Distance.Between(
+      cop.sprite.x,
+      cop.sprite.y,
+      px,
+      py,
+    );
     // Bias to the bearing the cop came from, but jitter it so several cops respawning
     // at once don't all snap to the SAME road ("all 3 came out of the same alley").
-    const base = Math.atan2(cop.sprite.y - py, cop.sprite.x - px) + (Math.random() - 0.5) * 0.7;
+    const base =
+      Math.atan2(cop.sprite.y - py, cop.sprite.x - px) +
+      (Math.random() - 0.5) * 0.7;
     const angOffsets = [0, 0.5, -0.5, 1.0, -1.0, 1.6, -1.6, 2.3, -2.3, Math.PI];
     for (const off of angOffsets) {
       const ang = base + off;
       for (let d = this.respawnBandMin; d <= this.respawnBandMax; d += 200) {
-        const tx = Phaser.Math.Clamp(px + Math.cos(ang) * d, 120, WORLD_WIDTH - 120);
-        const ty = Phaser.Math.Clamp(py + Math.sin(ang) * d, 120, WORLD_HEIGHT - 120);
-        const p  = this.navGrid.pos(this.navGrid.nearestNode(tx, ty));
+        const tx = Phaser.Math.Clamp(
+          px + Math.cos(ang) * d,
+          120,
+          WORLD_WIDTH - 120,
+        );
+        const ty = Phaser.Math.Clamp(
+          py + Math.sin(ang) * d,
+          120,
+          WORLD_HEIGHT - 120,
+        );
+        const p = this.navGrid.pos(this.navGrid.nearestNode(tx, ty));
         // Must be off-screen, a real improvement (no "1605 -> 1610" no-op), AND not
         // right on top of another cop (so reinforcements spread out, not pile up).
-        if (Phaser.Math.Distance.Between(p.x, p.y, px, py) < cur - this.respawnMinGain &&
-            this._offCamera(p.x, p.y, this.respawnMargin) &&
-            !this.cops.some(o => o !== cop && Phaser.Math.Distance.Between(o.sprite.x, o.sprite.y, p.x, p.y) < this.respawnSpacing)) {
+        if (
+          Phaser.Math.Distance.Between(p.x, p.y, px, py) <
+            cur - this.respawnMinGain &&
+          this._offCamera(p.x, p.y, this.respawnMargin) &&
+          !this.cops.some(
+            (o) =>
+              o !== cop &&
+              Phaser.Math.Distance.Between(o.sprite.x, o.sprite.y, p.x, p.y) <
+                this.respawnSpacing,
+          )
+        ) {
           this._placeCop(cop, p.x, p.y, px, py);
           return true;
         }
@@ -505,16 +650,24 @@ export class GameScene extends Phaser.Scene {
 
   // Hard-reset a cop at (x,y) facing the player, clearing all transient chase state.
   _placeCop(cop, x, y, px, py) {
-    cop.sprite.body.reset(x, y);     // moves the body + zeroes its velocity
-    cop.vx = 0; cop.vy = 0;
+    cop.sprite.body.reset(x, y); // moves the body + zeroes its velocity
+    cop.vx = 0;
+    cop.vy = 0;
     cop.facing = Math.atan2(py - y, px - x);
     cop.sprite.setRotation(cop.facing + Math.PI / 2);
     cop._trail = [];
-    cop.pursuitMode = 'LONE'; cop.convoyLeader = null;
-    cop._blindT = 0; cop._modeTimer = 0; cop._searchNode = null;
+    cop.pursuitMode = "LONE";
+    cop.convoyLeader = null;
+    cop._blindT = 0;
+    cop._modeTimer = 0;
+    cop._searchNode = null;
     const a = cop.ai;
-    a._unstuck = null; a._stuckTime = 0; a._losTimer = 0;
-    a._path = null; a._goalNode = -1; a._aimHist = [];
+    a._unstuck = null;
+    a._stuckTime = 0;
+    a._losTimer = 0;
+    a._path = null;
+    a._goalNode = -1;
+    a._aimHist = [];
   }
 
   // --- Pursuit Mode: escalation + reinforcement (only runs when pursuitLevel exists) -
@@ -531,9 +684,12 @@ export class GameScene extends Phaser.Scene {
   // bleeds once ditched/standing down — so a brief LOS flicker can't bleed a level.
   _updatePursuitLevel(state, dt) {
     const P = this.pursuitLevel;
-    const phase = state === PursuitState.ACTIVE ? 'ACTIVE'
-                : (state === PursuitState.SEARCH && !this.pursuit.ditched) ? 'HOLD'
-                : 'BLEED';
+    const phase =
+      state === PursuitState.ACTIVE
+        ? "ACTIVE"
+        : state === PursuitState.SEARCH && !this.pursuit.ditched
+          ? "HOLD"
+          : "BLEED";
     const dLevel = P.update(phase, dt);
     if (dLevel !== 0) this._applyLevelTuning();
 
@@ -567,55 +723,83 @@ export class GameScene extends Phaser.Scene {
   // identical to before the UnitDef refactor — while the plumbing is roster-ready.
   _nextReinforcementType() {
     const roster = this.pursuitLevel.cfg().roster;
-    if (!roster) return 'patrol';
+    if (!roster) return "patrol";
     const have = {};
-    for (const cop of this.cops) have[cop.unitType] = (have[cop.unitType] || 0) + 1;
+    for (const cop of this.cops)
+      have[cop.unitType] = (have[cop.unitType] || 0) + 1;
     for (const type of Object.keys(roster)) {
       if ((have[type] || 0) < roster[type]) return type;
     }
-    return 'patrol';
+    return "patrol";
   }
 
   // Create a fresh cop off-screen near the player (reuses the Tier-2 placement) and
   // drop it into the active pursuit — "dispatch a unit from that direction".
   _dispatchReinforcement() {
-    const px = this.car.sprite.x, py = this.car.sprite.y;
+    const px = this.car.sprite.x,
+      py = this.car.sprite.y;
     const cop = this._spawnCop(px, py, this._nextReinforcementType()); // temp position; relocated below
     cop.ai.reactionTime = this.pursuitLevel.cfg().reaction;
-    if (cop.unitDef.placement === 'ahead-of-travel') {
+    if (cop.unitDef.placement === "ahead-of-travel") {
       // Interceptor enters AHEAD for a head-on, not from the flank.
       this._placeAhead(cop, px, py);
     } else {
       // Flank-offscreen: bias the spawn to a random bearing so reinforcements don't all
       // come from one spot.
-      cop.sprite.setPosition(px + Math.cos(Math.random() * Math.PI * 2) * this.respawnBandMax,
-                             py + Math.sin(Math.random() * Math.PI * 2) * this.respawnBandMax);
+      cop.sprite.setPosition(
+        px + Math.cos(Math.random() * Math.PI * 2) * this.respawnBandMax,
+        py + Math.sin(Math.random() * Math.PI * 2) * this.respawnBandMax,
+      );
       if (!this._tryRespawnCop(cop, px, py)) {
         // No off-screen spot found — place at a clamped band point facing the player.
         const a = Math.random() * Math.PI * 2;
-        const x = Phaser.Math.Clamp(px + Math.cos(a) * this.respawnBandMin, 120, WORLD_WIDTH - 120);
-        const y = Phaser.Math.Clamp(py + Math.sin(a) * this.respawnBandMin, 120, WORLD_HEIGHT - 120);
+        const x = Phaser.Math.Clamp(
+          px + Math.cos(a) * this.respawnBandMin,
+          120,
+          WORLD_WIDTH - 120,
+        );
+        const y = Phaser.Math.Clamp(
+          py + Math.sin(a) * this.respawnBandMin,
+          120,
+          WORLD_HEIGHT - 120,
+        );
         const p = this.navGrid.pos(this.navGrid.nearestNode(x, y));
         this._placeCop(cop, p.x, p.y, px, py);
       }
     }
-    this._reinforceFlashUntil = this.time.now + 1400;   // HUD flash near the heat bar
-    if (this.copLog) console.log(`[t=${(this.time.now / 1000).toFixed(2)}] DISPATCH cop${this.cops.length - 1} (L${this.pursuitLevel.level}, ${this.cops.length} active)`);
+    this._reinforceFlashUntil = this.time.now + 1400; // HUD flash near the heat bar
+    if (this.copLog)
+      console.log(
+        `[t=${(this.time.now / 1000).toFixed(2)}] DISPATCH cop${this.cops.length - 1} (L${this.pursuitLevel.level}, ${this.cops.length} active)`,
+      );
   }
 
   // Remove the cop farthest from the player from the active pursuit (used on bleed-down).
   _retireFarthestCop() {
-    const px = this.car.sprite.x, py = this.car.sprite.y;
-    let far = null, fd = -Infinity;
+    const px = this.car.sprite.x,
+      py = this.car.sprite.y;
+    let far = null,
+      fd = -Infinity;
     for (const cop of this.cops) {
-      const d = Phaser.Math.Distance.Between(cop.sprite.x, cop.sprite.y, px, py);
-      if (d > fd) { fd = d; far = cop; }
+      const d = Phaser.Math.Distance.Between(
+        cop.sprite.x,
+        cop.sprite.y,
+        px,
+        py,
+      );
+      if (d > fd) {
+        fd = d;
+        far = cop;
+      }
     }
     if (!far) return;
-    this.cops = this.cops.filter(c => c !== far);
+    this.cops = this.cops.filter((c) => c !== far);
     if (far.modeLabel) far.modeLabel.destroy();
     far.sprite.destroy();
-    if (this.copLog) console.log(`[t=${(this.time.now / 1000).toFixed(2)}] RETIRE cop (L${this.pursuitLevel.level}, ${this.cops.length} active)`);
+    if (this.copLog)
+      console.log(
+        `[t=${(this.time.now / 1000).toFixed(2)}] RETIRE cop (L${this.pursuitLevel.level}, ${this.cops.length} active)`,
+      );
   }
 
   // --- Cop testbed (sandbox mode) --------------------------------------------------
@@ -623,7 +807,8 @@ export class GameScene extends Phaser.Scene {
   // or dispatcher in the loop. Spawn N cops of a chosen TYPE, each entered via its
   // placement strategy; Clear wipes them.
   _testbedSpawn(type, count) {
-    const px = this.car.sprite.x, py = this.car.sprite.y;
+    const px = this.car.sprite.x,
+      py = this.car.sprite.y;
     for (let i = 0; i < count; i++) {
       const cop = this._spawnCop(px, py, type);
       this._placeByStrategy(cop, px, py);
@@ -633,16 +818,24 @@ export class GameScene extends Phaser.Scene {
   // Enter a freshly spawned cop according to its def's placement strategy. This only
   // picks WHERE it appears — the cop then drives with the same shared CopAI brain.
   _placeByStrategy(cop, px, py) {
-    if (cop.unitDef.placement === 'ahead-of-travel') {
-      this._placeAhead(cop, px, py);   // interceptor head-on entry (and respawn retry)
+    if (cop.unitDef.placement === "ahead-of-travel") {
+      this._placeAhead(cop, px, py); // interceptor head-on entry (and respawn retry)
       return;
     }
     // flank-offscreen (default): a road node a few blocks out at a random bearing.
     const ang = Math.random() * Math.PI * 2;
-    const d   = 450 + Math.random() * 250;
-    const tx  = Phaser.Math.Clamp(px + Math.cos(ang) * d, 120, WORLD_WIDTH  - 120);
-    const ty  = Phaser.Math.Clamp(py + Math.sin(ang) * d, 120, WORLD_HEIGHT - 120);
-    const p   = this.navGrid.pos(this.navGrid.nearestNode(tx, ty));
+    const d = 450 + Math.random() * 250;
+    const tx = Phaser.Math.Clamp(
+      px + Math.cos(ang) * d,
+      120,
+      WORLD_WIDTH - 120,
+    );
+    const ty = Phaser.Math.Clamp(
+      py + Math.sin(ang) * d,
+      120,
+      WORLD_HEIGHT - 120,
+    );
+    const p = this.navGrid.pos(this.navGrid.nearestNode(tx, ty));
     this._placeCop(cop, p.x, p.y, px, py);
   }
 
@@ -655,11 +848,21 @@ export class GameScene extends Phaser.Scene {
     const car = this.car;
     const dir = car.getSpeed() > 40 ? Math.atan2(car.vy, car.vx) : car.facing;
     let spot = null;
-    for (let d = this.interceptAheadDist; d <= this.interceptAheadDist + 900; d += 150) {
-      const tx = px + Math.cos(dir) * d, ty = py + Math.sin(dir) * d;
-      const p  = this.navGrid.pos(this.navGrid.nearestNodeAhead(tx, ty, px, py, dir));
+    for (
+      let d = this.interceptAheadDist;
+      d <= this.interceptAheadDist + 900;
+      d += 150
+    ) {
+      const tx = px + Math.cos(dir) * d,
+        ty = py + Math.sin(dir) * d;
+      const p = this.navGrid.pos(
+        this.navGrid.nearestNodeAhead(tx, ty, px, py, dir),
+      );
       if (!spot) spot = p;
-      if (this._offCamera(p.x, p.y, 0)) { spot = p; break; } // first off-screen node ahead wins
+      if (this._offCamera(p.x, p.y, 0)) {
+        spot = p;
+        break;
+      } // first off-screen node ahead wins
     }
     this._placeCop(cop, spot.x, spot.y, px, py);
     // Enter at a moderate closing speed (not full), along its facing (toward the player),
@@ -688,8 +891,12 @@ export class GameScene extends Phaser.Scene {
   // which crashing into a wall or another cop costs it health. Plain pursuit driving is free.
   _isAggressiveRole(cop) {
     const r = cop.role;
-    return r === CopState.BOX_FRONT || r === CopState.BOX_REAR ||
-           r === CopState.BLOCK     || r === CopState.OVERTAKE;
+    return (
+      r === CopState.BOX_FRONT ||
+      r === CopState.BOX_REAR ||
+      r === CopState.BLOCK ||
+      r === CopState.OVERTAKE
+    );
   }
 
   // Cop damage + disabling, scripted from POSITIONS/VELOCITIES (no collider geometry — see
@@ -697,27 +904,40 @@ export class GameScene extends Phaser.Scene {
   // disabling can be developed by ramming. Reads velocities at the TOP of the frame (pre-
   // physics), so a hit's onset uses the real approach speed.
   _updateCopDamage(dt) {
-    const px = this.car.sprite.x, py = this.car.sprite.y;
+    const px = this.car.sprite.x,
+      py = this.car.sprite.y;
     // PRE-collision velocities cached at the end of last frame (Arcade resolves collisions
     // before scene.update, so the live velocities here are already post-impact/reduced).
-    const pvx = this._carLastVx ?? this.car.vx, pvy = this._carLastVy ?? this.car.vy;
+    const pvx = this._carLastVx ?? this.car.vx,
+      pvy = this._carLastVy ?? this.car.vy;
     let toDisable = null;
     for (const cop of this.cops) {
       cop._dmgCd = Math.max(0, (cop._dmgCd || 0) - dt);
-      const spd  = cop.getSpeed();
-      const drop = (cop._prevSpeed ?? spd) - spd;   // sudden loss of ACTUAL speed = a crash this frame
+      const spd = cop.getSpeed();
+      const drop = (cop._prevSpeed ?? spd) - spd; // sudden loss of ACTUAL speed = a crash this frame
       cop._prevSpeed = spd;
-      const near = Phaser.Math.Distance.Between(cop.sprite.x, cop.sprite.y, px, py) < this.ramContactDist;
+      const near =
+        Phaser.Math.Distance.Between(cop.sprite.x, cop.sprite.y, px, py) <
+        this.ramContactDist;
 
       if (cop._dmgCd <= 0) {
         let dmg = 0;
         if (near && !cop._wasNear) {
           // Player↔cop hit onset: relative impact speed (head-on huge, rear-end tiny).
-          const rel = Math.hypot(pvx - (cop._lastVx ?? cop.vx), pvy - (cop._lastVy ?? cop.vy));
-          if (rel > this.ramThreshold) dmg = (rel - this.ramThreshold) * this.ramScale / (cop.mass || 1);
-        } else if (!near && drop > this.selfImpactDrop && this._isAggressiveRole(cop)) {
+          const rel = Math.hypot(
+            pvx - (cop._lastVx ?? cop.vx),
+            pvy - (cop._lastVy ?? cop.vy),
+          );
+          if (rel > this.ramThreshold)
+            dmg = ((rel - this.ramThreshold) * this.ramScale) / (cop.mass || 1);
+        } else if (
+          !near &&
+          drop > this.selfImpactDrop &&
+          this._isAggressiveRole(cop)
+        ) {
           // Mid-aggression crash into a wall / another cop.
-          dmg = (drop - this.selfImpactDrop) * this.selfScale / (cop.mass || 1);
+          dmg =
+            ((drop - this.selfImpactDrop) * this.selfScale) / (cop.mass || 1);
         }
         if (dmg > 0) {
           cop.health -= dmg;
@@ -737,25 +957,35 @@ export class GameScene extends Phaser.Scene {
     if (cop.disabled) return;
     cop.disabled = true;
     cop.health = 0;
-    cop.vx = 0; cop.vy = 0;
+    cop.vx = 0;
+    cop.vy = 0;
     cop.sprite.body.setVelocity(0, 0);
-    cop.sprite.body.setDrag(400, 400);          // bleed off any shove so it settles
+    cop.sprite.body.setDrag(400, 400); // bleed off any shove so it settles
     cop.sprite.body.mass = this.wreckMass;
-    cop.sprite.setTintFill(0xff2a2a).setAlpha(0.7);   // red = unmistakably disabled
-    this.tweens.add({ targets: cop.sprite, angle: cop.sprite.angle + (Math.random() < 0.5 ? -120 : 120),
-                      duration: 500, ease: 'Cubic.easeOut' });
-    if (cop.modeLabel) cop.modeLabel.setText('WRECK').setColor('#888');
+    cop.sprite.setTintFill(0xff2a2a).setAlpha(0.7); // red = unmistakably disabled
+    this.tweens.add({
+      targets: cop.sprite,
+      angle: cop.sprite.angle + (Math.random() < 0.5 ? -120 : 120),
+      duration: 500,
+      ease: "Cubic.easeOut",
+    });
+    if (cop.modeLabel) cop.modeLabel.setText("WRECK").setColor("#888");
 
-    this.cops = this.cops.filter(c => c !== cop);
+    this.cops = this.cops.filter((c) => c !== cop);
     cop._wreckT = 0;
     this.wrecks.push(cop);
-    if (this.director._maneuverHolder === cop) this.director._maneuverHolder = null;
+    if (this.director._maneuverHolder === cop)
+      this.director._maneuverHolder = null;
 
     if (this.pursuitLevel) {
-      this.pursuitLevel.onCopDisabled();   // heat spike
-      this._reinforceTimer = this.pursuitLevel.cfg().reinforce * this.disableReinforceMult;
+      this.pursuitLevel.onCopDisabled(); // heat spike
+      this._reinforceTimer =
+        this.pursuitLevel.cfg().reinforce * this.disableReinforceMult;
     }
-    if (this.copLog) console.log(`[t=${(this.time.now / 1000).toFixed(2)}] DISABLED ${cop.unitType}`);
+    if (this.copLog)
+      console.log(
+        `[t=${(this.time.now / 1000).toFixed(2)}] DISABLED ${cop.unitType}`,
+      );
   }
 
   // Age out wrecks: once past their despawn timer, remove them.
@@ -771,7 +1001,8 @@ export class GameScene extends Phaser.Scene {
         expired = true;
       }
     }
-    if (expired) this.wrecks = this.wrecks.filter(w => w._wreckT <= this.wreckDespawn);
+    if (expired)
+      this.wrecks = this.wrecks.filter((w) => w._wreckT <= this.wreckDespawn);
   }
 
   // A small health bar floating above every active cop, so you can watch it deplete as
@@ -779,44 +1010,59 @@ export class GameScene extends Phaser.Scene {
   _drawHealthBars() {
     const g = this.healthBars;
     g.clear();
-    const w = 30, h = 5;
+    const w = 30,
+      h = 5;
     for (const cop of this.cops) {
       const max = cop.maxHealth || 100;
       const frac = Phaser.Math.Clamp(cop.health / max, 0, 1);
-      const x = cop.sprite.x - w / 2, y = cop.sprite.y - 40;
-      g.fillStyle(0x000000, 0.7); g.fillRect(x - 1, y - 1, w + 2, h + 2);   // background / empty track
+      const x = cop.sprite.x - w / 2,
+        y = cop.sprite.y - 40;
+      g.fillStyle(0x000000, 0.7);
+      g.fillRect(x - 1, y - 1, w + 2, h + 2); // background / empty track
       const col = frac > 0.5 ? 0x39ff14 : frac > 0.25 ? 0xffd23f : 0xff3b3b;
-      g.fillStyle(col, 1); g.fillRect(x, y, w * frac, h);
+      g.fillStyle(col, 1);
+      g.fillRect(x, y, w * frac, h);
     }
   }
 
   // Spawn-control panel: unit type + count + Spawn / Clear. Changing the type rebuilds
   // the Unit Tuning panel onto that type's def.
   _setupTestbedPanel() {
-    this._testbed = this._testbed || { unitType: 'patrol', count: 2 };
-    const gui = new GUI({ title: 'Cop Testbed', width: 240 });
+    this._testbed = this._testbed || { unitType: "patrol", count: 2 };
+    const gui = new GUI({ title: "Cop Testbed", width: 240 });
     this.testbedGui = gui;
-    gui.add(this._testbed, 'unitType', Object.keys(UNITS)).name('Unit type')
-       .onChange(t => this._setupUnitTunePanel(t));
-    gui.add(this._testbed, 'count', 1, 8, 1).name('Count');
-    gui.add({ spawn: () => this._testbedSpawn(this._testbed.unitType, this._testbed.count) }, 'spawn')
-       .name('▶ Spawn');
-    gui.add({ clear: () => this._clearCops() }, 'clear').name('✕ Clear all');
+    gui
+      .add(this._testbed, "unitType", Object.keys(UNITS))
+      .name("Unit type")
+      .onChange((t) => this._setupUnitTunePanel(t));
+    gui.add(this._testbed, "count", 1, 8, 1).name("Count");
+    gui
+      .add(
+        {
+          spawn: () =>
+            this._testbedSpawn(this._testbed.unitType, this._testbed.count),
+        },
+        "spawn",
+      )
+      .name("▶ Spawn");
+    gui.add({ clear: () => this._clearCops() }, "clear").name("✕ Clear all");
 
     // Respawn-ahead retry (interceptor head-on loop). Binds straight to the live scene.
-    const rs = gui.addFolder('Respawn-ahead (interceptor)');
-    rs.add(this, 'respawnEnabled').name('Respawn lost cops');
-    rs.add(this, 'respawnDist',  400, 3000, 50).name('Fell-behind dist (px)');
-    rs.add(this, 'respawnTime',  0.5, 12, 0.5).name('…for this long (s)');
-    rs.add(this, 'respawnCooldown', 0, 20, 0.5).name('Respawn cooldown (s)');
-    rs.add(this, 'interceptAheadDist', 200, 2000, 25).name('Spawn-ahead dist (px)');
-    rs.add(this, 'interceptEntrySpeed', 0, 600, 10).name('Entry speed (px/s)');
+    const rs = gui.addFolder("Respawn-ahead (interceptor)");
+    rs.add(this, "respawnEnabled").name("Respawn lost cops");
+    rs.add(this, "respawnDist", 400, 3000, 50).name("Fell-behind dist (px)");
+    rs.add(this, "respawnTime", 0.5, 12, 0.5).name("…for this long (s)");
+    rs.add(this, "respawnCooldown", 0, 20, 0.5).name("Respawn cooldown (s)");
+    rs.add(this, "interceptAheadDist", 200, 2000, 25).name(
+      "Spawn-ahead dist (px)",
+    );
+    rs.add(this, "interceptEntrySpeed", 0, 600, 10).name("Entry speed (px/s)");
     rs.close();
 
-    gui.domElement.style.position = 'fixed';
-    gui.domElement.style.top  = '8px';
-    gui.domElement.style.left = '8px';
-    gui.domElement.style.zIndex = '9999';
+    gui.domElement.style.position = "fixed";
+    gui.domElement.style.top = "8px";
+    gui.domElement.style.left = "8px";
+    gui.domElement.style.zIndex = "9999";
   }
 
   // Live tuning for the director's maneuver/box behavior (drafting, overtake-and-block,
@@ -824,52 +1070,58 @@ export class GameScene extends Phaser.Scene {
   // take effect immediately. Persisted across refresh.
   _setupManeuverPanel() {
     const d = this.director;
-    const gui = new GUI({ title: 'Maneuvers', width: 290 });
+    const gui = new GUI({ title: "Maneuvers", width: 290 });
     this.maneuverGui = gui;
     gui.close();
 
-    const draft = gui.addFolder('Drafting (anti-bumper-grind)');
-    draft.add(d, 'draftMinSpeed', 0, 400, 10).name('Only draft above (px/s)');
-    draft.add(d, 'draftGap',      0, 300, 5).name('Follow distance (px)');
-    draft.add(d, 'draftMargin',   0, 200, 5).name('Close-up speed margin');
+    const draft = gui.addFolder("Drafting (anti-bumper-grind)");
+    draft.add(d, "draftMinSpeed", 0, 400, 10).name("Only draft above (px/s)");
+    draft.add(d, "draftGap", 0, 300, 5).name("Follow distance (px)");
+    draft.add(d, "draftMargin", 0, 200, 5).name("Close-up speed margin");
 
-    const trig = gui.addFolder('Overtake — trigger');
-    trig.add(d, 'maneuverTrigSpeed', 0, 500, 10).name('Only if player above (px/s)');
-    trig.add(d, 'maneuverRange',     100, 1200, 20).name('Cop within (px)');
-    trig.add(d, 'maneuverBehind',    0, 300, 5).name('Must be behind by (px)');
-    trig.add(d, 'maneuverCooldown',  0, 12, 0.5).name('Cooldown between (s)');
-    trig.add(d, 'maneuverMaxTime',   1, 12, 0.5).name('Give up after (s)');
+    const trig = gui.addFolder("Overtake — trigger");
+    trig
+      .add(d, "maneuverTrigSpeed", 0, 500, 10)
+      .name("Only if player above (px/s)");
+    trig.add(d, "maneuverRange", 100, 1200, 20).name("Cop within (px)");
+    trig.add(d, "maneuverBehind", 0, 300, 5).name("Must be behind by (px)");
+    trig.add(d, "maneuverCooldown", 0, 12, 0.5).name("Cooldown between (s)");
+    trig.add(d, "maneuverMaxTime", 1, 12, 0.5).name("Give up after (s)");
 
-    const exec = gui.addFolder('Overtake — execution');
-    exec.add(d, 'overtakeAhead', 80, 600, 10).name('Sprint-to ahead (px)');
-    exec.add(d, 'overtakeSide',  0, 200, 5).name('Swing-wide side (px)');
-    exec.add(d, 'overtakeBoost', 0, 500, 10).name('Speed boost (px/s)');
-    exec.add(d, 'overtakeDone',  0, 200, 5).name('Ahead-by to start block (px)');
+    const exec = gui.addFolder("Overtake — execution");
+    exec.add(d, "overtakeAhead", 80, 600, 10).name("Sprint-to ahead (px)");
+    exec.add(d, "overtakeSide", 0, 200, 5).name("Swing-wide side (px)");
+    exec.add(d, "overtakeBoost", 0, 500, 10).name("Speed boost (px/s)");
+    exec.add(d, "overtakeDone", 0, 200, 5).name("Ahead-by to start block (px)");
 
-    const block = gui.addFolder('Block / brake-check');
-    block.add(d, 'blockAhead',       0, 300, 5).name('Sit ahead by (px)');
-    block.add(d, 'blockSpeedFactor', 0.1, 1.0, 0.05).name('Ease to × your speed');
-    block.add(d, 'blockMinSpeed',    0, 400, 10).name('…but ≥ (px/s)');
-    block.add(d, 'blockedSpeed',     0, 400, 10).name('Success: you slow below');
-    block.add(d, 'blockLost',        -400, 0, 10).name('Fail: fell behind (along)');
+    const block = gui.addFolder("Block / brake-check");
+    block.add(d, "blockAhead", 0, 300, 5).name("Sit ahead by (px)");
+    block
+      .add(d, "blockSpeedFactor", 0.1, 1.0, 0.05)
+      .name("Ease to × your speed");
+    block.add(d, "blockMinSpeed", 0, 400, 10).name("…but ≥ (px/s)");
+    block.add(d, "blockedSpeed", 0, 400, 10).name("Success: you slow below");
+    block.add(d, "blockLost", -400, 0, 10).name("Fail: fell behind (along)");
 
-    const box = gui.addFolder('Box v2 (crash-and-hold)');
-    box.add(d, 'boxTriggerSpeed', 0, 400, 10).name('Box when below (px/s)');
-    box.add(d, 'boxReleaseSpeed', 0, 500, 10).name('Break box above (px/s)');
-    box.add(d, 'boxEngageRange',  100, 1000, 20).name('Join box within (px)');
-    box.add(d, 'boxCloseMargin',  0, 400, 10).name('Rear close speed margin');
-    box.add(d, 'boxContactGap',   0, 150, 5).name('Rear hold gap (px)');
-    box.add(d, 'boxPress',        0, 200, 5).name('Rear press above pace (px/s)');
-    box.add(d, 'boxFrontAhead',   0, 150, 5).name('Front-runner ahead-by (px)');
+    const box = gui.addFolder("Box v2 (crash-and-hold)");
+    box.add(d, "boxTriggerSpeed", 0, 400, 10).name("Box when below (px/s)");
+    box.add(d, "boxReleaseSpeed", 0, 500, 10).name("Break box above (px/s)");
+    box.add(d, "boxEngageRange", 100, 1000, 20).name("Join box within (px)");
+    box.add(d, "boxCloseMargin", 0, 400, 10).name("Rear close speed margin");
+    box.add(d, "boxContactGap", 0, 150, 5).name("Rear hold gap (px)");
+    box.add(d, "boxPress", 0, 200, 5).name("Rear press above pace (px/s)");
+    box.add(d, "boxFrontAhead", 0, 150, 5).name("Front-runner ahead-by (px)");
 
-    gui.add({ copy: () => this._copyManeuverStats() }, 'copy').name('Copy Maneuvers → Console');
+    gui
+      .add({ copy: () => this._copyManeuverStats() }, "copy")
+      .name("Copy Maneuvers → Console");
 
-    this._persistPanel(gui, 'gd_maneuverTune_v3'); // bumped: added box front-runner (boxPress/boxFrontAhead)
+    this._persistPanel(gui, "gd_maneuverTune_v3"); // bumped: added box front-runner (boxPress/boxFrontAhead)
 
-    gui.domElement.style.position = 'fixed';
-    gui.domElement.style.top  = '8px';
-    gui.domElement.style.left = '630px';
-    gui.domElement.style.zIndex = '9999';
+    gui.domElement.style.position = "fixed";
+    gui.domElement.style.top = "8px";
+    gui.domElement.style.left = "630px";
+    gui.domElement.style.zIndex = "9999";
   }
 
   // Cop health / ramming panel: per-type health+mass (bound to the defs, so new spawns get
@@ -877,49 +1129,59 @@ export class GameScene extends Phaser.Scene {
   // self-damage, and the disable/wreck knobs. Bound straight to the live scene/defs. (Scene
   // ram fields are code defaults in pursuit until baked, mirroring the maneuver panel.)
   _setupHealthPanel() {
-    const gui = new GUI({ title: 'Cop Health / Ramming', width: 290 });
+    const gui = new GUI({ title: "Cop Health / Ramming", width: 290 });
     this.healthGui = gui;
     gui.close();
 
-    const types = gui.addFolder('Per-type health / mass (respawn to apply)');
+    const types = gui.addFolder("Per-type health / mass (respawn to apply)");
     for (const key of Object.keys(UNITS)) {
       const def = UNITS[key];
       const f = types.addFolder(def.name);
-      f.add(def, 'health', 20, 600, 10).name('Health');
-      f.add(def, 'mass',  0.2, 5,  0.1).name('Mass');
+      f.add(def, "health", 20, 600, 10).name("Health");
+      f.add(def, "mass", 0.2, 5, 0.1).name("Mass");
       f.close();
     }
 
-    const ram = gui.addFolder('Player ram damage');
-    ram.add(this, 'ramThreshold',   0, 600, 10).name('No damage below (px/s)');
-    ram.add(this, 'ramScale',       0, 1, 0.01).name('Damage per px/s');
-    ram.add(this, 'ramContactDist', 20, 100, 2).name('Contact distance (px)');
-    ram.add(this, 'ramDmgCooldown', 0.1, 2, 0.1).name('Hit cooldown (s)');
+    const ram = gui.addFolder("Player ram damage");
+    ram.add(this, "ramThreshold", 0, 600, 10).name("No damage below (px/s)");
+    ram.add(this, "ramScale", 0, 1, 0.01).name("Damage per px/s");
+    ram.add(this, "ramContactDist", 20, 100, 2).name("Contact distance (px)");
+    ram.add(this, "ramDmgCooldown", 0.1, 2, 0.1).name("Hit cooldown (s)");
 
-    const self = gui.addFolder('Cop self-damage (aggro crashes)');
-    self.add(this, 'selfImpactDrop', 10, 200, 5).name('Counts as crash above (px/s)');
-    self.add(this, 'selfScale',       0, 2, 0.05).name('Damage per px/s');
+    const self = gui.addFolder("Cop self-damage (aggro crashes)");
+    self
+      .add(this, "selfImpactDrop", 10, 200, 5)
+      .name("Counts as crash above (px/s)");
+    self.add(this, "selfScale", 0, 2, 0.05).name("Damage per px/s");
 
-    const dis = gui.addFolder('Disable / wreck');
-    dis.add(this, 'wreckDespawn',  5, 120, 5).name('Wreck despawn (s)');
-    dis.add(this, 'wreckMass',  0.05, 2, 0.05).name('Wreck mass (shove-ability)');
-    dis.add(this, 'disableReinforceMult', 1, 3, 0.1).name('Replace delay ×');
+    const dis = gui.addFolder("Disable / wreck");
+    dis.add(this, "wreckDespawn", 5, 120, 5).name("Wreck despawn (s)");
+    dis
+      .add(this, "wreckMass", 0.05, 2, 0.05)
+      .name("Wreck mass (shove-ability)");
+    dis.add(this, "disableReinforceMult", 1, 3, 0.1).name("Replace delay ×");
 
-    gui.add({ copy: () => this._copyHealthStats() }, 'copy').name('Copy Health → Console');
+    gui
+      .add({ copy: () => this._copyHealthStats() }, "copy")
+      .name("Copy Health → Console");
 
-    this._persistPanel(gui, 'gd_healthTune_v2'); // bumped: patrol health / ramScale / wreckMass rebaked
+    this._persistPanel(gui, "gd_healthTune_v2"); // bumped: patrol health / ramScale / wreckMass rebaked
 
-    gui.domElement.style.position = 'fixed';
-    gui.domElement.style.top  = '8px';
-    gui.domElement.style.left = '950px';
-    gui.domElement.style.zIndex = '9999';
+    gui.domElement.style.position = "fixed";
+    gui.domElement.style.top = "8px";
+    gui.domElement.style.left = "950px";
+    gui.domElement.style.zIndex = "9999";
   }
 
   // Dump the cop-health tuning: per-type health/mass (for src/ai/units.js) + the scene's
   // ram/disable model (for the GameScene defaults block), paste-ready.
   _copyHealthStats() {
     const perType = Object.keys(UNITS)
-      .map(k => `// UNITS.${k}: health: ${UNITS[k].health}, mass: ${UNITS[k].mass},`).join('\n');
+      .map(
+        (k) =>
+          `// UNITS.${k}: health: ${UNITS[k].health}, mass: ${UNITS[k].mass},`,
+      )
+      .join("\n");
     console.log(`// --- Cop health / ramming tuning ---
 ${perType}
 // --- GameScene ram/disable model ---
@@ -950,91 +1212,187 @@ this.boxTriggerSpeed = ${d.boxTriggerSpeed}; this.boxReleaseSpeed = ${d.boxRelea
   // every live cop of that type, persists per type, and dumps a paste-ready def block.
   // Rebuilt when the selected type changes.
   _setupUnitTunePanel(type) {
-    if (this.unitGui) { this.unitGui.destroy(); this.unitGui = null; }
+    if (this.unitGui) {
+      this.unitGui.destroy();
+      this.unitGui = null;
+    }
     const def = UNITS[type];
     const h = def.handling;
     // Effective AI tunables = CopAI defaults overlaid with this def's `ai` overrides.
     const ai = new CopAI(this.navGrid, this.losRects, def.ai);
 
-    const t = this._unitTuning = {
-      maxSpeed: h.maxSpeed, acceleration: h.acceleration,
-      gripLow: h.gripLow, gripHigh: h.gripHigh, gripSpeedRef: h.gripSpeedRef,
-      turnSpeedLow: h.turnSpeedLow, turnSpeed: h.turnSpeed, minSteerFactor: h.minSteerFactor,
-      maxApproachSpeed: ai.maxApproachSpeed, cornerMinSpeed: ai.cornerMinSpeed,
-      brakeDecel: ai.brakeDecel, arriveRadius: ai.arriveRadius, senseDist: ai.senseDist,
-      directRange: ai.directRange, chaseRange: ai.chaseRange, reactionTime: ai.reactionTime,
-      ramRange: ai.ramRange, turnBrakeAngle: ai.turnBrakeAngle, turnBrakeSpeed: ai.turnBrakeSpeed,
-    };
+    const t = (this._unitTuning = {
+      maxSpeed: h.maxSpeed,
+      acceleration: h.acceleration,
+      gripLow: h.gripLow,
+      gripHigh: h.gripHigh,
+      gripSpeedRef: h.gripSpeedRef,
+      turnSpeedLow: h.turnSpeedLow,
+      turnSpeed: h.turnSpeed,
+      minSteerFactor: h.minSteerFactor,
+      maxApproachSpeed: ai.maxApproachSpeed,
+      cornerMinSpeed: ai.cornerMinSpeed,
+      brakeDecel: ai.brakeDecel,
+      arriveRadius: ai.arriveRadius,
+      senseDist: ai.senseDist,
+      directRange: ai.directRange,
+      chaseRange: ai.chaseRange,
+      reactionTime: ai.reactionTime,
+      ramRange: ai.ramRange,
+      turnBrakeAngle: ai.turnBrakeAngle,
+      turnBrakeSpeed: ai.turnBrakeSpeed,
+    });
 
     const gui = new GUI({ title: `Unit: ${def.name}`, width: 300 });
     this.unitGui = gui;
     const apply = () => this._applyUnitTuning(type);
 
-    const drive = gui.addFolder('Handling');
-    drive.add(t, 'maxSpeed',       100, 1200, 10).name('Max Speed').onChange(apply);
-    drive.add(t, 'acceleration',   10, 1500,  5).name('Acceleration').onChange(apply);
-    drive.add(t, 'turnSpeedLow',   0.5, 8.0, 0.05).name('Turn Speed low').onChange(apply);
-    drive.add(t, 'turnSpeed',      0.5, 8.0, 0.05).name('Turn Speed high').onChange(apply);
-    drive.add(t, 'minSteerFactor', 0,   1.0, 0.05).name('Low-speed steer floor').onChange(apply);
+    const drive = gui.addFolder("Handling");
+    drive.add(t, "maxSpeed", 100, 1200, 10).name("Max Speed").onChange(apply);
+    drive
+      .add(t, "acceleration", 10, 1500, 5)
+      .name("Acceleration")
+      .onChange(apply);
+    drive
+      .add(t, "turnSpeedLow", 0.5, 8.0, 0.05)
+      .name("Turn Speed low")
+      .onChange(apply);
+    drive
+      .add(t, "turnSpeed", 0.5, 8.0, 0.05)
+      .name("Turn Speed high")
+      .onChange(apply);
+    drive
+      .add(t, "minSteerFactor", 0, 1.0, 0.05)
+      .name("Low-speed steer floor")
+      .onChange(apply);
 
-    const grip = gui.addFolder('Grip');
-    grip.add(t, 'gripLow',      0.02,  1.0, 0.01).name('Grip (low speed)').onChange(apply);
-    grip.add(t, 'gripHigh',     0.005, 1.0, 0.005).name('Grip (high speed)').onChange(apply);
-    grip.add(t, 'gripSpeedRef', 50,    600, 5).name('High-speed grip at').onChange(apply);
+    const grip = gui.addFolder("Grip");
+    grip
+      .add(t, "gripLow", 0.02, 1.0, 0.01)
+      .name("Grip (low speed)")
+      .onChange(apply);
+    grip
+      .add(t, "gripHigh", 0.005, 1.0, 0.005)
+      .name("Grip (high speed)")
+      .onChange(apply);
+    grip
+      .add(t, "gripSpeedRef", 50, 600, 5)
+      .name("High-speed grip at")
+      .onChange(apply);
 
-    const aiF = gui.addFolder('Driving AI');
-    aiF.add(t, 'maxApproachSpeed', 200, 800, 10).name('Straight speed').onChange(apply);
-    aiF.add(t, 'cornerMinSpeed',   80,  500, 5).name('Corner min speed').onChange(apply);
-    aiF.add(t, 'brakeDecel',       100, 800, 10).name('Brake planning').onChange(apply);
-    aiF.add(t, 'arriveRadius',     30,  150, 5).name('Node arrive radius').onChange(apply);
-    aiF.add(t, 'senseDist',        200, 1000, 20).name('Corner sense ahead').onChange(apply);
-    aiF.add(t, 'directRange',      50,  400, 10).name('Direct-aim range').onChange(apply);
-    aiF.add(t, 'chaseRange',       150, 2000, 25).name('Beeline range (else paths)').onChange(apply);
-    aiF.add(t, 'reactionTime',     0,   0.5, 0.01).name('Reaction lag (s)').onChange(apply);
-    aiF.add(t, 'ramRange',         40,  200, 5).name('Ram aim range').onChange(apply);
-    aiF.add(t, 'turnBrakeAngle',   0.3, 1.6, 0.05).name('Turn-brake angle').onChange(apply);
-    aiF.add(t, 'turnBrakeSpeed',   60,  400, 10).name('Turn-brake speed').onChange(apply);
+    const aiF = gui.addFolder("Driving AI");
+    aiF
+      .add(t, "maxApproachSpeed", 200, 800, 10)
+      .name("Straight speed")
+      .onChange(apply);
+    aiF
+      .add(t, "cornerMinSpeed", 80, 500, 5)
+      .name("Corner min speed")
+      .onChange(apply);
+    aiF
+      .add(t, "brakeDecel", 100, 800, 10)
+      .name("Brake planning")
+      .onChange(apply);
+    aiF
+      .add(t, "arriveRadius", 30, 150, 5)
+      .name("Node arrive radius")
+      .onChange(apply);
+    aiF
+      .add(t, "senseDist", 200, 1000, 20)
+      .name("Corner sense ahead")
+      .onChange(apply);
+    aiF
+      .add(t, "directRange", 50, 400, 10)
+      .name("Direct-aim range")
+      .onChange(apply);
+    aiF
+      .add(t, "chaseRange", 150, 2000, 25)
+      .name("Beeline range (else paths)")
+      .onChange(apply);
+    aiF
+      .add(t, "reactionTime", 0, 0.5, 0.01)
+      .name("Reaction lag (s)")
+      .onChange(apply);
+    aiF.add(t, "ramRange", 40, 200, 5).name("Ram aim range").onChange(apply);
+    aiF
+      .add(t, "turnBrakeAngle", 0.3, 1.6, 0.05)
+      .name("Turn-brake angle")
+      .onChange(apply);
+    aiF
+      .add(t, "turnBrakeSpeed", 60, 400, 10)
+      .name("Turn-brake speed")
+      .onChange(apply);
 
-    gui.add({ copy: () => this._copyUnitDef(type) }, 'copy').name('Copy UnitDef → Console');
+    gui
+      .add({ copy: () => this._copyUnitDef(type) }, "copy")
+      .name("Copy UnitDef → Console");
 
     this._persistPanel(gui, `gd_unitTune_${type}_v1`);
     this._applyUnitTuning(type); // sync def + live cops to the (possibly restored) values
 
-    gui.domElement.style.position = 'fixed';
-    gui.domElement.style.top  = '8px';
-    gui.domElement.style.left = '320px';
-    gui.domElement.style.zIndex = '9999';
+    gui.domElement.style.position = "fixed";
+    gui.domElement.style.top = "8px";
+    gui.domElement.style.left = "320px";
+    gui.domElement.style.zIndex = "9999";
   }
 
   // Push the live unit-tuning object into the type's DEF (future spawns) and into every
   // live cop of that type (live + base handling fields, plus the AI tunables).
   _applyUnitTuning(type) {
-    const t = this._unitTuning, def = UNITS[type];
+    const t = this._unitTuning,
+      def = UNITS[type];
     Object.assign(def.handling, {
-      maxSpeed: t.maxSpeed, acceleration: t.acceleration,
-      gripLow: t.gripLow, gripHigh: t.gripHigh, gripSpeedRef: t.gripSpeedRef,
-      turnSpeedLow: t.turnSpeedLow, turnSpeed: t.turnSpeed, minSteerFactor: t.minSteerFactor,
+      maxSpeed: t.maxSpeed,
+      acceleration: t.acceleration,
+      gripLow: t.gripLow,
+      gripHigh: t.gripHigh,
+      gripSpeedRef: t.gripSpeedRef,
+      turnSpeedLow: t.turnSpeedLow,
+      turnSpeed: t.turnSpeed,
+      minSteerFactor: t.minSteerFactor,
     });
     Object.assign(def.ai, {
-      maxApproachSpeed: t.maxApproachSpeed, baseApproach: t.maxApproachSpeed,
-      cornerMinSpeed: t.cornerMinSpeed, brakeDecel: t.brakeDecel, arriveRadius: t.arriveRadius,
-      senseDist: t.senseDist, directRange: t.directRange, chaseRange: t.chaseRange,
-      reactionTime: t.reactionTime, ramRange: t.ramRange,
-      turnBrakeAngle: t.turnBrakeAngle, turnBrakeSpeed: t.turnBrakeSpeed,
+      maxApproachSpeed: t.maxApproachSpeed,
+      baseApproach: t.maxApproachSpeed,
+      cornerMinSpeed: t.cornerMinSpeed,
+      brakeDecel: t.brakeDecel,
+      arriveRadius: t.arriveRadius,
+      senseDist: t.senseDist,
+      directRange: t.directRange,
+      chaseRange: t.chaseRange,
+      reactionTime: t.reactionTime,
+      ramRange: t.ramRange,
+      turnBrakeAngle: t.turnBrakeAngle,
+      turnBrakeSpeed: t.turnBrakeSpeed,
     });
     for (const cop of this.cops) {
       if (cop.unitType !== type) continue;
-      cop.baseMaxSpeed = t.maxSpeed; cop.maxSpeed = t.maxSpeed; cop.acceleration = t.acceleration;
-      cop.baseGripLow = t.gripLow; cop.gripLow = t.gripLow;
-      cop.baseGripHigh = t.gripHigh; cop.gripHigh = t.gripHigh; cop.gripSpeedRef = t.gripSpeedRef;
-      cop.baseTurnSpeedLow = t.turnSpeedLow; cop.turnSpeedLow = t.turnSpeedLow;
-      cop.baseTurnSpeed = t.turnSpeed; cop.turnSpeed = t.turnSpeed; cop.minSteerFactor = t.minSteerFactor;
+      cop.baseMaxSpeed = t.maxSpeed;
+      cop.maxSpeed = t.maxSpeed;
+      cop.acceleration = t.acceleration;
+      cop.baseGripLow = t.gripLow;
+      cop.gripLow = t.gripLow;
+      cop.baseGripHigh = t.gripHigh;
+      cop.gripHigh = t.gripHigh;
+      cop.gripSpeedRef = t.gripSpeedRef;
+      cop.baseTurnSpeedLow = t.turnSpeedLow;
+      cop.turnSpeedLow = t.turnSpeedLow;
+      cop.baseTurnSpeed = t.turnSpeed;
+      cop.turnSpeed = t.turnSpeed;
+      cop.minSteerFactor = t.minSteerFactor;
       const a = cop.ai;
-      a.maxApproachSpeed = t.maxApproachSpeed; a.baseApproach = t.maxApproachSpeed;
-      a.cornerMinSpeed = t.cornerMinSpeed; a.brakeDecel = t.brakeDecel; a.arriveRadius = t.arriveRadius;
-      a.senseDist = t.senseDist; a.directRange = t.directRange; a.chaseRange = t.chaseRange;
-      a.reactionTime = t.reactionTime; a.ramRange = t.ramRange;
-      a.turnBrakeAngle = t.turnBrakeAngle; a.turnBrakeSpeed = t.turnBrakeSpeed;
+      a.maxApproachSpeed = t.maxApproachSpeed;
+      a.baseApproach = t.maxApproachSpeed;
+      a.cornerMinSpeed = t.cornerMinSpeed;
+      a.brakeDecel = t.brakeDecel;
+      a.arriveRadius = t.arriveRadius;
+      a.senseDist = t.senseDist;
+      a.directRange = t.directRange;
+      a.chaseRange = t.chaseRange;
+      a.reactionTime = t.reactionTime;
+      a.ramRange = t.ramRange;
+      a.turnBrakeAngle = t.turnBrakeAngle;
+      a.turnBrakeSpeed = t.turnBrakeSpeed;
     }
   }
 
@@ -1059,19 +1417,19 @@ this.boxTriggerSpeed = ${d.boxTriggerSpeed}; this.boxReleaseSpeed = ${d.boxRelea
   // per-level config rows), so there's no conflict with the cop-tuning panel.
   _setupPursuitPanel() {
     const P = this.pursuitLevel;
-    const gui = new GUI({ title: 'Pursuit Levels', width: 270 });
+    const gui = new GUI({ title: "Pursuit Levels", width: 270 });
     this.pursuitGui = gui;
     gui.close();
 
     const relevel = () => this._applyLevelTuning();
 
-    const heat = gui.addFolder('Heat / Bleed');
-    heat.add(P, 'activeRate', 0, 5, 0.1).name('Heat/s (active)');
-    heat.add(P, 'ramHeat',    0, 30, 1).name('Heat per ram');
-    heat.add(P, 'heatFloor',  0, 200, 5).name('Heat floor');
-    heat.add(P.bleed, 'fastFrac', 0, 1, 0.05).name('Bleed fast: ½level frac');
-    heat.add(P.bleed, 'fastRate', 0, 20, 0.5).name('Bleed fast rate /s');
-    heat.add(P.bleed, 'slowRate', 0, 5, 0.1).name('Bleed slow rate /s');
+    const heat = gui.addFolder("Heat / Bleed");
+    heat.add(P, "activeRate", 0, 5, 0.1).name("Heat/s (active)");
+    heat.add(P, "ramHeat", 0, 30, 1).name("Heat per ram");
+    heat.add(P, "heatFloor", 0, 200, 5).name("Heat floor");
+    heat.add(P.bleed, "fastFrac", 0, 1, 0.05).name("Bleed fast: ½level frac");
+    heat.add(P.bleed, "fastRate", 0, 20, 0.5).name("Bleed fast rate /s");
+    heat.add(P.bleed, "slowRate", 0, 5, 0.1).name("Bleed slow rate /s");
 
     // One folder per level — every lever live. `span` (time to next level) is omitted
     // on the top level (nothing to escalate to). reaction/cooldown/boxTrigger re-apply
@@ -1080,36 +1438,44 @@ this.boxTriggerSpeed = ${d.boxTriggerSpeed}; this.boxReleaseSpeed = ${d.boxRelea
     for (let lv = 1; lv <= P.maxLevel; lv++) {
       const L = P.levels[lv];
       const f = gui.addFolder(`Level ${lv}`);
-      if (lv < P.maxLevel) f.add(L, 'span', 5, 600, 5).name('Time to next (s)');
-      f.add(L, 'cap',        1, 20,  1).name('Cop cap');
-      f.add(L, 'reinforce',  2, 40,  1).name('Reinforce (s)');
-      f.add(L, 'cooldown',   5, 90,  1).name('Cooldown (s)').onChange(relevel);
-      f.add(L, 'reaction',   0, 0.5, 0.01).name('Reaction (s)').onChange(relevel);
-      f.add(L, 'boxTrigger', 0, 400, 10).name('Box trigger spd').onChange(relevel);
+      if (lv < P.maxLevel) f.add(L, "span", 5, 600, 5).name("Time to next (s)");
+      f.add(L, "cap", 1, 20, 1).name("Cop cap");
+      f.add(L, "reinforce", 2, 40, 1).name("Reinforce (s)");
+      f.add(L, "cooldown", 5, 90, 1).name("Cooldown (s)").onChange(relevel);
+      f.add(L, "reaction", 0, 0.5, 0.01).name("Reaction (s)").onChange(relevel);
+      f.add(L, "boxTrigger", 0, 400, 10)
+        .name("Box trigger spd")
+        .onChange(relevel);
       f.close();
     }
 
-    this._persistPanel(gui, 'gd_pursuitLevel3'); // bumped: per-level spans + bleed profile + L1-5
+    this._persistPanel(gui, "gd_pursuitLevel3"); // bumped: per-level spans + bleed profile + L1-5
 
-    gui.domElement.style.position = 'fixed';
-    gui.domElement.style.top  = '8px';
-    gui.domElement.style.left = '320px';
-    gui.domElement.style.zIndex = '9999';
+    gui.domElement.style.position = "fixed";
+    gui.domElement.style.top = "8px";
+    gui.domElement.style.left = "320px";
+    gui.domElement.style.zIndex = "9999";
   }
 
   _buildWorld() {
     // Asphalt ground
-    this.worldLayer.add(this.add.rectangle(
-      WORLD_WIDTH / 2, WORLD_HEIGHT / 2,
-      WORLD_WIDTH, WORLD_HEIGHT,
-      0x1a1a24
-    ).setDepth(0));
+    this.worldLayer.add(
+      this.add
+        .rectangle(
+          WORLD_WIDTH / 2,
+          WORLD_HEIGHT / 2,
+          WORLD_WIDTH,
+          WORLD_HEIGHT,
+          0x1a1a24,
+        )
+        .setDepth(0),
+    );
 
     // 1×1 white pixel used as the physics sprite for static bodies
     const px = this.add.graphics();
     px.fillStyle(0xffffff);
     px.fillRect(0, 0, 1, 1);
-    px.generateTexture('_px', 1, 1);
+    px.generateTexture("_px", 1, 1);
     px.destroy();
 
     this.walls = this.physics.add.staticGroup();
@@ -1120,12 +1486,15 @@ this.boxTriggerSpeed = ${d.boxTriggerSpeed}; this.boxReleaseSpeed = ${d.boxRelea
       const cy = y + h / 2;
 
       // Visual building
-      this.worldLayer.add(this.add.rectangle(cx, cy, w, h, 0x2c2c3e)
-        .setStrokeStyle(1, 0x40405a)
-        .setDepth(2));
+      this.worldLayer.add(
+        this.add
+          .rectangle(cx, cy, w, h, 0x2c2c3e)
+          .setStrokeStyle(1, 0x40405a)
+          .setDepth(2),
+      );
 
       // Physics body — scale the 1px texture to building size
-      const body = this.walls.create(cx, cy, '_px');
+      const body = this.walls.create(cx, cy, "_px");
       body.setDisplaySize(w, h).refreshBody();
       body.setVisible(false);
 
@@ -1159,155 +1528,254 @@ this.boxTriggerSpeed = ${d.boxTriggerSpeed}; this.boxReleaseSpeed = ${d.boxRelea
   }
 
   _setupInput() {
-    this.cursors   = this.input.keyboard.createCursorKeys(); // includes .space
-    this.wasd      = this.input.keyboard.addKeys('W,A,S,D');
-    this.shiftKey  = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.SHIFT);
+    this.cursors = this.input.keyboard.createCursorKeys(); // includes .space
+    this.wasd = this.input.keyboard.addKeys("W,A,S,D");
+    this.shiftKey = this.input.keyboard.addKey(
+      Phaser.Input.Keyboard.KeyCodes.SHIFT,
+    );
 
     // Restart any time (same cop count); new run drops straight into play
-    this.input.keyboard.on('keydown-R', () => this.scene.restart({ copCount: this.copCount, autostart: true, pursuitMode: this.pursuitMode, sandbox: this.sandbox }));
+    this.input.keyboard.on("keydown-R", () =>
+      this.scene.restart({
+        copCount: this.copCount,
+        autostart: true,
+        pursuitMode: this.pursuitMode,
+        sandbox: this.sandbox,
+      }),
+    );
     // Back to the menu
-    this.input.keyboard.on('keydown-M', () => this.scene.start('MenuScene'));
+    this.input.keyboard.on("keydown-M", () => this.scene.start("MenuScene"));
     // Pause toggle
-    this.input.keyboard.on('keydown-P', () => this._togglePause());
+    this.input.keyboard.on("keydown-P", () => this._togglePause());
 
     // Cop telemetry: press C to toggle throttled console logging of cop state. Works in
     // playtest mode too (console-only, no on-screen clutter) so traces can be captured
     // from the real, dev-tool-free experience.
-    this.copLog       = false;
+    this.copLog = false;
     this._copLogTimer = 0;
-    this.input.keyboard.on('keydown-C', () => {
+    this.input.keyboard.on("keydown-C", () => {
       this.copLog = !this.copLog;
-      console.log(`[cop telemetry] ${this.copLog ? 'ON' : 'OFF'}`);
+      console.log(`[cop telemetry] ${this.copLog ? "ON" : "OFF"}`);
     });
 
     // Spectate: press V to cycle the camera through player → each cop. While
     // viewing a cop, the car is frozen so you can watch a search without driving.
     this.camFocusIndex = 0; // 0 = player, 1..N = cop index + 1
-    this.input.keyboard.on('keydown-V', () => {
+    this.input.keyboard.on("keydown-V", () => {
       this.camFocusIndex = (this.camFocusIndex + 1) % (1 + this.cops.length);
-      const sprite = this.camFocusIndex === 0
-        ? this.car.sprite
-        : this.cops[this.camFocusIndex - 1].sprite;
+      const sprite =
+        this.camFocusIndex === 0
+          ? this.car.sprite
+          : this.cops[this.camFocusIndex - 1].sprite;
       this.cameras.main.startFollow(sprite, true, 0.1, 0.1);
     });
   }
 
   _setupDebugOverlay() {
-    this.debugText = this.add.text(10, 46, '', {
-      fontFamily: 'monospace',
-      fontSize: '14px',
-      color: '#39ff14',
-      backgroundColor: '#00000099',
-      padding: { x: 6, y: 4 }
-    }).setScrollFactor(0).setDepth(100).setInteractive({ useHandCursor: true });
+    this.debugText = this.add
+      .text(10, 46, "", {
+        fontFamily: "monospace",
+        fontSize: "14px",
+        color: "#39ff14",
+        backgroundColor: "#00000099",
+        padding: { x: 6, y: 4 },
+      })
+      .setScrollFactor(0)
+      .setDepth(100)
+      .setInteractive({ useHandCursor: true });
     // Collapsible: click the box (or press H) to fold it to a one-line header — handy
     // when the stats block covers the action during a playtest.
     this._statsCollapsed = false;
-    const toggle = () => { this._statsCollapsed = !this._statsCollapsed; };
-    this.debugText.on('pointerdown', toggle);
-    this.input.keyboard.on('keydown-H', toggle);
+    const toggle = () => {
+      this._statsCollapsed = !this._statsCollapsed;
+    };
+    this.debugText.on("pointerdown", toggle);
+    this.input.keyboard.on("keydown-H", toggle);
   }
 
   // Keep the click hit-area matching the (variable-size) text after each setText.
   _syncStatsHit() {
     const i = this.debugText.input;
-    if (i && i.hitArea) { i.hitArea.width = this.debugText.width; i.hitArea.height = this.debugText.height; }
+    if (i && i.hitArea) {
+      i.hitArea.width = this.debugText.width;
+      i.hitArea.height = this.debugText.height;
+    }
   }
 
   _setupHud() {
     const { width } = this.scale;
     // Pursuit status (top centre)
-    this.statusText = this.add.text(width / 2, 24, '', {
-      fontFamily: 'monospace',
-      fontSize: '22px',
-      fontStyle: 'bold',
-      color: '#ffffff',
-    }).setOrigin(0.5, 0).setScrollFactor(0).setDepth(100);
+    this.statusText = this.add
+      .text(width / 2, 24, "", {
+        fontFamily: "monospace",
+        fontSize: "22px",
+        fontStyle: "bold",
+        color: "#ffffff",
+      })
+      .setOrigin(0.5, 0)
+      .setScrollFactor(0)
+      .setDepth(100);
 
     // Heat / pursuit-level meter (Pursuit Mode only) — a thin bar under the status
     // showing progress toward the next level. Drawn each frame by _drawHeatBar.
     this.heatGfx = this.add.graphics().setScrollFactor(0).setDepth(100);
-    this.heatLabel = this.add.text(width / 2, 44, '', {
-      fontFamily: 'monospace', fontSize: '11px', fontStyle: 'bold', color: '#c8c8d4',
-    }).setOrigin(1, 0.5).setScrollFactor(0).setDepth(101).setAlpha(0);
+    this.heatLabel = this.add
+      .text(width / 2, 44, "", {
+        fontFamily: "monospace",
+        fontSize: "11px",
+        fontStyle: "bold",
+        color: "#c8c8d4",
+      })
+      .setOrigin(1, 0.5)
+      .setScrollFactor(0)
+      .setDepth(101)
+      .setAlpha(0);
 
     // "Reinforcements incoming" flash, shown beside the heat bar on each dispatch.
-    this.reinforceText = this.add.text(width / 2, 62, '⚠ REINFORCEMENTS INCOMING', {
-      fontFamily: 'monospace', fontSize: '12px', fontStyle: 'bold', color: '#ff5a1a',
-    }).setOrigin(0.5, 0.5).setScrollFactor(0).setDepth(101).setAlpha(0);
+    this.reinforceText = this.add
+      .text(width / 2, 62, "⚠ REINFORCEMENTS INCOMING", {
+        fontFamily: "monospace",
+        fontSize: "12px",
+        fontStyle: "bold",
+        color: "#ff5a1a",
+      })
+      .setOrigin(0.5, 0.5)
+      .setScrollFactor(0)
+      .setDepth(101)
+      .setAlpha(0);
 
     // Dev-only deployment counter, positioned in _drawCopCounter just right of the heat
     // bar (open space, clear of the centred pursuit HUD and the right-edge dev panel).
     if (this.devMode) {
-      this.copCountText = this.add.text(0, 0, '', {
-        fontFamily: 'monospace', fontSize: '12px', fontStyle: 'bold', color: '#c8c8d4', align: 'left',
-      }).setOrigin(0, 0.5).setScrollFactor(0).setDepth(101).setAlpha(0);
+      this.copCountText = this.add
+        .text(0, 0, "", {
+          fontFamily: "monospace",
+          fontSize: "12px",
+          fontStyle: "bold",
+          color: "#c8c8d4",
+          align: "left",
+        })
+        .setOrigin(0, 0.5)
+        .setScrollFactor(0)
+        .setDepth(101)
+        .setAlpha(0);
     }
 
     // Large cooldown timer, shown only during the cooldown phase (below the heat bar)
-    this.cooldownText = this.add.text(width / 2, 64, '', {
-      fontFamily: 'monospace',
-      fontSize: '40px',
-      fontStyle: 'bold',
-      color: '#ffd23f',
-    }).setOrigin(0.5, 0).setScrollFactor(0).setDepth(100);
+    this.cooldownText = this.add
+      .text(width / 2, 64, "", {
+        fontFamily: "monospace",
+        fontSize: "40px",
+        fontStyle: "bold",
+        color: "#ffd23f",
+      })
+      .setOrigin(0.5, 0)
+      .setScrollFactor(0)
+      .setDepth(100);
 
     // Brief "GHOST" flash when a ditch completes
-    this.ghostText = this.add.text(width / 2, this.scale.height / 2, 'GHOST', {
-      fontFamily: 'monospace',
-      fontSize: '96px',
-      fontStyle: 'bold',
-      color: '#39ff14',
-    }).setOrigin(0.5).setScrollFactor(0).setDepth(100).setAlpha(0);
+    this.ghostText = this.add
+      .text(width / 2, this.scale.height / 2, "GHOST", {
+        fontFamily: "monospace",
+        fontSize: "96px",
+        fontStyle: "bold",
+        color: "#39ff14",
+      })
+      .setOrigin(0.5)
+      .setScrollFactor(0)
+      .setDepth(100)
+      .setAlpha(0);
 
     // Bust meter bar (bottom centre) + its label
     this.bustGfx = this.add.graphics().setScrollFactor(0).setDepth(100);
-    this.bustLabel = this.add.text(width / 2, this.scale.height - 52, 'BUST', {
-      fontFamily: 'monospace', fontSize: '12px', fontStyle: 'bold', color: '#ffffff',
-    }).setOrigin(0.5, 1).setScrollFactor(0).setDepth(100).setAlpha(0);
+    this.bustLabel = this.add
+      .text(width / 2, this.scale.height - 52, "BUST", {
+        fontFamily: "monospace",
+        fontSize: "12px",
+        fontStyle: "bold",
+        color: "#ffffff",
+      })
+      .setOrigin(0.5, 1)
+      .setScrollFactor(0)
+      .setDepth(100)
+      .setAlpha(0);
 
     // BUSTED overlay
-    this.bustedText = this.add.text(width / 2, this.scale.height / 2,
-      'BUSTED\n\npress R to restart', {
-        fontFamily: 'monospace', fontSize: '56px', fontStyle: 'bold',
-        color: '#ff3b3b', align: 'center',
-      }).setOrigin(0.5).setScrollFactor(0).setDepth(101).setAlpha(0);
+    this.bustedText = this.add
+      .text(width / 2, this.scale.height / 2, "BUSTED\n\npress R to restart", {
+        fontFamily: "monospace",
+        fontSize: "56px",
+        fontStyle: "bold",
+        color: "#ff3b3b",
+        align: "center",
+      })
+      .setOrigin(0.5)
+      .setScrollFactor(0)
+      .setDepth(101)
+      .setAlpha(0);
 
     // PAUSED overlay
-    this.pausedText = this.add.text(width / 2, this.scale.height / 2,
-      'PAUSED\n\npress P to play', {
-        fontFamily: 'monospace', fontSize: '56px', fontStyle: 'bold',
-        color: '#ffffff', align: 'center',
-      }).setOrigin(0.5).setScrollFactor(0).setDepth(101).setAlpha(0);
+    this.pausedText = this.add
+      .text(width / 2, this.scale.height / 2, "PAUSED\n\npress P to play", {
+        fontFamily: "monospace",
+        fontSize: "56px",
+        fontStyle: "bold",
+        color: "#ffffff",
+        align: "center",
+      })
+      .setOrigin(0.5)
+      .setScrollFactor(0)
+      .setDepth(101)
+      .setAlpha(0);
   }
 
   _togglePause() {
     if (this.busted) return;
     this.paused = !this.paused;
-    if (this.paused) { this.physics.pause(); this.pausedText.setAlpha(1); }
-    else             { this.physics.resume(); this.pausedText.setAlpha(0); }
+    if (this.paused) {
+      this.physics.pause();
+      this.pausedText.setAlpha(1);
+    } else {
+      this.physics.resume();
+      this.pausedText.setAlpha(0);
+    }
   }
 
   _drawBustBar() {
     const g = this.bustGfx;
     g.clear();
     const v = this.bust.value;
-    if (v <= 0) { this.bustLabel.setAlpha(0); return; }
+    if (v <= 0) {
+      this.bustLabel.setAlpha(0);
+      return;
+    }
 
     const { width, height } = this.scale;
-    const w = 300, h = 16, x = (width - w) / 2, y = height - 40;
+    const w = 300,
+      h = 16,
+      x = (width - w) / 2,
+      y = height - 40;
     const frac = v / 100;
     const col = frac < 0.5 ? 0xffd23f : frac < 0.8 ? 0xff8c1a : 0xff3b3b;
 
-    g.fillStyle(0x000000, 0.5); g.fillRect(x - 2, y - 2, w + 4, h + 4);
-    g.fillStyle(col, 0.9);      g.fillRect(x, y, w * frac, h);
-    g.lineStyle(1, 0xffffff, 0.4); g.strokeRect(x, y, w, h);
+    g.fillStyle(0x000000, 0.5);
+    g.fillRect(x - 2, y - 2, w + 4, h + 4);
+    g.fillStyle(col, 0.9);
+    g.fillRect(x, y, w * frac, h);
+    g.lineStyle(1, 0xffffff, 0.4);
+    g.strokeRect(x, y, w, h);
     this.bustLabel.setAlpha(0.9);
   }
 
   _flashGhost() {
     this.ghostText.setAlpha(1).setScale(0.8);
-    this.tweens.add({ targets: this.ghostText, alpha: 0, scale: 1.4, duration: 1500, ease: 'Cubic.easeOut' });
+    this.tweens.add({
+      targets: this.ghostText,
+      alpha: 0,
+      scale: 1.4,
+      duration: 1500,
+      ease: "Cubic.easeOut",
+    });
   }
 
   // Per-level heat-bar fill colours. Distinct hue per level so they read apart at a
@@ -1324,28 +1792,38 @@ this.boxTriggerSpeed = ${d.boxTriggerSpeed}; this.boxReleaseSpeed = ${d.boxRelea
     const g = this.heatGfx;
     g.clear();
     if (!this.pursuitLevel || !this.cops.length) {
-      this.heatLabel.setAlpha(0); this.reinforceText.setAlpha(0); return;
+      this.heatLabel.setAlpha(0);
+      this.reinforceText.setAlpha(0);
+      return;
     }
 
     const { width } = this.scale;
-    const w = 200, h = 9, x = (width - w) / 2, y = 46;
+    const w = 200,
+      h = 9,
+      x = (width - w) / 2,
+      y = 46;
     const P = this.pursuitLevel;
     const frac = P.heatFraction();
     const rising = state === PursuitState.ACTIVE;
     const lvIdx = Math.min(P.level, 5) - 1;
     const lvCol = GameScene.HEAT_COLORS[lvIdx];
-    const col = rising ? lvCol : 0x4a90ff;   // blue while paused / bleeding
+    const col = rising ? lvCol : 0x4a90ff; // blue while paused / bleeding
 
     // Track border — thin outline so empty reads as background.
-    g.lineStyle(1, 0xffffff, 0.22); g.strokeRect(x, y, w, h);
+    g.lineStyle(1, 0xffffff, 0.22);
+    g.strokeRect(x, y, w, h);
 
     // Base layer: every already-cleared level keeps its colour across the full bar, so
     // at level N the whole track reads as the N-1 colour and the current level's
     // progress layers over it (the "building on top" effect).
-    if (lvIdx > 0) { g.fillStyle(GameScene.HEAT_COLORS[lvIdx - 1], 0.95); g.fillRect(x, y, w, h); }
+    if (lvIdx > 0) {
+      g.fillStyle(GameScene.HEAT_COLORS[lvIdx - 1], 0.95);
+      g.fillRect(x, y, w, h);
+    }
 
     // Current level's progress on top of the base.
-    g.fillStyle(col, 0.95); g.fillRect(x, y, w * frac, h);
+    g.fillStyle(col, 0.95);
+    g.fillRect(x, y, w * frac, h);
 
     // Width of the visibly-filled bar (full once a base exists, else just the fill).
     const filledW = lvIdx > 0 ? w : w * frac;
@@ -1354,16 +1832,28 @@ this.boxTriggerSpeed = ${d.boxTriggerSpeed}; this.boxReleaseSpeed = ${d.boxRelea
     const flashT = (this._reinforceFlashUntil || 0) - this.time.now;
     if (flashT > 0) {
       const a = Math.min(flashT / 1400, 1);
-      g.fillStyle(0xffffff, a * 0.6); g.fillRect(x, y, filledW, h);
-      this.reinforceText.setPosition(width / 2, y + 18).setColor('#ff5a1a').setAlpha(a);
+      g.fillStyle(0xffffff, a * 0.6);
+      g.fillRect(x, y, filledW, h);
+      this.reinforceText
+        .setPosition(width / 2, y + 18)
+        .setColor("#ff5a1a")
+        .setAlpha(a);
     } else {
       this.reinforceText.setAlpha(0);
     }
 
-    const label = !rising ? (state === PursuitState.SEARCH && !this.pursuit.ditched ? 'HOLD' : 'COOLING')
-                : P.atMax() ? 'MAX HEAT' : 'HEAT';
-    this.heatLabel.setText(label)
-      .setPosition(x - 8, y + h / 2).setColor(`#${col.toString(16).padStart(6, '0')}`).setAlpha(0.9);
+    const label = !rising
+      ? state === PursuitState.SEARCH && !this.pursuit.ditched
+        ? "HOLD"
+        : "COOLING"
+      : P.atMax()
+        ? "MAX HEAT"
+        : "HEAT";
+    this.heatLabel
+      .setText(label)
+      .setPosition(x - 8, y + h / 2)
+      .setColor(`#${col.toString(16).padStart(6, "0")}`)
+      .setAlpha(0.9);
   }
 
   // Dev-only deployment readout (top-right): total cops + how many are "special" (non-
@@ -1372,14 +1862,22 @@ this.boxTriggerSpeed = ${d.boxTriggerSpeed}; this.boxReleaseSpeed = ${d.boxRelea
   _drawCopCounter() {
     if (!this.copCountText) return;
     const total = this.cops.length;
-    if (!total) { this.copCountText.setAlpha(0); return; }
+    if (!total) {
+      this.copCountText.setAlpha(0);
+      return;
+    }
     const counts = {};
-    for (const c of this.cops) counts[c.unitType] = (counts[c.unitType] || 0) + 1;
+    for (const c of this.cops)
+      counts[c.unitType] = (counts[c.unitType] || 0) + 1;
     const special = total - (counts.patrol || 0);
-    const breakdown = Object.keys(counts).map(t => `${counts[t]} ${t}`).join('  ');
-    this.copCountText.setText(`${total} COPS · ${special} SPECIAL\n${breakdown}`)
-      .setPosition((this.scale.width + 200) / 2 + 14, 50)   // just right of the centred heat bar
-      .setColor(special > 0 ? '#ff9e1a' : '#c8c8d4').setAlpha(0.9);
+    const breakdown = Object.keys(counts)
+      .map((t) => `${counts[t]} ${t}`)
+      .join("  ");
+    this.copCountText
+      .setText(`${total} COPS · ${special} SPECIAL\n${breakdown}`)
+      .setPosition((this.scale.width + 200) / 2 + 14, 50) // just right of the centred heat bar
+      .setColor(special > 0 ? "#ff9e1a" : "#c8c8d4")
+      .setAlpha(0.9);
   }
 
   // Dev-only world overlay: LOS lines (green=visible, red=blocked), steering targets,
@@ -1391,19 +1889,31 @@ this.boxTriggerSpeed = ${d.boxTriggerSpeed}; this.boxReleaseSpeed = ${d.boxRelea
       this.aiDebug.lineBetween(cop.sprite.x, cop.sprite.y, px, py);
       if (cop.aiTarget) {
         this.aiDebug.lineStyle(1, 0xffaa00, 0.5);
-        this.aiDebug.lineBetween(cop.sprite.x, cop.sprite.y, cop.aiTarget.x, cop.aiTarget.y);
+        this.aiDebug.lineBetween(
+          cop.sprite.x,
+          cop.sprite.y,
+          cop.aiTarget.x,
+          cop.aiTarget.y,
+        );
         this.aiDebug.fillStyle(0xffaa00, 0.8);
         this.aiDebug.fillCircle(cop.aiTarget.x, cop.aiTarget.y, 5);
       }
       // Live per-cop label: role (when chasing) + convoy mode + control mode + speed
       if (cop.modeLabel && cop.debug) {
-        const role = (state === PursuitState.ACTIVE && cop.role) ? cop.role + ' ' : '';
+        const role =
+          state === PursuitState.ACTIVE && cop.role ? cop.role + " " : "";
         // Only show a convoy tag when it's not the ordinary "I can see you" case.
-        const conv = (state === PursuitState.ACTIVE && cop.pursuitMode && cop.pursuitMode !== 'DIRECT')
-          ? cop.pursuitMode + ' ' : '';
+        const conv =
+          state === PursuitState.ACTIVE &&
+          cop.pursuitMode &&
+          cop.pursuitMode !== "DIRECT"
+            ? cop.pursuitMode + " "
+            : "";
         cop.modeLabel.setPosition(cop.sprite.x, cop.sprite.y - 50); // above the health bar
-        cop.modeLabel.setText(`${role}${conv}${cop.debug.mode} ${Math.round(cop.debug.speed)}`);
-        cop.modeLabel.setColor(cop.hasLOS ? '#39ff14' : '#ff8c8c');
+        cop.modeLabel.setText(
+          `${role}${conv}${cop.debug.mode} ${Math.round(cop.debug.speed)}`,
+        );
+        cop.modeLabel.setColor(cop.hasLOS ? "#39ff14" : "#ff8c8c");
       }
     }
     // Coverage paint: dot each search-area node — green = covered (seen recently),
@@ -1411,23 +1921,39 @@ this.boxTriggerSpeed = ${d.boxTriggerSpeed}; this.boxReleaseSpeed = ${d.boxRelea
     if (state === PursuitState.SEARCH) {
       for (const idx of this._searchArea()) {
         const p = this.navGrid.pos(idx);
-        const covered = (this._searchClock - this.coverage[idx]) < this.coverageTTL;
-        this.aiDebug.fillStyle(covered ? 0x39ff14 : 0xff3b3b, covered ? 0.5 : 0.28);
+        const covered =
+          this._searchClock - this.coverage[idx] < this.coverageTTL;
+        this.aiDebug.fillStyle(
+          covered ? 0x39ff14 : 0xff3b3b,
+          covered ? 0.5 : 0.28,
+        );
         this.aiDebug.fillCircle(p.x, p.y, covered ? 16 : 10);
       }
     }
     // Last-known marker + escape-vector arrow while searching
     if (state === PursuitState.SEARCH && this.pursuit.hasLastKnown) {
-      const lk = this.pursuit.lastKnown, dir = this.pursuit.lastKnownDir;
+      const lk = this.pursuit.lastKnown,
+        dir = this.pursuit.lastKnownDir;
       this.aiDebug.lineStyle(2, 0xffd23f, 0.8);
       this.aiDebug.strokeCircle(lk.x, lk.y, 30);
       // arrow in the direction the player was last heading
-      const ex = lk.x + Math.cos(dir) * 90, ey = lk.y + Math.sin(dir) * 90;
+      const ex = lk.x + Math.cos(dir) * 90,
+        ey = lk.y + Math.sin(dir) * 90;
       this.aiDebug.lineStyle(3, 0xffd23f, 0.9);
       this.aiDebug.lineBetween(lk.x, lk.y, ex, ey);
       const ah = 0.5;
-      this.aiDebug.lineBetween(ex, ey, ex - Math.cos(dir - ah) * 16, ey - Math.sin(dir - ah) * 16);
-      this.aiDebug.lineBetween(ex, ey, ex - Math.cos(dir + ah) * 16, ey - Math.sin(dir + ah) * 16);
+      this.aiDebug.lineBetween(
+        ex,
+        ey,
+        ex - Math.cos(dir - ah) * 16,
+        ey - Math.sin(dir - ah) * 16,
+      );
+      this.aiDebug.lineBetween(
+        ex,
+        ey,
+        ex - Math.cos(dir + ah) * 16,
+        ey - Math.sin(dir + ah) * 16,
+      );
     }
     // Station marker
     this.aiDebug.lineStyle(2, 0x4a90ff, 0.6);
@@ -1437,26 +1963,36 @@ this.boxTriggerSpeed = ${d.boxTriggerSpeed}; this.boxReleaseSpeed = ${d.boxRelea
   // Dev-only top-left text overlay: fps/speed/state + nearest-cop AI + controls.
   _drawDebugText(state, spectating, speed) {
     if (this._statsCollapsed) {
-      this.debugText.setText('▸ stats (H)');
+      this.debugText.setText("▸ stats (H)");
       this._syncStatsHit();
       return;
     }
-    const view = this.camFocusIndex === 0 ? 'PLAYER' : `COP ${this.camFocusIndex - 1}`;
+    const view =
+      this.camFocusIndex === 0 ? "PLAYER" : `COP ${this.camFocusIndex - 1}`;
     const lines = [
-      '▾ stats — click / H to hide',
+      "▾ stats — click / H to hide",
       `FPS:   ${Math.round(this.game.loop.actualFps)}`,
       `Speed: ${Math.round(speed)} px/s`,
       `Cops:  ${this.cops.length}`,
       `State: ${state}`,
-      `Bust:  ${Math.round(this.bust.value)}%${this.bust.pinned ? ' PINNED' : ''}`,
-      `View:  ${view}${spectating ? ' (car frozen)' : ''}`,
+      `Bust:  ${Math.round(this.bust.value)}%${this.bust.pinned ? " PINNED" : ""}`,
+      `View:  ${view}${spectating ? " (car frozen)" : ""}`,
     ];
 
     // Nearest cop + its AI state
-    let nearestCop = null, nearestDist = Infinity;
+    let nearestCop = null,
+      nearestDist = Infinity;
     for (const c of this.cops) {
-      const d = Phaser.Math.Distance.Between(c.sprite.x, c.sprite.y, this.car.sprite.x, this.car.sprite.y);
-      if (d < nearestDist) { nearestDist = d; nearestCop = c; }
+      const d = Phaser.Math.Distance.Between(
+        c.sprite.x,
+        c.sprite.y,
+        this.car.sprite.x,
+        this.car.sprite.y,
+      );
+      if (d < nearestDist) {
+        nearestDist = d;
+        nearestCop = c;
+      }
     }
     if (nearestCop) {
       const d = nearestCop.debug;
@@ -1465,53 +2001,79 @@ this.boxTriggerSpeed = ${d.boxTriggerSpeed}; this.boxReleaseSpeed = ${d.boxRelea
         lines.push(
           `  mode:  ${d.mode}`,
           `  speed: ${Math.round(d.speed)}  limit: ${Math.round(d.cornerLimit)}`,
-          `  bend:  ${(d.bend * 180 / Math.PI).toFixed(0)}°  err: ${(d.angleErr * 180 / Math.PI).toFixed(0)}°`
+          `  bend:  ${((d.bend * 180) / Math.PI).toFixed(0)}°  err: ${((d.angleErr * 180) / Math.PI).toFixed(0)}°`,
         );
       }
     }
-    if (this.car.isDrifting) lines.push('[HANDBRAKE DRIFT]');
-    lines.push('', 'WASD / Arrows — Drive', 'Space — Handbrake', 'Shift — Brake', 'P — Pause', 'C — Cop decision log', 'V — Cycle camera', 'H — Toggle stats', 'R — Restart', 'M — Menu');
+    if (this.car.isDrifting) lines.push("[HANDBRAKE DRIFT]");
+    lines.push(
+      "",
+      "WASD / Arrows — Drive",
+      "Space — Handbrake",
+      "Shift — Brake",
+      "P — Pause",
+      "C — Cop decision log",
+      "V — Cycle camera",
+      "H — Toggle stats",
+      "R — Restart",
+      "M — Menu",
+    );
     this.debugText.setText(lines);
     this._syncStatsHit();
   }
 
   _setupTunePanel() {
     const car = this.car;
-    const gui = new GUI({ title: 'Car Tuning', width: 280 });
+    const gui = new GUI({ title: "Car Tuning", width: 280 });
     this.gui = gui;
     gui.close();
 
-    const engine = gui.addFolder('Engine');
-    engine.add(car, 'acceleration',    10, 1500,  5  ).name('Acceleration');
-    engine.add(car, 'maxSpeed',        100, 1200, 10 ).name('Max Speed');
-    engine.add(car, 'hardBrakeForce',  50, 2000,  10 ).name('Hard Brake (Shift)');
-    engine.add(car, 'brakeForce',      10, 500,   5  ).name('S-key Brake Force');
-    engine.add(car, 'reverseAccel',    50, 1500,  10 ).name('Reverse Accel');
-    engine.add(car, 'maxReverseSpeed', 30, 600,   5  ).name('Max Reverse Speed');
+    const engine = gui.addFolder("Engine");
+    engine.add(car, "acceleration", 10, 1500, 5).name("Acceleration");
+    engine.add(car, "maxSpeed", 100, 1200, 10).name("Max Speed");
+    engine.add(car, "hardBrakeForce", 50, 2000, 10).name("Hard Brake (Shift)");
+    engine.add(car, "brakeForce", 10, 500, 5).name("S-key Brake Force");
+    engine.add(car, "reverseAccel", 50, 1500, 10).name("Reverse Accel");
+    engine.add(car, "maxReverseSpeed", 30, 600, 5).name("Max Reverse Speed");
 
-    const steering = gui.addFolder('Steering');
-    steering.add(car, 'turnSpeedLow',  0.5, 8.0,            0.05).name('Turn Speed low (rad/s)');
-    steering.add(car, 'turnSpeed',     0.5, 8.0,            0.05).name('Turn Speed high (rad/s)');
-    steering.add(car, 'maxDriftAngle', 0.5, Math.PI * 0.95, 0.01).name('Max Drift Angle (rad)');
+    const steering = gui.addFolder("Steering");
+    steering
+      .add(car, "turnSpeedLow", 0.5, 8.0, 0.05)
+      .name("Turn Speed low (rad/s)");
+    steering
+      .add(car, "turnSpeed", 0.5, 8.0, 0.05)
+      .name("Turn Speed high (rad/s)");
+    steering
+      .add(car, "maxDriftAngle", 0.5, Math.PI * 0.95, 0.01)
+      .name("Max Drift Angle (rad)");
 
-    const drag = gui.addFolder('Drag');
-    drag.add(car, 'accelDragBase',  0.97,  0.9995, 0.0005).name('Accel Drag Base');
-    drag.add(car, 'accelDragCurve', 0,     0.05,   0.001 ).name('Accel Drag Curve');
-    drag.add(car, 'coastDrag',      0.96,  0.9995, 0.0005).name('Coast Drag');
-    drag.add(car, 'handBrakeDrag',  0.97,  0.9995, 0.0005).name('Handbrake Drag');
+    const drag = gui.addFolder("Drag");
+    drag
+      .add(car, "accelDragBase", 0.97, 0.9995, 0.0005)
+      .name("Accel Drag Base");
+    drag.add(car, "accelDragCurve", 0, 0.05, 0.001).name("Accel Drag Curve");
+    drag.add(car, "coastDrag", 0.96, 0.9995, 0.0005).name("Coast Drag");
+    drag.add(car, "handBrakeDrag", 0.97, 0.9995, 0.0005).name("Handbrake Drag");
 
-    const grip = gui.addFolder('Grip');
-    grip.add(car, 'gripLow',       0.02,  0.6,   0.01 ).name('Grip (low speed)');
-    grip.add(car, 'gripHigh',      0.005, 0.2,   0.005).name('Grip (high speed)');
-    grip.add(car, 'gripSpeedRef',  50,    600,   5    ).name('High-speed grip at (px/s)');
-    grip.add(car, 'gripHandbrake', 0.001, 0.05,  0.001).name('Grip (handbrake)');
-    grip.add(car, 'entryKick',         0,   0.8,  0.01).name('Entry Kick (handbrake)');
-    grip.add(car, 'entryKickDuration', 0,   0.5,  0.01).name('Entry Kick Duration (s)');
-    grip.add(car, 'entryKickCooldown', 0,   3.0,  0.05).name('Entry Kick Cooldown (s)');
+    const grip = gui.addFolder("Grip");
+    grip.add(car, "gripLow", 0.02, 0.6, 0.01).name("Grip (low speed)");
+    grip.add(car, "gripHigh", 0.005, 0.2, 0.005).name("Grip (high speed)");
+    grip.add(car, "gripSpeedRef", 50, 600, 5).name("High-speed grip at (px/s)");
+    grip.add(car, "gripHandbrake", 0.001, 0.05, 0.001).name("Grip (handbrake)");
+    grip.add(car, "entryKick", 0, 0.8, 0.01).name("Entry Kick (handbrake)");
+    grip
+      .add(car, "entryKickDuration", 0, 0.5, 0.01)
+      .name("Entry Kick Duration (s)");
+    grip
+      .add(car, "entryKickCooldown", 0, 3.0, 0.05)
+      .name("Entry Kick Cooldown (s)");
 
-    gui.add({ copyStats: () => {
-      const s = car;
-      console.log(`// --- Tuned stats ---
+    gui
+      .add(
+        {
+          copyStats: () => {
+            const s = car;
+            console.log(`// --- Tuned stats ---
 this.maxSpeed        = ${s.maxSpeed};
 this.maxReverseSpeed = ${s.maxReverseSpeed};
 this.acceleration    = ${s.acceleration};
@@ -1532,17 +2094,21 @@ this.gripHandbrake   = ${s.gripHandbrake};
 this.entryKick         = ${s.entryKick};
 this.entryKickDuration = ${s.entryKickDuration};
 this.entryKickCooldown = ${s.entryKickCooldown};`);
-    } }, 'copyStats').name('Copy Stats → Console');
+          },
+        },
+        "copyStats",
+      )
+      .name("Copy Stats → Console");
 
     // Persist across refresh (binds directly to the car, so load sets car fields).
-    this._persistPanel(gui, 'gd_carTuning');
+    this._persistPanel(gui, "gd_carTuning");
 
-    gui.domElement.style.position = 'fixed';
-    gui.domElement.style.top   = '8px';
-    gui.domElement.style.right = '8px';
-    gui.domElement.style.zIndex = '9999';
+    gui.domElement.style.position = "fixed";
+    gui.domElement.style.top = "8px";
+    gui.domElement.style.right = "8px";
+    gui.domElement.style.zIndex = "9999";
 
-    this.game.canvas.addEventListener('mousedown', () => {
+    this.game.canvas.addEventListener("mousedown", () => {
       const active = document.activeElement;
       if (active && active !== document.body) active.blur();
     });
@@ -1550,100 +2116,248 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
 
   _setupCopTunePanel() {
     if (!this.cops.length) return;
-    const c = this.cops[0], a = c.ai;
+    const c = this.cops[0],
+      a = c.ai;
 
     // Single source of truth for the panel; changes are pushed to every cop.
     this.copTuning = {
-      maxSpeed: c.baseMaxSpeed, acceleration: c.acceleration,
-      gripLow: c.baseGripLow, gripHigh: c.baseGripHigh, gripSpeedRef: c.gripSpeedRef,
-      turnSpeedLow: c.baseTurnSpeedLow, turnSpeed: c.baseTurnSpeed, minSteerFactor: c.minSteerFactor,
-      cornerMinSpeed: a.cornerMinSpeed, maxApproachSpeed: a.baseApproach,
-      brakeDecel: a.brakeDecel, arriveRadius: a.arriveRadius,
-      senseDist: a.senseDist, directRange: a.directRange, chaseRange: a.chaseRange, reactionTime: a.reactionTime,
-      sepRadius: this.sepRadius, sepStrength: this.sepStrength,
-      rbStart: this.rbStart, rbFull: this.rbFull, rbGrip: this.rbGrip,
-      rbTurnMult: this.rbTurnMult, rbSpeedBoost: this.rbSpeedBoost,
-      respawnEnabled: this.respawnEnabled, respawnDist: this.respawnDist, respawnTime: this.respawnTime,
-      searchSpeed: this.searchSpeed, searchDepth: this.searchDepth, searchMaxDepth: this.searchMaxDepth,
-      coverageTTL: this.coverageTTL, searchDirBias: this.searchDirBias,
-      searchDwell: this.searchDwell, searchStall: this.searchStall,
-      boxTriggerSpeed: this.director.boxTriggerSpeed, boxEngageRange: this.director.boxEngageRange,
-      boxAhead: this.director.boxAhead, boxBehind: this.director.boxBehind,
-      convoyEnabled: this.director.convoyEnabled, followGap: this.director.followGap,
+      maxSpeed: c.baseMaxSpeed,
+      acceleration: c.acceleration,
+      gripLow: c.baseGripLow,
+      gripHigh: c.baseGripHigh,
+      gripSpeedRef: c.gripSpeedRef,
+      turnSpeedLow: c.baseTurnSpeedLow,
+      turnSpeed: c.baseTurnSpeed,
+      minSteerFactor: c.minSteerFactor,
+      cornerMinSpeed: a.cornerMinSpeed,
+      maxApproachSpeed: a.baseApproach,
+      brakeDecel: a.brakeDecel,
+      arriveRadius: a.arriveRadius,
+      senseDist: a.senseDist,
+      directRange: a.directRange,
+      chaseRange: a.chaseRange,
+      reactionTime: a.reactionTime,
+      sepRadius: this.sepRadius,
+      sepStrength: this.sepStrength,
+      rbStart: this.rbStart,
+      rbFull: this.rbFull,
+      rbGrip: this.rbGrip,
+      rbTurnMult: this.rbTurnMult,
+      rbSpeedBoost: this.rbSpeedBoost,
+      respawnEnabled: this.respawnEnabled,
+      respawnDist: this.respawnDist,
+      respawnTime: this.respawnTime,
+      searchSpeed: this.searchSpeed,
+      searchDepth: this.searchDepth,
+      searchMaxDepth: this.searchMaxDepth,
+      coverageTTL: this.coverageTTL,
+      searchDirBias: this.searchDirBias,
+      searchDwell: this.searchDwell,
+      searchStall: this.searchStall,
+      boxTriggerSpeed: this.director.boxTriggerSpeed,
+      boxEngageRange: this.director.boxEngageRange,
+      boxAhead: this.director.boxAhead,
+      boxBehind: this.director.boxBehind,
+      convoyEnabled: this.director.convoyEnabled,
+      followGap: this.director.followGap,
     };
 
-    const gui = new GUI({ title: 'Cop Tuning', width: 300 });
+    const gui = new GUI({ title: "Cop Tuning", width: 300 });
     this.copGui = gui;
     gui.close();
     const apply = () => this._applyCopTuning();
 
-    const drive = gui.addFolder('Handling');
-    drive.add(this.copTuning, 'maxSpeed',       100, 1200, 10).name('Max Speed').onChange(apply);
-    drive.add(this.copTuning, 'acceleration',   10, 1500,  5).name('Acceleration').onChange(apply);
-    drive.add(this.copTuning, 'turnSpeedLow',   0.5, 8.0, 0.05).name('Turn Speed low').onChange(apply);
-    drive.add(this.copTuning, 'turnSpeed',      0.5, 8.0, 0.05).name('Turn Speed high').onChange(apply);
-    drive.add(this.copTuning, 'minSteerFactor', 0,   1.0, 0.05).name('Low-speed steer floor').onChange(apply);
+    const drive = gui.addFolder("Handling");
+    drive
+      .add(this.copTuning, "maxSpeed", 100, 1200, 10)
+      .name("Max Speed")
+      .onChange(apply);
+    drive
+      .add(this.copTuning, "acceleration", 10, 1500, 5)
+      .name("Acceleration")
+      .onChange(apply);
+    drive
+      .add(this.copTuning, "turnSpeedLow", 0.5, 8.0, 0.05)
+      .name("Turn Speed low")
+      .onChange(apply);
+    drive
+      .add(this.copTuning, "turnSpeed", 0.5, 8.0, 0.05)
+      .name("Turn Speed high")
+      .onChange(apply);
+    drive
+      .add(this.copTuning, "minSteerFactor", 0, 1.0, 0.05)
+      .name("Low-speed steer floor")
+      .onChange(apply);
 
-    const grip = gui.addFolder('Grip');
-    grip.add(this.copTuning, 'gripLow',      0.02,  1.0, 0.01).name('Grip (low speed)').onChange(apply);
-    grip.add(this.copTuning, 'gripHigh',     0.005, 1.0, 0.005).name('Grip (high speed)').onChange(apply);
-    grip.add(this.copTuning, 'gripSpeedRef', 50,    600, 5).name('High-speed grip at').onChange(apply);
+    const grip = gui.addFolder("Grip");
+    grip
+      .add(this.copTuning, "gripLow", 0.02, 1.0, 0.01)
+      .name("Grip (low speed)")
+      .onChange(apply);
+    grip
+      .add(this.copTuning, "gripHigh", 0.005, 1.0, 0.005)
+      .name("Grip (high speed)")
+      .onChange(apply);
+    grip
+      .add(this.copTuning, "gripSpeedRef", 50, 600, 5)
+      .name("High-speed grip at")
+      .onChange(apply);
 
-    const corner = gui.addFolder('Driving AI');
-    corner.add(this.copTuning, 'maxApproachSpeed', 200, 800, 10).name('Straight speed').onChange(apply);
-    corner.add(this.copTuning, 'cornerMinSpeed',   80,  500, 5).name('Corner min speed').onChange(apply);
-    corner.add(this.copTuning, 'brakeDecel',       100, 800, 10).name('Brake planning').onChange(apply);
-    corner.add(this.copTuning, 'arriveRadius',     30,  150, 5).name('Node arrive radius').onChange(apply);
-    corner.add(this.copTuning, 'senseDist',        200, 1000, 20).name('Corner sense ahead').onChange(apply);
-    corner.add(this.copTuning, 'directRange',      50,  400, 10).name('Direct-aim range').onChange(apply);
-    corner.add(this.copTuning, 'chaseRange',       150, 2000, 25).name('Beeline range (else paths)').onChange(apply);
-    corner.add(this.copTuning, 'reactionTime',     0,   0.5, 0.01).name('Reaction lag (s)').onChange(apply);
+    const corner = gui.addFolder("Driving AI");
+    corner
+      .add(this.copTuning, "maxApproachSpeed", 200, 800, 10)
+      .name("Straight speed")
+      .onChange(apply);
+    corner
+      .add(this.copTuning, "cornerMinSpeed", 80, 500, 5)
+      .name("Corner min speed")
+      .onChange(apply);
+    corner
+      .add(this.copTuning, "brakeDecel", 100, 800, 10)
+      .name("Brake planning")
+      .onChange(apply);
+    corner
+      .add(this.copTuning, "arriveRadius", 30, 150, 5)
+      .name("Node arrive radius")
+      .onChange(apply);
+    corner
+      .add(this.copTuning, "senseDist", 200, 1000, 20)
+      .name("Corner sense ahead")
+      .onChange(apply);
+    corner
+      .add(this.copTuning, "directRange", 50, 400, 10)
+      .name("Direct-aim range")
+      .onChange(apply);
+    corner
+      .add(this.copTuning, "chaseRange", 150, 2000, 25)
+      .name("Beeline range (else paths)")
+      .onChange(apply);
+    corner
+      .add(this.copTuning, "reactionTime", 0, 0.5, 0.01)
+      .name("Reaction lag (s)")
+      .onChange(apply);
 
-    const pack = gui.addFolder('Pack & Search');
-    pack.add(this.copTuning, 'boxTriggerSpeed', 0,  400, 10).name('Box: trigger below speed').onChange(apply);
-    pack.add(this.copTuning, 'boxEngageRange', 100, 1200, 20).name('Box: engage range').onChange(apply);
-    pack.add(this.copTuning, 'boxAhead',      0,   300, 5).name('Box: front cut-ahead').onChange(apply);
-    pack.add(this.copTuning, 'boxBehind',     0,   300, 5).name('Box: rear gap').onChange(apply);
-    pack.add(this.copTuning, 'sepRadius',     0,   250, 5).name('Separation radius').onChange(apply);
-    pack.add(this.copTuning, 'sepStrength',   0,   400, 5).name('Separation strength').onChange(apply);
-    pack.add(this.copTuning, 'searchSpeed',   80,  600, 10).name('Search speed cap').onChange(apply);
-    pack.add(this.copTuning, 'searchDepth',    1,  6,  1).name('Search start (blocks)').onChange(apply);
-    pack.add(this.copTuning, 'searchMaxDepth', 1,  10, 1).name('Search max (blocks)').onChange(apply);
-    pack.add(this.copTuning, 'coverageTTL',    1,  20, 1).name('Search memory (s)').onChange(apply);
-    pack.add(this.copTuning, 'searchDirBias',  0,  150, 5).name('Escape-dir bias').onChange(apply);
-    pack.add(this.copTuning, 'searchDwell',    0,  4,  0.1).name('Search dwell (s)').onChange(apply);
-    pack.add(this.copTuning, 'searchStall',    1,  8,  0.5).name('Search give-up (s)').onChange(apply);
+    const pack = gui.addFolder("Pack & Search");
+    pack
+      .add(this.copTuning, "boxTriggerSpeed", 0, 400, 10)
+      .name("Box: trigger below speed")
+      .onChange(apply);
+    pack
+      .add(this.copTuning, "boxEngageRange", 100, 1200, 20)
+      .name("Box: engage range")
+      .onChange(apply);
+    pack
+      .add(this.copTuning, "boxAhead", 0, 300, 5)
+      .name("Box: front cut-ahead")
+      .onChange(apply);
+    pack
+      .add(this.copTuning, "boxBehind", 0, 300, 5)
+      .name("Box: rear gap")
+      .onChange(apply);
+    pack
+      .add(this.copTuning, "sepRadius", 0, 250, 5)
+      .name("Separation radius")
+      .onChange(apply);
+    pack
+      .add(this.copTuning, "sepStrength", 0, 400, 5)
+      .name("Separation strength")
+      .onChange(apply);
+    pack
+      .add(this.copTuning, "searchSpeed", 80, 600, 10)
+      .name("Search speed cap")
+      .onChange(apply);
+    pack
+      .add(this.copTuning, "searchDepth", 1, 6, 1)
+      .name("Search start (blocks)")
+      .onChange(apply);
+    pack
+      .add(this.copTuning, "searchMaxDepth", 1, 10, 1)
+      .name("Search max (blocks)")
+      .onChange(apply);
+    pack
+      .add(this.copTuning, "coverageTTL", 1, 20, 1)
+      .name("Search memory (s)")
+      .onChange(apply);
+    pack
+      .add(this.copTuning, "searchDirBias", 0, 150, 5)
+      .name("Escape-dir bias")
+      .onChange(apply);
+    pack
+      .add(this.copTuning, "searchDwell", 0, 4, 0.1)
+      .name("Search dwell (s)")
+      .onChange(apply);
+    pack
+      .add(this.copTuning, "searchStall", 1, 8, 0.5)
+      .name("Search give-up (s)")
+      .onChange(apply);
 
-    const convoy = gui.addFolder('Convoy (blind cops)');
-    convoy.add(this.copTuning, 'convoyEnabled').name('Convoy following').onChange(apply);
-    convoy.add(this.copTuning, 'followGap',   30,  300, 10).name('Follow gap behind leader').onChange(apply);
+    const convoy = gui.addFolder("Convoy (blind cops)");
+    convoy
+      .add(this.copTuning, "convoyEnabled")
+      .name("Convoy following")
+      .onChange(apply);
+    convoy
+      .add(this.copTuning, "followGap", 30, 300, 10)
+      .name("Follow gap behind leader")
+      .onChange(apply);
 
-    const rejoin = gui.addFolder('Rejoin (far cops)');
-    rejoin.add(this.copTuning, 'rbStart',      0,  2500, 50).name('Blend start (px)').onChange(apply);
-    rejoin.add(this.copTuning, 'rbFull',     100, 3500, 50).name('Blend full (px)').onChange(apply);
-    rejoin.add(this.copTuning, 'rbGrip',     0.1,  1.0, 0.05).name('Grip at full').onChange(apply);
-    rejoin.add(this.copTuning, 'rbTurnMult', 1.0,  3.0, 0.1).name('Turn × at full').onChange(apply);
-    rejoin.add(this.copTuning, 'rbSpeedBoost', 0,  400, 10).name('Speed boost at full').onChange(apply);
+    const rejoin = gui.addFolder("Rejoin (far cops)");
+    rejoin
+      .add(this.copTuning, "rbStart", 0, 2500, 50)
+      .name("Blend start (px)")
+      .onChange(apply);
+    rejoin
+      .add(this.copTuning, "rbFull", 100, 3500, 50)
+      .name("Blend full (px)")
+      .onChange(apply);
+    rejoin
+      .add(this.copTuning, "rbGrip", 0.1, 1.0, 0.05)
+      .name("Grip at full")
+      .onChange(apply);
+    rejoin
+      .add(this.copTuning, "rbTurnMult", 1.0, 3.0, 0.1)
+      .name("Turn × at full")
+      .onChange(apply);
+    rejoin
+      .add(this.copTuning, "rbSpeedBoost", 0, 400, 10)
+      .name("Speed boost at full")
+      .onChange(apply);
 
-    const respawn = gui.addFolder('Respawn (lost cops)');
-    respawn.add(this.copTuning, 'respawnEnabled').name('Respawn lost cops').onChange(apply);
-    respawn.add(this.copTuning, 'respawnDist', 500, 3000, 50).name('Lost distance (px)').onChange(apply);
-    respawn.add(this.copTuning, 'respawnTime',   1,   12, 0.5).name('Lost time (s)').onChange(apply);
+    const respawn = gui.addFolder("Respawn (lost cops)");
+    respawn
+      .add(this.copTuning, "respawnEnabled")
+      .name("Respawn lost cops")
+      .onChange(apply);
+    respawn
+      .add(this.copTuning, "respawnDist", 500, 3000, 50)
+      .name("Lost distance (px)")
+      .onChange(apply);
+    respawn
+      .add(this.copTuning, "respawnTime", 1, 12, 0.5)
+      .name("Lost time (s)")
+      .onChange(apply);
 
     // Bust meter — bound straight to the live BustMeter (fill scales with crowding cops).
-    const bustF = gui.addFolder('Bust meter');
-    bustF.add(this.bust, 'pinDistance',   20, 200, 5).name('Pin distance (px)');
-    bustF.add(this.bust, 'pinSpeed',       0, 300, 10).name('Pinnable below (px/s)');
-    bustF.add(this.bust, 'surroundRange', 40, 300, 10).name('Crowd count range (px)');
-    bustF.add(this.bust, 'fillBase',       0,  60, 1).name('Fill: 1 cop /s');
-    bustF.add(this.bust, 'fillPerCop',     0,  40, 1).name('Fill: + per extra cop /s');
-    bustF.add(this.bust, 'fillMax',       10, 120, 5).name('Fill: max /s');
-    bustF.add(this.bust, 'drainRate',      0, 200, 5).name('Drain /s');
+    const bustF = gui.addFolder("Bust meter");
+    bustF.add(this.bust, "pinDistance", 20, 200, 5).name("Pin distance (px)");
+    bustF.add(this.bust, "pinSpeed", 0, 300, 10).name("Pinnable below (px/s)");
+    bustF
+      .add(this.bust, "surroundRange", 40, 300, 10)
+      .name("Crowd count range (px)");
+    bustF.add(this.bust, "fillBase", 0, 60, 1).name("Fill: 1 cop /s");
+    bustF
+      .add(this.bust, "fillPerCop", 0, 40, 1)
+      .name("Fill: + per extra cop /s");
+    bustF.add(this.bust, "fillMax", 10, 120, 5).name("Fill: max /s");
+    bustF.add(this.bust, "drainRate", 0, 200, 5).name("Drain /s");
     bustF.close();
 
-    gui.add({ copyStats: () => {
-      const t = this.copTuning;
-      console.log(`// --- Cop handling (CopCar stats) ---
+    gui
+      .add(
+        {
+          copyStats: () => {
+            const t = this.copTuning;
+            console.log(`// --- Cop handling (CopCar stats) ---
 maxSpeed: ${t.maxSpeed}, acceleration: ${t.acceleration},
 gripLow: ${t.gripLow}, gripHigh: ${t.gripHigh}, gripSpeedRef: ${t.gripSpeedRef},
 turnSpeedLow: ${t.turnSpeedLow}, turnSpeed: ${t.turnSpeed}, minSteerFactor: ${t.minSteerFactor},
@@ -1658,16 +2372,20 @@ sepRadius: ${t.sepRadius}, sepStrength: ${t.sepStrength},
 rbStart: ${t.rbStart}, rbFull: ${t.rbFull}, rbGrip: ${t.rbGrip}, rbTurnMult: ${t.rbTurnMult}, rbSpeedBoost: ${t.rbSpeedBoost},
 respawnEnabled: ${t.respawnEnabled}, respawnDist: ${t.respawnDist}, respawnTime: ${t.respawnTime},
 searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${t.searchMaxDepth}, coverageTTL: ${t.coverageTTL}, searchDirBias: ${t.searchDirBias}, searchDwell: ${t.searchDwell}, searchStall: ${t.searchStall}`);
-    } }, 'copyStats').name('Copy Cop Stats → Console');
+          },
+        },
+        "copyStats",
+      )
+      .name("Copy Cop Stats → Console");
 
     // Persist across refresh. Key bumped to v16: huntLead removed (blind cops now go
     // straight to last-known, no forward projection).
-    this._persistPanel(gui, 'gd_copTuning17'); // bumped: added Bust meter folder
+    this._persistPanel(gui, "gd_copTuning17"); // bumped: added Bust meter folder
 
-    gui.domElement.style.position = 'fixed';
-    gui.domElement.style.top  = '8px';
-    gui.domElement.style.left = '8px';
-    gui.domElement.style.zIndex = '9999';
+    gui.domElement.style.position = "fixed";
+    gui.domElement.style.top = "8px";
+    gui.domElement.style.left = "8px";
+    gui.domElement.style.zIndex = "9999";
   }
 
   // Wire a lil-gui panel to localStorage: restore on open, save on change, and a
@@ -1678,14 +2396,31 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
     try {
       const saved = localStorage.getItem(key);
       if (saved) gui.load(JSON.parse(saved));
-    } catch (e) { /* corrupt/unavailable storage — ignore, use defaults */ }
+    } catch (e) {
+      /* corrupt/unavailable storage — ignore, use defaults */
+    }
     gui.onChange(() => {
-      try { localStorage.setItem(key, JSON.stringify(gui.save())); } catch (e) { /* ignore */ }
+      try {
+        localStorage.setItem(key, JSON.stringify(gui.save()));
+      } catch (e) {
+        /* ignore */
+      }
     });
-    gui.add({ reset: () => {
-      gui.load(defaults);                            // restore + apply code defaults
-      try { localStorage.removeItem(key); } catch (e) { /* ignore */ }
-    } }, 'reset').name('⟲ Reset to defaults');
+    gui
+      .add(
+        {
+          reset: () => {
+            gui.load(defaults); // restore + apply code defaults
+            try {
+              localStorage.removeItem(key);
+            } catch (e) {
+              /* ignore */
+            }
+          },
+        },
+        "reset",
+      )
+      .name("⟲ Reset to defaults");
   }
 
   _applyCopTuning() {
@@ -1693,15 +2428,28 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
     for (const cop of this.cops) {
       // Write BOTH the live stat and its base copy — the Tier-1 rejoin blend lerps
       // the live fields each frame from these bases, so the panel must own the bases.
-      cop.baseMaxSpeed = t.maxSpeed; cop.maxSpeed = t.maxSpeed; cop.acceleration = t.acceleration;
-      cop.baseGripLow = t.gripLow; cop.gripLow = t.gripLow;
-      cop.baseGripHigh = t.gripHigh; cop.gripHigh = t.gripHigh; cop.gripSpeedRef = t.gripSpeedRef;
-      cop.baseTurnSpeedLow = t.turnSpeedLow; cop.turnSpeedLow = t.turnSpeedLow;
-      cop.baseTurnSpeed = t.turnSpeed; cop.turnSpeed = t.turnSpeed; cop.minSteerFactor = t.minSteerFactor;
+      cop.baseMaxSpeed = t.maxSpeed;
+      cop.maxSpeed = t.maxSpeed;
+      cop.acceleration = t.acceleration;
+      cop.baseGripLow = t.gripLow;
+      cop.gripLow = t.gripLow;
+      cop.baseGripHigh = t.gripHigh;
+      cop.gripHigh = t.gripHigh;
+      cop.gripSpeedRef = t.gripSpeedRef;
+      cop.baseTurnSpeedLow = t.turnSpeedLow;
+      cop.turnSpeedLow = t.turnSpeedLow;
+      cop.baseTurnSpeed = t.turnSpeed;
+      cop.turnSpeed = t.turnSpeed;
+      cop.minSteerFactor = t.minSteerFactor;
       const a = cop.ai;
-      a.cornerMinSpeed = t.cornerMinSpeed; a.baseApproach = t.maxApproachSpeed;
-      a.brakeDecel = t.brakeDecel; a.arriveRadius = t.arriveRadius;
-      a.senseDist = t.senseDist; a.directRange = t.directRange; a.chaseRange = t.chaseRange; a.reactionTime = t.reactionTime;
+      a.cornerMinSpeed = t.cornerMinSpeed;
+      a.baseApproach = t.maxApproachSpeed;
+      a.brakeDecel = t.brakeDecel;
+      a.arriveRadius = t.arriveRadius;
+      a.senseDist = t.senseDist;
+      a.directRange = t.directRange;
+      a.chaseRange = t.chaseRange;
+      a.reactionTime = t.reactionTime;
     }
     this.sepRadius = t.sepRadius;
     this.sepStrength = t.sepStrength;
@@ -1742,38 +2490,57 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
     // observer can't accidentally drive or re-trigger anything.
     const spectating = this.camFocusIndex !== 0;
     const controls = spectating
-      ? { up: false, down: false, left: false, right: false, handbrake: false, brake: false }
+      ? {
+          up: false,
+          down: false,
+          left: false,
+          right: false,
+          handbrake: false,
+          brake: false,
+        }
       : {
-          up:        this.cursors.up.isDown    || this.wasd.W.isDown,
-          down:      this.cursors.down.isDown  || this.wasd.S.isDown,
-          left:      this.cursors.left.isDown  || this.wasd.A.isDown,
-          right:     this.cursors.right.isDown || this.wasd.D.isDown,
+          up: this.cursors.up.isDown || this.wasd.W.isDown,
+          down: this.cursors.down.isDown || this.wasd.S.isDown,
+          left: this.cursors.left.isDown || this.wasd.A.isDown,
+          right: this.cursors.right.isDown || this.wasd.D.isDown,
           handbrake: this.cursors.space.isDown,
-          brake:     this.shiftKey.isDown,
+          brake: this.shiftKey.isDown,
         };
 
     this.car.update(delta, controls);
-    this._carLastVx = this.car.vx; this._carLastVy = this.car.vy; // pre-collision cache (see _updateCopDamage)
+    this._carLastVx = this.car.vx;
+    this._carLastVy = this.car.vy; // pre-collision cache (see _updateCopDamage)
 
     // --- Perception: a cop is AWARE of the player if it has a clear sight line
     // within range, OR the player is within close proximity (omnidirectional —
     // you can't lose someone beside you). Awareness persists for awareGrace after
     // the last perception, so a momentary ray break (corner clip, spin-out) does
     // not drop the chase. ---
-    const px = this.car.sprite.x, py = this.car.sprite.y;
+    const px = this.car.sprite.x,
+      py = this.car.sprite.y;
     const dt = delta / 1000;
-    let anyAware = false, anyLOS = false;
+    let anyAware = false,
+      anyLOS = false;
     let nearestCopDist = Infinity;
     for (const cop of this.cops) {
-      const d = Phaser.Math.Distance.Between(cop.sprite.x, cop.sprite.y, px, py);
+      const d = Phaser.Math.Distance.Between(
+        cop.sprite.x,
+        cop.sprite.y,
+        px,
+        py,
+      );
       if (d < nearestCopDist) nearestCopDist = d;
-      const sees = d <= this.proximityRange ||
-        (d <= this.sightRange && segmentClear(cop.sprite.x, cop.sprite.y, px, py, this.losRects));
-      cop.awareTimer = sees ? this.awareGrace : Math.max(0, (cop.awareTimer || 0) - dt);
-      cop.hasLOS = sees;                  // instantaneous real line of sight
-      cop.aware  = cop.awareTimer > 0;    // includes the memory grace
+      const sees =
+        d <= this.proximityRange ||
+        (d <= this.sightRange &&
+          segmentClear(cop.sprite.x, cop.sprite.y, px, py, this.losRects));
+      cop.awareTimer = sees
+        ? this.awareGrace
+        : Math.max(0, (cop.awareTimer || 0) - dt);
+      cop.hasLOS = sees; // instantaneous real line of sight
+      cop.aware = cop.awareTimer > 0; // includes the memory grace
       if (cop.aware) anyAware = true;
-      if (sees)      anyLOS = true;
+      if (sees) anyLOS = true;
     }
 
     // Record each cop's breadcrumb trail (for convoy-following) BEFORE the director
@@ -1787,13 +2554,20 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
     // chase — no ditch/search/return — keeping a unit always exercising its behavior
     // while you tune it. lastKnown still only moves on a REAL sighting, so blind-nav is
     // unchanged. (Cops still navigate to last-known when they personally lose sight.)
-    const state = this.pursuit.update(this.sandbox || anyAware, anyLOS, px, py, dt);
+    const state = this.pursuit.update(
+      this.sandbox || anyAware,
+      anyLOS,
+      px,
+      py,
+      dt,
+    );
     if (this.pursuit.justDitched) this._flashGhost();
     // Player's heading/speed at the last REAL sighting (the search/track vector).
     if (anyLOS) {
-      this.pursuit.lastKnownDir = this.car.getSpeed() > 40
-        ? Math.atan2(this.car.vy, this.car.vx)
-        : this.car.facing;
+      this.pursuit.lastKnownDir =
+        this.car.getSpeed() > 40
+          ? Math.atan2(this.car.vy, this.car.vx)
+          : this.car.facing;
       this.pursuit.lastKnownSpeed = this.car.getSpeed();
     }
 
@@ -1801,11 +2575,17 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
     // every cop to the LAST-KNOWN LOCATION first — the chase keeps priority, so
     // they drive to where they last saw you (regaining sight en route resumes the
     // chase) and only begin the node search once they actually arrive there.
-    if (state === PursuitState.SEARCH && this._prevState !== PursuitState.SEARCH) {
+    if (
+      state === PursuitState.SEARCH &&
+      this._prevState !== PursuitState.SEARCH
+    ) {
       this.coverage.fill(-1e9);
       this._searchClock = 0;
       this._searchRadius = this.searchDepth;
-      const lkNode = this.navGrid.nearestNode(this.pursuit.lastKnown.x, this.pursuit.lastKnown.y);
+      const lkNode = this.navGrid.nearestNode(
+        this.pursuit.lastKnown.x,
+        this.pursuit.lastKnown.y,
+      );
       for (const cop of this.cops) cop._searchNode = lkNode;
     }
     this._prevState = state;
@@ -1837,7 +2617,10 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
       // EXPAND: once most of the current radius has been seen, grow it a ring so
       // the cops spiral outward instead of re-checking the same area forever.
       if (this._searchRadius < this.searchMaxDepth) {
-        const seen = area.reduce((c, idx) => c + (this.coverage[idx] > -1e8 ? 1 : 0), 0);
+        const seen = area.reduce(
+          (c, idx) => c + (this.coverage[idx] > -1e8 ? 1 : 0),
+          0,
+        );
         if (seen >= area.length * 0.7) this._searchRadius++;
       }
     }
@@ -1848,13 +2631,16 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
       // target; a cop WITHOUT its own sight line heads for a drivable last-known goal
       // (never the live position, which may be inside a building) and lets CopAI route
       // there on the road network. Keeps the chase priority while the cop is blind.
-      if      (state === PursuitState.ACTIVE)    target = cop.hasLOS ? cop.dirTarget : this._huntGoal();
-      else if (state === PursuitState.SEARCH)    target = this._cooldownTarget(cop);
+      if (state === PursuitState.ACTIVE)
+        target = cop.hasLOS ? cop.dirTarget : this._huntGoal();
+      else if (state === PursuitState.SEARCH)
+        target = this._cooldownTarget(cop);
       else if (state === PursuitState.RETURNING) target = this.station;
       // Separation spreads cops apart so they don't pile up — but a CONVOY follower is
       // deliberately tracking a single drivable line, so nudging its target sideways
       // would shove it into a wall. Skip separation for convoy cops; clamp always.
-      const convoying = state === PursuitState.ACTIVE && cop.pursuitMode === 'CONVOY';
+      const convoying =
+        state === PursuitState.ACTIVE && cop.pursuitMode === "CONVOY";
       if (target) {
         if (!convoying) target = this._separate(cop, target);
         target = this._clampWorld(target);
@@ -1862,19 +2648,28 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
       // Full speed while chasing OR hunting; capped only for sustained search / withdrawal.
       // In ACTIVE the director may impose a maneuver/drafting cap (overtake-block, anti-
       // bumper-grind) — honour it so a fast unit spends its speed on maneuvers, not tailing.
-      const slow = (state === PursuitState.SEARCH && !hunting) || state === PursuitState.RETURNING;
-      cop.ai.speedCap = slow ? this.searchSpeed
-        : (state === PursuitState.ACTIVE && cop.maneuverSpeedCap != null ? cop.maneuverSpeedCap : Infinity);
+      const slow =
+        (state === PursuitState.SEARCH && !hunting) ||
+        state === PursuitState.RETURNING;
+      cop.ai.speedCap = slow
+        ? this.searchSpeed
+        : state === PursuitState.ACTIVE && cop.maneuverSpeedCap != null
+          ? cop.maneuverSpeedCap
+          : Infinity;
       // Tier-1 rejoin: blend handling toward near-kinematic the farther this cop is.
-      this._applyRejoinBand(cop, Phaser.Math.Distance.Between(cop.sprite.x, cop.sprite.y, px, py));
+      this._applyRejoinBand(
+        cop,
+        Phaser.Math.Distance.Between(cop.sprite.x, cop.sprite.y, px, py),
+      );
       // Overtake speed boost: a committed overtaker gets extra top-end so it can actually
       // pass the player. Applied AFTER the rejoin band (which rewrites maxSpeed from base),
       // and raises the AI's approach cap to match so maxApproachSpeed isn't the bottleneck.
-      const boost = (state === PursuitState.ACTIVE) ? (cop.maneuverBoost || 0) : 0;
+      const boost = state === PursuitState.ACTIVE ? cop.maneuverBoost || 0 : 0;
       cop.maxSpeed += boost;
       cop.ai.maxApproachSpeed = cop.ai.baseApproach + boost;
       cop.update(delta, target);
-      cop._lastVx = cop.vx; cop._lastVy = cop.vy; // pre-collision cache (see _updateCopDamage)
+      cop._lastVx = cop.vx;
+      cop._lastVy = cop.vy; // pre-collision cache (see _updateCopDamage)
     }
 
     // Tier-2 rejoin: a cop that's been far + not chasing + off-screen for a while is
@@ -1887,15 +2682,29 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
     // beat just warps home. The chase is over and it's off-screen, so it's invisible.
     if (state === PursuitState.RETURNING) {
       for (const cop of this.cops) {
-        cop._returnStuckT = cop.getSpeed() < 30 ? (cop._returnStuckT || 0) + dt : 0;
-        if (cop._returnStuckT > 3 &&
-            Phaser.Math.Distance.Between(cop.sprite.x, cop.sprite.y, this.station.x, this.station.y) > 90) {
+        cop._returnStuckT =
+          cop.getSpeed() < 30 ? (cop._returnStuckT || 0) + dt : 0;
+        if (
+          cop._returnStuckT > 3 &&
+          Phaser.Math.Distance.Between(
+            cop.sprite.x,
+            cop.sprite.y,
+            this.station.x,
+            this.station.y,
+          ) > 90
+        ) {
           this._placeCop(cop, this.station.x, this.station.y, px, py);
           cop._returnStuckT = 0;
         }
       }
-      const allHome = this.cops.every(c =>
-        Phaser.Math.Distance.Between(c.sprite.x, c.sprite.y, this.station.x, this.station.y) < 90
+      const allHome = this.cops.every(
+        (c) =>
+          Phaser.Math.Distance.Between(
+            c.sprite.x,
+            c.sprite.y,
+            this.station.x,
+            this.station.y,
+          ) < 90,
       );
       if (allHome) this.pursuit.markIdle();
     }
@@ -1904,16 +2713,21 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
     // Pinned = actively pursued, a cop right on you, and you're slow (boxed/stopped).
     const playerSpeed = this.car.getSpeed();
     // No arrest in the testbed — getting boxed shouldn't pause physics mid-tune.
-    const pinned = !this.sandbox &&
-                   state === PursuitState.ACTIVE &&
-                   nearestCopDist < this.bust.pinDistance &&
-                   playerSpeed < this.bust.pinSpeed;
+    const pinned =
+      !this.sandbox &&
+      state === PursuitState.ACTIVE &&
+      nearestCopDist < this.bust.pinDistance &&
+      playerSpeed < this.bust.pinSpeed;
     // How many cops are crowding you — scales the fill rate (1 cop = slow burn, a swarm
     // busts fast). Counted within surroundRange; only matters while pinned.
     let pinCount = 0;
     if (pinned) {
       for (const cop of this.cops) {
-        if (Phaser.Math.Distance.Between(cop.sprite.x, cop.sprite.y, px, py) < this.bust.surroundRange) pinCount++;
+        if (
+          Phaser.Math.Distance.Between(cop.sprite.x, cop.sprite.y, px, py) <
+          this.bust.surroundRange
+        )
+          pinCount++;
       }
     }
     this.bust.update(pinned, pinCount, delta / 1000);
@@ -1939,39 +2753,51 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
       const lookX = this.car.vx * 0.15;
       const lookY = this.car.vy * 0.15;
       this.cameras.main.setFollowOffset(-lookX, -lookY);
-      const targetZoom = Phaser.Math.Linear(1.0, 0.62, Math.min(speed / 450, 1));
-      this.cameras.main.zoom = Phaser.Math.Linear(this.cameras.main.zoom, targetZoom, 0.04);
+      const targetZoom = Phaser.Math.Linear(
+        1.0,
+        0.62,
+        Math.min(speed / 450, 1),
+      );
+      this.cameras.main.zoom = Phaser.Math.Linear(
+        this.cameras.main.zoom,
+        targetZoom,
+        0.04,
+      );
     } else {
       this.cameras.main.setFollowOffset(0, 0);
-      this.cameras.main.zoom = Phaser.Math.Linear(this.cameras.main.zoom, 1.0, 0.06);
+      this.cameras.main.zoom = Phaser.Math.Linear(
+        this.cameras.main.zoom,
+        1.0,
+        0.06,
+      );
     }
-
 
     // --- Pursuit HUD ---
     if (!this.cops.length) {
-      this.statusText.setText('FREE DRIVE').setColor('#9aa0b5');
-      this.cooldownText.setText('');
+      this.statusText.setText("FREE DRIVE").setColor("#9aa0b5");
+      this.cooldownText.setText("");
     } else if (state === PursuitState.ACTIVE || hunting) {
       // Hunting = they just lost sight and are still charging — read as pursuit.
-      const lv = this.pursuitLevel ? ` · L${this.pursuitLevel.level}` : '';
-      this.statusText.setText(`● PURSUIT${lv}`).setColor('#ff3b3b');
-      this.cooldownText.setText('');
+      const lv = this.pursuitLevel ? ` · L${this.pursuitLevel.level}` : "";
+      this.statusText.setText(`● PURSUIT${lv}`).setColor("#ff3b3b");
+      this.cooldownText.setText("");
     } else if (state === PursuitState.SEARCH && !this.pursuit.ditched) {
-      this.statusText.setText('EVADING').setColor('#ffd23f');
+      this.statusText.setText("EVADING").setColor("#ffd23f");
       this.cooldownText.setText(this.pursuit.cooldown.toFixed(1));
     } else if (state === PursuitState.SEARCH && this.pursuit.ditched) {
-      this.statusText.setText('AREA HOT').setColor('#ff8c1a');
+      this.statusText.setText("AREA HOT").setColor("#ff8c1a");
       this.cooldownText.setText(this.pursuit.hot.toFixed(0));
     } else if (state === PursuitState.RETURNING) {
-      this.statusText.setText('WITHDRAWING').setColor('#9aa0b5');
-      this.cooldownText.setText('');
+      this.statusText.setText("WITHDRAWING").setColor("#9aa0b5");
+      this.cooldownText.setText("");
     } else {
-      this.statusText.setText('CLEAR').setColor('#39ff14');
-      this.cooldownText.setText('');
+      this.statusText.setText("CLEAR").setColor("#39ff14");
+      this.cooldownText.setText("");
     }
 
     // Dev text overlay (top-left stats + controls reference).
-    if (this.devMode && this.debugText) this._drawDebugText(state, spectating, speed);
+    if (this.devMode && this.debugText)
+      this._drawDebugText(state, spectating, speed);
 
     // Cop decision trace. Logs a line only when a cop's DECISION or its EFFECT
     // changes — so the console reads as a cause→effect sequence (what fired, what
@@ -1979,43 +2805,55 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
     //   state (+HUNT/+DITCHED) · role · flank-case · AI mode · LOS · cmd→act speed
     //   · WALL (against a building/bound) · STUCK (wants to move but isn't, ~crash)
     if (this.copLog) {
-      const t  = (this.time.now / 1000).toFixed(2);
+      const t = (this.time.now / 1000).toFixed(2);
       const dt = delta / 1000;
-      const stateTag = this.pursuit.state
-        + (this.pursuit.hunting ? '+HUNT' : '')
-        + (this.pursuit.ditched ? '+DITCHED' : '');
+      const stateTag =
+        this.pursuit.state +
+        (this.pursuit.hunting ? "+HUNT" : "") +
+        (this.pursuit.ditched ? "+DITCHED" : "");
       this.cops.forEach((cop, i) => {
-        const d   = cop.debug || {};
-        const cmd = Math.round(d.speed || 0);     // speed the AI is asking for
-        const act = Math.round(cop.getSpeed());   // speed it's actually doing
-        const b   = cop.sprite.body.blocked;
-        const wall = b && !b.none;                // touching a building / world bound
+        const d = cop.debug || {};
+        const cmd = Math.round(d.speed || 0); // speed the AI is asking for
+        const act = Math.round(cop.getSpeed()); // speed it's actually doing
+        const b = cop.sprite.body.blocked;
+        const wall = b && !b.none; // touching a building / world bound
 
         // STUCK: it wants to move (cmd high) but barely is (act low) for a beat.
         if (cmd > 60 && act < 40) cop._slowT = (cop._slowT || 0) + dt;
-        else                      cop._slowT = 0;
+        else cop._slowT = 0;
         const stuck = (cop._slowT || 0) > 0.25;
 
         // Behaviour state (PURSUE / BOX_F / BOX_R), ACTIVE only.
-        const role  = (this.pursuit.state === PursuitState.ACTIVE && cop.role) ? cop.role : '—';
-        const los   = cop.hasLOS ? 'LOS' : 'los✗';
+        const role =
+          this.pursuit.state === PursuitState.ACTIVE && cop.role
+            ? cop.role
+            : "—";
+        const los = cop.hasLOS ? "LOS" : "los✗";
         // Convoy relay mode (DIRECT/CONVOY/LONE), ACTIVE only — shows who's chasing
         // directly vs. following a teammate's trail vs. on their own.
-        const conv  = (this.pursuit.state === PursuitState.ACTIVE && cop.pursuitMode) ? cop.pursuitMode : '—';
+        const conv =
+          this.pursuit.state === PursuitState.ACTIVE && cop.pursuitMode
+            ? cop.pursuitMode
+            : "—";
         // Coarse phase for the change-signature only. The raw throttle mode
         // (CHASE/PURSUE/CRUISE/BRAKE) flickers every few frames at a speed cap, which
         // would spam a new line each flip and bury the events that matter. Collapse
         // it to what we actually want to catch — wedge-recovery vs ordinary driving —
         // so a line prints on real decision changes. The raw mode still shows in the line.
-        const phase = (d.mode === 'UNSTK_BK' || d.mode === 'UNSTK_FW') ? 'UNSTK'
-                    : (d.mode === 'STANDDOWN') ? 'STANDDOWN' : 'DRIVE';
-        const sig = `${stateTag}|${role}|${conv}|${phase}|${los}|${wall ? 'W' : ''}|${stuck ? 'S' : ''}`;
+        const phase =
+          d.mode === "UNSTK_BK" || d.mode === "UNSTK_FW"
+            ? "UNSTK"
+            : d.mode === "STANDDOWN"
+              ? "STANDDOWN"
+              : "DRIVE";
+        const sig = `${stateTag}|${role}|${conv}|${phase}|${los}|${wall ? "W" : ""}|${stuck ? "S" : ""}`;
         if (sig !== cop._sig) {
           cop._sig = sig;
           console.log(
             `[t=${t} cop${i}] ${stateTag} ${role} ${conv} ${d.mode} ${los} ` +
-            `cmd=${cmd} act=${act} dist=${Math.round(d.dist || 0)}` +
-            (wall ? ' WALL' : '') + (stuck ? ' STUCK' : '')
+              `cmd=${cmd} act=${act} dist=${Math.round(d.dist || 0)}` +
+              (wall ? " WALL" : "") +
+              (stuck ? " STUCK" : ""),
           );
         }
       });
