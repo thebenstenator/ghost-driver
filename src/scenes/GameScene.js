@@ -681,6 +681,7 @@ export class GameScene extends Phaser.Scene {
     this.cops = [];
     this.wrecks = [];
     this.director._maneuverHolder = null;
+    this.director._boxFrontCop = null;
   }
 
   // A cop is in an aggressive ACTION (boxing / blocking / overtaking) — the only states in
@@ -858,10 +859,12 @@ export class GameScene extends Phaser.Scene {
     box.add(d, 'boxEngageRange',  100, 1000, 20).name('Join box within (px)');
     box.add(d, 'boxCloseMargin',  0, 400, 10).name('Rear close speed margin');
     box.add(d, 'boxContactGap',   0, 150, 5).name('Rear hold gap (px)');
+    box.add(d, 'boxPress',        0, 200, 5).name('Rear press above pace (px/s)');
+    box.add(d, 'boxFrontAhead',   0, 150, 5).name('Front-runner ahead-by (px)');
 
     gui.add({ copy: () => this._copyManeuverStats() }, 'copy').name('Copy Maneuvers → Console');
 
-    this._persistPanel(gui, 'gd_maneuverTune_v2'); // bumped: draftGap/maneuverRange/cooldown/boost rebaked
+    this._persistPanel(gui, 'gd_maneuverTune_v3'); // bumped: added box front-runner (boxPress/boxFrontAhead)
 
     gui.domElement.style.position = 'fixed';
     gui.domElement.style.top  = '8px';

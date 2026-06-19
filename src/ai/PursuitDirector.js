@@ -47,10 +47,15 @@ export class PursuitDirector {
     this.boxEngageRange  = 520;  // only cops within this of the player join the box
     this.boxHold         = 0.8;  // s the box persists after the trigger clears (anti-flicker)
     this.boxCloseMargin  = 140;  // px/s a rear boxer may exceed your speed by to CLOSE to contact…
-    this.boxContactGap   = 30;   // …easing to match your pace within this gap (so it holds, not shoves)
+    this.boxContactGap   = 30;   // …easing toward your pace within this gap
+    this.boxPress        = 45;   // px/s a rear boxer presses ABOVE your pace at contact, so it PINS
+                                 // you against the front blocker instead of just trailing (bounded,
+                                 // so it can't shove you across the map like the old rear-ram)
+    this.boxFrontAhead   = 30;   // along-px a box cop must reach to count as "in front" (then it blocks)
     this.boxAhead        = 110;  // vestigial (box v2 has no offset) — kept so the legacy cop panel binds
     this.boxBehind       = 70;   // vestigial — as above
     this._boxTimer       = 0;    // > 0 while boxing (counts down when the trigger is absent)
+    this._boxFrontCop    = null; // the cop committed to taking the FRONT of the box (sticky)
 
     // --- Overtake-and-block maneuver (aggressive units only; see _updateManeuver) ---
     // The fix for "a faster cop just rides my bumper": its speed edge is SPENT on a
@@ -108,9 +113,20 @@ export class PursuitDirector {
     // before boxing so the holder is excluded from the box.
     const holder = this._updateManeuver(cops, px, py, h, speed, dt);
 
-    // Event: do we sandwich the player this frame? (box v2 has no per-slot picking —
-    // every near cop crashes-and-holds, see below.)
+    // Event: do we sandwich the player this frame?
     const boxing = this._updateBox(cops, playerCar, px, py, dt);
+
+    // Box FRONT-RUNNER: pick ONE near cop to take the front, so the box actually STOPS the
+    // player instead of trailing them. Sticky — keep the same cop while it's near, so it
+    // commits to getting around rather than thrashing the assignment.
+    let boxFront = null;
+    if (boxing) {
+      const near = cops.filter(c => this._dist(c, px, py) <= this.boxEngageRange);
+      boxFront = (this._boxFrontCop && near.includes(this._boxFrontCop)) ? this._boxFrontCop
+               : near.length ? near.reduce((b, c) => this._along(c, px, py, h) > this._along(b, px, py, h) ? c : b, near[0])
+               : null;
+    }
+    this._boxFrontCop = boxFront;
 
     for (const cop of cops) {
       let target, speedCap = Infinity, boost = 0;
@@ -137,25 +153,36 @@ export class PursuitDirector {
           speedCap = Math.max(this.blockMinSpeed, speed * this.blockSpeedFactor);
         }
       } else if (boxing && this._dist(cop, px, py) <= this.boxEngageRange) {
-        // BOX v2: crash-and-hold. Target the PLAYER directly (no offset swerve). A cop
-        // ahead brake-checks to stop you; a cop behind closes to contact then matches
-        // your pace so it can't shove you around. Front/rear is just position → speed,
-        // so a flip doesn't move the target (no swerve).
+        // BOX v2: one cop takes the FRONT (running around if needed) to stop you; the rest
+        // crash into you from behind and PRESS, pinning you against the front blocker.
         const along = this._along(cop, px, py, h);
-        if (along > 0) {
-          // Ahead → block from the front WITHOUT u-turning: hold a point just ahead of
-          // the player and brake-check, so it stays facing forward and you run into its
-          // back. (A front cop targeting the player behind it would swing 180°.)
+        if (cop === boxFront && along < this.boxFrontAhead) {
+          // Designated front cop, not in front yet → SPRINT around to a point ahead. Swings
+          // wide (like the overtake) so it goes around, not through you. This is the box's
+          // "get one in front" — the active move that was missing (cops felt hesitant).
+          cop.role = CopState.OVERTAKE;
+          const perp = h + Math.PI / 2;
+          const lat  = (cop.sprite.x - px) * Math.cos(perp) + (cop.sprite.y - py) * Math.sin(perp);
+          const side = lat >= 0 ? 1 : -1;
+          target = this._clearTarget(px, py, {
+            x: px + Math.cos(h) * this.overtakeAhead + Math.cos(perp) * this.overtakeSide * side,
+            y: py + Math.sin(h) * this.overtakeAhead + Math.sin(perp) * this.overtakeSide * side,
+          });
+          boost = this.overtakeBoost;
+        } else if (cop === boxFront) {
+          // Front cop, in front → brake-check and HOLD the front (without u-turning), the
+          // wall the rear cops pin you against.
           cop.role = CopState.BOX_FRONT;
           target = this._clearTarget(px, py, { x: px + Math.cos(h) * this.blockAhead, y: py + Math.sin(h) * this.blockAhead });
           speedCap = Math.max(this.blockMinSpeed, speed * this.blockSpeedFactor);
         } else {
-          // Behind → crash straight into the player (no offset), then ease to match pace
-          // so it holds contact instead of shoving you around.
+          // Rear/side presser → crash straight into the player and press a touch ABOVE your
+          // pace so it pins you forward into the blocker (not just trails). Bounded by
+          // boxPress, so it can't shove you across the map like the old rear-ram.
           cop.role = CopState.BOX_REAR;
           target = { x: px, y: py };
           const d = this._dist(cop, px, py);
-          speedCap = speed + this.boxCloseMargin * Phaser.Math.Clamp((d - this.boxContactGap) / 120, 0, 1);
+          speedCap = speed + this.boxPress + this.boxCloseMargin * Phaser.Math.Clamp((d - this.boxContactGap) / 120, 0, 1);
         }
       } else {
         cop.role = CopState.PURSUE;
