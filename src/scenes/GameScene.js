@@ -773,20 +773,19 @@ export class GameScene extends Phaser.Scene {
     if (expired) this.wrecks = this.wrecks.filter(w => w._wreckT <= this.wreckDespawn);
   }
 
-  // A small health bar floating above each DAMAGED cop (undamaged cops show none, so it
-  // stays clean and you only see it once a cop's taking hits). Green → yellow → red.
+  // A small health bar floating above every active cop, so you can watch it deplete as
+  // they take hits. Green → yellow → red; the empty portion shows as a dark track.
   _drawHealthBars() {
     const g = this.healthBars;
     g.clear();
-    const w = 28, h = 4;
+    const w = 30, h = 5;
     for (const cop of this.cops) {
       const max = cop.maxHealth || 100;
-      if (cop.health >= max) continue;                 // full health → no bar
       const frac = Phaser.Math.Clamp(cop.health / max, 0, 1);
-      const x = cop.sprite.x - w / 2, y = cop.sprite.y - 42;
-      g.fillStyle(0x000000, 0.6); g.fillRect(x - 1, y - 1, w + 2, h + 2);
+      const x = cop.sprite.x - w / 2, y = cop.sprite.y - 44;
+      g.fillStyle(0x000000, 0.7); g.fillRect(x - 1, y - 1, w + 2, h + 2);   // background / empty track
       const col = frac > 0.5 ? 0x39ff14 : frac > 0.25 ? 0xffd23f : 0xff3b3b;
-      g.fillStyle(col, 0.95); g.fillRect(x, y, w * frac, h);
+      g.fillStyle(col, 1); g.fillRect(x, y, w * frac, h);
     }
   }
 
