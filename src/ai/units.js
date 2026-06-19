@@ -83,7 +83,7 @@ export const UNITS = {
     ai:         {},                  // SAME decision tunables as patrol (identical brain)
     placement:  'ahead-of-travel',
     role:       'intercept',
-    health:     160,                 // survives most rams; a full mutual head-on can drop it
+    health:     180,                 // survives most rams; a full mutual head-on can drop it
     mass:       1.0,
     priority:   2,                   // threat unit — retired last
     ability:    'intercept',
