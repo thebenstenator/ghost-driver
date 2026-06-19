@@ -782,7 +782,7 @@ export class GameScene extends Phaser.Scene {
     for (const cop of this.cops) {
       const max = cop.maxHealth || 100;
       const frac = Phaser.Math.Clamp(cop.health / max, 0, 1);
-      const x = cop.sprite.x - w / 2, y = cop.sprite.y - 44;
+      const x = cop.sprite.x - w / 2, y = cop.sprite.y - 40;
       g.fillStyle(0x000000, 0.7); g.fillRect(x - 1, y - 1, w + 2, h + 2);   // background / empty track
       const col = frac > 0.5 ? 0x39ff14 : frac > 0.25 ? 0xffd23f : 0xff3b3b;
       g.fillStyle(col, 1); g.fillRect(x, y, w * frac, h);
@@ -1398,7 +1398,7 @@ this.boxTriggerSpeed = ${d.boxTriggerSpeed}; this.boxReleaseSpeed = ${d.boxRelea
         // Only show a convoy tag when it's not the ordinary "I can see you" case.
         const conv = (state === PursuitState.ACTIVE && cop.pursuitMode && cop.pursuitMode !== 'DIRECT')
           ? cop.pursuitMode + ' ' : '';
-        cop.modeLabel.setPosition(cop.sprite.x, cop.sprite.y - 34);
+        cop.modeLabel.setPosition(cop.sprite.x, cop.sprite.y - 50); // above the health bar
         cop.modeLabel.setText(`${role}${conv}${cop.debug.mode} ${Math.round(cop.debug.speed)}`);
         cop.modeLabel.setColor(cop.hasLOS ? '#39ff14' : '#ff8c8c');
       }
