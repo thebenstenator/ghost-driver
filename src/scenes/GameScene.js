@@ -736,7 +736,7 @@ export class GameScene extends Phaser.Scene {
     cop.sprite.body.setVelocity(0, 0);
     cop.sprite.body.setDrag(400, 400);          // bleed off any shove so it settles
     cop.sprite.body.mass = this.wreckMass;
-    cop.sprite.setTintFill(0x44454f).setAlpha(0.6);   // reads as a dead wreck
+    cop.sprite.setTintFill(0xff2a2a).setAlpha(0.7);   // red = unmistakably disabled
     this.tweens.add({ targets: cop.sprite, angle: cop.sprite.angle + (Math.random() < 0.5 ? -120 : 120),
                       duration: 500, ease: 'Cubic.easeOut' });
     if (cop.modeLabel) cop.modeLabel.setText('WRECK').setColor('#888');
