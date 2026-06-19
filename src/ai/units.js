@@ -88,6 +88,34 @@ export const UNITS = {
     priority:   2,                   // threat unit — retired last
     ability:    'intercept',
   },
+
+  // Heavy / Enforcer (L4+). The rhino: a big, tanky, less-maneuverable tank that enters
+  // ahead for a head-on you can't easily win, soaks rams (high health + mass → less ram
+  // damage AND it shoves you / barely budges), and is meant to set up mobile solo
+  // roadblocks. SAME brain as everyone (ai: {}) — it differs only in its bulk (size/mass/
+  // health), its lumbering handling, and the goal it's handed. SLICE 1 = the tank + the
+  // head-on (reuses placement/respawn-ahead); SLICE 2 adds the park-across-the-road block.
+  heavy: {
+    name: 'Heavy',
+    appearance: { tint: 0x3d7fd6, displayWidth: 48, displayHeight: 78, bodySize: 40 }, // steel blue, bigger
+    handling: {
+      maxSpeed:       430,   // slower than patrol — it can't chase you down, it BLOCKS you
+      acceleration:   300,   // sluggish pickup (lots of metal to move)
+      gripLow:        0.55,
+      gripHigh:       0.18,
+      gripSpeedRef:   480,
+      turnSpeedLow:   1.8,   // less maneuverable than patrol (2.5 / 5) — corners wide
+      turnSpeed:      3.2,
+      minSteerFactor: 0.7,
+    },
+    ai:         {},                  // SAME decision tunables as patrol (identical brain)
+    placement:  'ahead-of-travel',
+    role:       'block',
+    health:     220,                 // tanky — multiple committed rams to put down
+    mass:       1.6,                 // soaks ram damage (/mass) AND physically shoves the player
+    priority:   3,                   // top threat — retired last
+    ability:    'block',
+  },
 };
 
 // Resolve a unit type to a def, falling back to patrol for an unknown key. A level

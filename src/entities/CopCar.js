@@ -40,6 +40,9 @@ export class CopCar extends Vehicle {
     this.health   = def.health;
     this.maxHealth = def.health;
     this.mass     = def.mass;
+    // Mass drives BOTH the ram-damage math (heavier soaks more) AND the physics: a heavy
+    // body shoves the player and barely budges in a collision.
+    this.sprite.body.mass = def.mass;
 
     this.ai = new CopAI(navGrid, rects, def.ai);
     this.aiTarget = { x, y }; // current steering target, for debug draw
