@@ -1441,6 +1441,17 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
     respawn.add(this.copTuning, 'respawnDist', 500, 3000, 50).name('Lost distance (px)').onChange(apply);
     respawn.add(this.copTuning, 'respawnTime',   1,   12, 0.5).name('Lost time (s)').onChange(apply);
 
+    // Bust meter — bound straight to the live BustMeter (fill scales with crowding cops).
+    const bustF = gui.addFolder('Bust meter');
+    bustF.add(this.bust, 'pinDistance',   20, 200, 5).name('Pin distance (px)');
+    bustF.add(this.bust, 'pinSpeed',       0, 300, 10).name('Pinnable below (px/s)');
+    bustF.add(this.bust, 'surroundRange', 40, 300, 10).name('Crowd count range (px)');
+    bustF.add(this.bust, 'fillBase',       0,  60, 1).name('Fill: 1 cop /s');
+    bustF.add(this.bust, 'fillPerCop',     0,  40, 1).name('Fill: + per extra cop /s');
+    bustF.add(this.bust, 'fillMax',       10, 120, 5).name('Fill: max /s');
+    bustF.add(this.bust, 'drainRate',      0, 200, 5).name('Drain /s');
+    bustF.close();
+
     gui.add({ copyStats: () => {
       const t = this.copTuning;
       console.log(`// --- Cop handling (CopCar stats) ---
@@ -1462,7 +1473,7 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
 
     // Persist across refresh. Key bumped to v16: huntLead removed (blind cops now go
     // straight to last-known, no forward projection).
-    this._persistPanel(gui, 'gd_copTuning16');
+    this._persistPanel(gui, 'gd_copTuning17'); // bumped: added Bust meter folder
 
     gui.domElement.style.position = 'fixed';
     gui.domElement.style.top  = '8px';
@@ -1701,7 +1712,15 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
                    state === PursuitState.ACTIVE &&
                    nearestCopDist < this.bust.pinDistance &&
                    playerSpeed < this.bust.pinSpeed;
-    this.bust.update(pinned, delta / 1000);
+    // How many cops are crowding you — scales the fill rate (1 cop = slow burn, a swarm
+    // busts fast). Counted within surroundRange; only matters while pinned.
+    let pinCount = 0;
+    if (pinned) {
+      for (const cop of this.cops) {
+        if (Phaser.Math.Distance.Between(cop.sprite.x, cop.sprite.y, px, py) < this.bust.surroundRange) pinCount++;
+      }
+    }
+    this.bust.update(pinned, pinCount, delta / 1000);
     if (this.bust.isBusted) {
       this.busted = true;
       this.bustedText.setAlpha(1);
