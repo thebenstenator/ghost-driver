@@ -6,7 +6,7 @@ import { NavGrid } from '../ai/NavGrid.js';
 import { segmentClear } from '../ai/lineOfSight.js';
 import { CopAI } from '../ai/CopAI.js';
 import { UNITS } from '../ai/units.js';
-import { PursuitDirector } from '../ai/PursuitDirector.js';
+import { PursuitDirector, CopState } from '../ai/PursuitDirector.js';
 import { Pursuit, PursuitState } from '../systems/Pursuit.js';
 import { PursuitLevel } from '../systems/PursuitLevel.js';
 import { BustMeter } from '../systems/BustMeter.js';
@@ -75,6 +75,7 @@ export class GameScene extends Phaser.Scene {
     this.navGrid    = new NavGrid();
     this.director   = new PursuitDirector(this.navGrid, this.losRects);
     this.cops       = [];
+    this.wrecks     = [];              // disabled cops, kept as inert obstacles until they despawn
     this.sightRange = 900;             // px — cop spotting range in clear line
     this.proximityRange = 70;          // px — sensed THROUGH walls only at point-blank (can't
                                        // lose someone on your bumper). Kept small on purpose:
@@ -120,6 +121,21 @@ export class GameScene extends Phaser.Scene {
                                        // unit (interceptor) spawns, to set up a head-on
     this.interceptEntrySpeed = 260;    // px/s an ahead-spawned interceptor enters AT (rolling toward
                                        // you for the head-on, not parked) — moderate, not full speed
+
+    // --- Cop health / ramming (scripted from velocities, NOT collider geometry) ---
+    // Damage = relative impact speed, so a full head-on wrecks a patrol, a rear-end at
+    // matched speed barely scratches it, a T-bone is between. Cops also hurt themselves
+    // crashing into walls/each other, but ONLY mid-aggressive-action (the cost of choosing
+    // to box/block/overtake) — ordinary driving into a wall is free.
+    this.ramThreshold   = 150;  // relative impact speed (px/s) below which a hit does NOTHING
+    this.ramScale       = 0.22; // cop damage per px/s of relative impact above the threshold
+    this.ramContactDist = 40;   // px centre-distance counted as a player↔cop hit
+    this.ramDmgCooldown = 0.4;  // s between damage ticks on one cop (so a single ram = one tick)
+    this.selfImpactDrop = 45;   // px/s sudden speed loss in a frame that reads as a CRASH (> braking)
+    this.selfScale      = 0.5;  // cop self-damage per px/s of crash, while mid-aggressive-action
+    this.wreckDespawn   = 30;   // s a disabled wreck sits as an obstacle before it's removed
+    this.wreckMass      = 0.3;  // disabled cop body mass — light, so you shove it aside
+    this.disableReinforceMult = 1.3; // replacement after a disable takes this × the normal reinforce
     this.searchSpeed = 250;            // cop speed cap while searching (clean corners)
     this.searchDepth = 2;              // STARTING search radius (blocks out from last-known)
     this.searchMaxDepth = 10;          // search grows out to this many blocks as ground is checked
@@ -194,6 +210,7 @@ export class GameScene extends Phaser.Scene {
         this._setupTestbedPanel();              // spawn/clear chosen unit types
         this._setupUnitTunePanel(this._testbed.unitType); // tune the selected type's def
         this._setupManeuverPanel();             // tune director maneuver/box behavior
+        this._setupHealthPanel();               // tune cop health / ramming / disabling
       } else {
         this._setupCopTunePanel();
         if (this.pursuitLevel) this._setupPursuitPanel();
@@ -224,6 +241,7 @@ export class GameScene extends Phaser.Scene {
       if (this.testbedGui) this.testbedGui.destroy();
       if (this.unitGui)    this.unitGui.destroy();
       if (this.maneuverGui) this.maneuverGui.destroy();
+      if (this.healthGui)  this.healthGui.destroy();
     });
 
     // Start paused on first load; launching from the menu (autostart) plays now.
@@ -649,14 +667,106 @@ export class GameScene extends Phaser.Scene {
     return true;
   }
 
-  // Remove every cop (sprites, labels, stale director slot refs).
+  // Remove every cop AND wreck (sprites, labels, tweens, stale director refs).
   _clearCops() {
-    for (const cop of this.cops) {
+    for (const cop of [...this.cops, ...this.wrecks]) {
+      this.tweens.killTweensOf(cop.sprite);
       if (cop.modeLabel) cop.modeLabel.destroy();
       cop.sprite.destroy();
     }
     this.cops = [];
+    this.wrecks = [];
     this.director._maneuverHolder = null;
+  }
+
+  // A cop is in an aggressive ACTION (boxing / blocking / overtaking) — the only states in
+  // which crashing into a wall or another cop costs it health. Plain pursuit driving is free.
+  _isAggressiveRole(cop) {
+    const r = cop.role;
+    return r === CopState.BOX_FRONT || r === CopState.BOX_REAR ||
+           r === CopState.BLOCK     || r === CopState.OVERTAKE;
+  }
+
+  // Cop damage + disabling, scripted from POSITIONS/VELOCITIES (no collider geometry — see
+  // the head-on/rear-end/T-bone note on the tunables). Runs in pursuit AND the testbed so
+  // disabling can be developed by ramming. Reads velocities at the TOP of the frame (pre-
+  // physics), so a hit's onset uses the real approach speed.
+  _updateCopDamage(dt) {
+    const px = this.car.sprite.x, py = this.car.sprite.y;
+    // PRE-collision velocities cached at the end of last frame (Arcade resolves collisions
+    // before scene.update, so the live velocities here are already post-impact/reduced).
+    const pvx = this._carLastVx ?? this.car.vx, pvy = this._carLastVy ?? this.car.vy;
+    let toDisable = null;
+    for (const cop of this.cops) {
+      cop._dmgCd = Math.max(0, (cop._dmgCd || 0) - dt);
+      const spd  = cop.getSpeed();
+      const drop = (cop._prevSpeed ?? spd) - spd;   // sudden loss of ACTUAL speed = a crash this frame
+      cop._prevSpeed = spd;
+      const near = Phaser.Math.Distance.Between(cop.sprite.x, cop.sprite.y, px, py) < this.ramContactDist;
+
+      if (cop._dmgCd <= 0) {
+        let dmg = 0;
+        if (near && !cop._wasNear) {
+          // Player↔cop hit onset: relative impact speed (head-on huge, rear-end tiny).
+          const rel = Math.hypot(pvx - (cop._lastVx ?? cop.vx), pvy - (cop._lastVy ?? cop.vy));
+          if (rel > this.ramThreshold) dmg = (rel - this.ramThreshold) * this.ramScale / (cop.mass || 1);
+        } else if (!near && drop > this.selfImpactDrop && this._isAggressiveRole(cop)) {
+          // Mid-aggression crash into a wall / another cop.
+          dmg = (drop - this.selfImpactDrop) * this.selfScale / (cop.mass || 1);
+        }
+        if (dmg > 0) {
+          cop.health -= dmg;
+          cop._dmgCd = this.ramDmgCooldown;
+          if (cop.health <= 0) (toDisable ||= []).push(cop);
+        }
+      }
+      cop._wasNear = near;
+    }
+    if (toDisable) for (const cop of toDisable) this._disableCop(cop);
+  }
+
+  // Disable a cop: spin it out, drop it from the active pack, leave it as a low-mass wreck
+  // obstacle that despawns after a timer. In pursuit it also spikes heat and slows the
+  // replacement (onCopDisabled + the disableReinforceMult delay).
+  _disableCop(cop) {
+    if (cop.disabled) return;
+    cop.disabled = true;
+    cop.health = 0;
+    cop.vx = 0; cop.vy = 0;
+    cop.sprite.body.setVelocity(0, 0);
+    cop.sprite.body.setDrag(400, 400);          // bleed off any shove so it settles
+    cop.sprite.body.mass = this.wreckMass;
+    cop.sprite.setTintFill(0x44454f).setAlpha(0.6);   // reads as a dead wreck
+    this.tweens.add({ targets: cop.sprite, angle: cop.sprite.angle + (Math.random() < 0.5 ? -120 : 120),
+                      duration: 500, ease: 'Cubic.easeOut' });
+    if (cop.modeLabel) cop.modeLabel.setText('WRECK').setColor('#888');
+
+    this.cops = this.cops.filter(c => c !== cop);
+    cop._wreckT = 0;
+    this.wrecks.push(cop);
+    if (this.director._maneuverHolder === cop) this.director._maneuverHolder = null;
+
+    if (this.pursuitLevel) {
+      this.pursuitLevel.onCopDisabled();   // heat spike
+      this._reinforceTimer = this.pursuitLevel.cfg().reinforce * this.disableReinforceMult;
+    }
+    if (this.copLog) console.log(`[t=${(this.time.now / 1000).toFixed(2)}] DISABLED ${cop.unitType}`);
+  }
+
+  // Age out wrecks: once past their despawn timer, remove them.
+  _updateWrecks(dt) {
+    if (!this.wrecks.length) return;
+    let expired = false;
+    for (const w of this.wrecks) {
+      w._wreckT += dt;
+      if (w._wreckT > this.wreckDespawn) {
+        this.tweens.killTweensOf(w.sprite);
+        if (w.modeLabel) w.modeLabel.destroy();
+        w.sprite.destroy();
+        expired = true;
+      }
+    }
+    if (expired) this.wrecks = this.wrecks.filter(w => w._wreckT <= this.wreckDespawn);
   }
 
   // Spawn-control panel: unit type + count + Spawn / Clear. Changing the type rebuilds
@@ -736,6 +846,47 @@ export class GameScene extends Phaser.Scene {
     gui.domElement.style.position = 'fixed';
     gui.domElement.style.top  = '8px';
     gui.domElement.style.left = '630px';
+    gui.domElement.style.zIndex = '9999';
+  }
+
+  // Cop health / ramming panel: per-type health+mass (bound to the defs, so new spawns get
+  // them — clear + respawn to apply), the player ram-damage model, the aggressive-crash
+  // self-damage, and the disable/wreck knobs. Bound straight to the live scene/defs. (Scene
+  // ram fields are code defaults in pursuit until baked, mirroring the maneuver panel.)
+  _setupHealthPanel() {
+    const gui = new GUI({ title: 'Cop Health / Ramming', width: 290 });
+    this.healthGui = gui;
+    gui.close();
+
+    const types = gui.addFolder('Per-type health / mass (respawn to apply)');
+    for (const key of Object.keys(UNITS)) {
+      const def = UNITS[key];
+      const f = types.addFolder(def.name);
+      f.add(def, 'health', 20, 600, 10).name('Health');
+      f.add(def, 'mass',  0.2, 5,  0.1).name('Mass');
+      f.close();
+    }
+
+    const ram = gui.addFolder('Player ram damage');
+    ram.add(this, 'ramThreshold',   0, 600, 10).name('No damage below (px/s)');
+    ram.add(this, 'ramScale',       0, 1, 0.01).name('Damage per px/s');
+    ram.add(this, 'ramContactDist', 20, 100, 2).name('Contact distance (px)');
+    ram.add(this, 'ramDmgCooldown', 0.1, 2, 0.1).name('Hit cooldown (s)');
+
+    const self = gui.addFolder('Cop self-damage (aggro crashes)');
+    self.add(this, 'selfImpactDrop', 10, 200, 5).name('Counts as crash above (px/s)');
+    self.add(this, 'selfScale',       0, 2, 0.05).name('Damage per px/s');
+
+    const dis = gui.addFolder('Disable / wreck');
+    dis.add(this, 'wreckDespawn',  5, 120, 5).name('Wreck despawn (s)');
+    dis.add(this, 'wreckMass',  0.05, 2, 0.05).name('Wreck mass (shove-ability)');
+    dis.add(this, 'disableReinforceMult', 1, 3, 0.1).name('Replace delay ×');
+
+    this._persistPanel(gui, 'gd_healthTune_v1');
+
+    gui.domElement.style.position = 'fixed';
+    gui.domElement.style.top  = '8px';
+    gui.domElement.style.left = '950px';
     gui.domElement.style.zIndex = '9999';
   }
 
@@ -1544,6 +1695,11 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
     // are handled by their keydown listeners, so just hold here.
     if (this.busted || this.paused) return;
 
+    // Cop ram-damage / disabling, and ageing out wrecks. Run FIRST, before anyone's
+    // velocity is touched this frame, so a hit's onset reads the true approach speed.
+    this._updateCopDamage(delta / 1000);
+    this._updateWrecks(delta / 1000);
+
     // While spectating a cop (camera not on the player), freeze the car so the
     // observer can't accidentally drive or re-trigger anything.
     const spectating = this.camFocusIndex !== 0;
@@ -1559,6 +1715,7 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
         };
 
     this.car.update(delta, controls);
+    this._carLastVx = this.car.vx; this._carLastVy = this.car.vy; // pre-collision cache (see _updateCopDamage)
 
     // --- Perception: a cop is AWARE of the player if it has a clear sight line
     // within range, OR the player is within close proximity (omnidirectional —
@@ -1679,6 +1836,7 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
       cop.maxSpeed += boost;
       cop.ai.maxApproachSpeed = cop.ai.baseApproach + boost;
       cop.update(delta, target);
+      cop._lastVx = cop.vx; cop._lastVy = cop.vy; // pre-collision cache (see _updateCopDamage)
     }
 
     // Tier-2 rejoin: a cop that's been far + not chasing + off-screen for a while is
