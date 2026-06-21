@@ -95,7 +95,7 @@ export class GameScene extends Phaser.Scene {
     // not a brick wall. One group + two colliders: the player pushes them, and the walls
     // stop a shoved car flying off-road. (Cops pass through — the block is for the player.)
     this.roadblockGroup = this.physics.add.group();
-    this.physics.add.collider(this.car.sprite, this.roadblockGroup);
+    this.physics.add.collider(this.car.sprite, this.roadblockGroup, (_p, body) => this._onRoadblockHit(body));
     this.physics.add.collider(this.roadblockGroup, this.walls);
     this.sightRange = 900; // px — cop spotting range in clear line
     this.proximityRange = 70; // px — sensed THROUGH walls only at point-blank (can't
@@ -166,6 +166,12 @@ export class GameScene extends Phaser.Scene {
     this.rbCarMass     = 1.0;  // a normal block car's mass (you shove it, losing speed)
     this.rbHeavyMass   = 2.4;  // a heavy's mass — much harder to push through
     this.rbCarDrag     = 600;  // px/s² drag so a shoved car settles instead of sliding forever
+    this.rbLifetime    = 30;   // s a placed block lasts before it despawns
+    // Scripted spin (Arcade has no angular physics): an OFF-CENTRE hit torques the car so it
+    // rotates out of the way — hardest/best at the ends (the MW rear-quarter).
+    this.rbSpinFactor  = 0.0004; // hit offset × your speed → spin impulse (÷ car mass)
+    this.rbSpinDamp    = 0.93;   // per-frame spin decay (so a spun car settles)
+    this.rbSpinMax     = 9;      // rad/s cap on a car's spin
     this.searchSpeed = 250; // cop speed cap while searching (clean corners)
     this.searchDepth = 2; // STARTING search radius (blocks out from last-known)
     this.searchMaxDepth = 10; // search grows out to this many blocks as ground is checked
@@ -1071,10 +1077,13 @@ export class GameScene extends Phaser.Scene {
       body.body.mass = s.mass;
       body.setCollideWorldBounds(true);
       this.worldLayer.add(body);
+      const baseRot = perp + Math.PI / 2;          // broadside across the road
       const img = this.add.image(ix, iy, s.tex)
-        .setDisplaySize(s.visW, s.visL).setDepth(9).setRotation(perp + Math.PI / 2); // broadside across the road
+        .setDisplaySize(s.visW, s.visL).setDepth(9).setRotation(baseRot);
       this.worldLayer.add(img);
-      cars.push({ body, img });
+      const car = { body, img, baseRot, mass: s.mass, spin: 0, angVel: 0, _spinCd: 0 };
+      body.rbCar = car;                            // so the collision callback can find it
+      cars.push(car);
     }
     const rb = { x, y, heading: snapped, cars };
     this.roadblocks.push(rb);
@@ -1099,13 +1108,34 @@ export class GameScene extends Phaser.Scene {
     for (const rb of [...this.roadblocks]) this._removeRoadblock(rb);
   }
 
-  // Keep each car sprite on its (shoveable) body, and despawn a block once the player has
-  // driven PAST it or strayed far.
-  _updateRoadblocks(px, py) {
+  // An OFF-CENTRE ram torques a block car so it spins out of the way (Arcade has no angular
+  // physics, so we script it). The cross product of (hit offset) × (your push) gives both
+  // the direction and how off-centre the hit was — a centre hit barely spins, an END hit
+  // (the rear-quarter) spins hard. Throttled so sustained contact doesn't wind it up.
+  _onRoadblockHit(body) {
+    const car = body.rbCar;
+    if (!car || car._spinCd > 0) return;
+    const pvx = this._carLastVx ?? this.car.vx, pvy = this._carLastVy ?? this.car.vy;
+    if (Math.hypot(pvx, pvy) < 60) return;          // gentle nudge → no spin
+    const ox = this.car.sprite.x - body.x, oy = this.car.sprite.y - body.y;
+    const cross = ox * pvy - oy * pvx;              // off-centre × push → torque
+    car.angVel += (cross * this.rbSpinFactor) / car.mass;
+    car._spinCd = 0.2;
+  }
+
+  // Keep each car sprite on its (shoveable) body, advance its scripted spin, and despawn a
+  // block after its lifetime (or if the player strays far).
+  _updateRoadblocks(px, py, dt) {
     for (const rb of [...this.roadblocks]) {
-      for (const c of rb.cars) { c.img.x = c.body.x; c.img.y = c.body.y; }
-      const passed = (px - rb.x) * Math.cos(rb.heading) + (py - rb.y) * Math.sin(rb.heading) > 60;
-      if (passed || Phaser.Math.Distance.Between(px, py, rb.x, rb.y) > 2600) this._removeRoadblock(rb);
+      rb._t = (rb._t || 0) + dt;
+      for (const c of rb.cars) {
+        c._spinCd = Math.max(0, c._spinCd - dt);
+        c.angVel = Phaser.Math.Clamp(c.angVel * Math.pow(this.rbSpinDamp, dt * 60), -this.rbSpinMax, this.rbSpinMax);
+        c.spin += c.angVel * dt;
+        c.img.setPosition(c.body.x, c.body.y).setRotation(c.baseRot + c.spin);
+      }
+      if (rb._t > this.rbLifetime || Phaser.Math.Distance.Between(px, py, rb.x, rb.y) > 3200)
+        this._removeRoadblock(rb);
     }
   }
 
@@ -1161,6 +1191,8 @@ export class GameScene extends Phaser.Scene {
     rbf.add(this, "rbCarMass", 0.4, 4, 0.1).name("Car mass (shove cost)");
     rbf.add(this, "rbHeavyMass", 1, 6, 0.1).name("Heavy mass");
     rbf.add(this, "rbCarDrag", 100, 1500, 50).name("Shoved-car drag");
+    rbf.add(this, "rbLifetime", 5, 90, 5).name("Lifetime (s)");
+    rbf.add(this, "rbSpinFactor", 0, 0.002, 0.0001).name("Spin on off-centre hit");
     rbf.close();
 
     // Respawn-ahead retry (interceptor head-on loop). Binds straight to the live scene.
@@ -2608,7 +2640,7 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
     // velocity is touched this frame, so a hit's onset reads the true approach speed.
     this._updateCopDamage(delta / 1000);
     this._updateWrecks(delta / 1000);
-    this._updateRoadblocks(this.car.sprite.x, this.car.sprite.y);
+    this._updateRoadblocks(this.car.sprite.x, this.car.sprite.y, delta / 1000);
 
     // While spectating a cop (camera not on the player), freeze the car so the
     // observer can't accidentally drive or re-trigger anything.
