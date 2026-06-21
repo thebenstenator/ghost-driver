@@ -1112,11 +1112,18 @@ export class GameScene extends Phaser.Scene {
     box.add(d, "boxPress", 0, 200, 5).name("Rear press above pace (px/s)");
     box.add(d, "boxFrontAhead", 0, 150, 5).name("Front-runner ahead-by (px)");
 
+    const rb = gui.addFolder("Heavy roadblock");
+    rb.add(d, "blockSetupDist", 80, 600, 10).name("Latch point ahead (px)");
+    rb.add(d, "blockParkDist", 30, 200, 5).name("Park within (px)");
+    rb.add(d, "blockAheadMin", 0, 200, 5).name("Start when ahead-by (px)");
+    rb.add(d, "blockMaxTime", 1, 15, 0.5).name("Hold a block (s)");
+    rb.add(d, "blockCooldown", 0, 12, 0.5).name("Cooldown between (s)");
+
     gui
       .add({ copy: () => this._copyManeuverStats() }, "copy")
       .name("Copy Maneuvers → Console");
 
-    this._persistPanel(gui, "gd_maneuverTune_v3"); // bumped: added box front-runner (boxPress/boxFrontAhead)
+    this._persistPanel(gui, "gd_maneuverTune_v4"); // bumped: added heavy roadblock knobs
 
     gui.domElement.style.position = "fixed";
     gui.domElement.style.top = "8px";
@@ -2627,6 +2634,9 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
 
     for (const cop of this.cops) {
       let target = null;
+      // Roadblock park state only applies while the chase is live; drop it otherwise so a
+      // heavy that loses the chase stops parking and searches/returns normally.
+      if (state !== PursuitState.ACTIVE) { cop.parkAngle = null; cop._blockPoint = null; }
       // ACTIVE: a cop that can SEE the player uses the Director's live, coordinated
       // target; a cop WITHOUT its own sight line heads for a drivable last-known goal
       // (never the live position, which may be inside a building) and lets CopAI route

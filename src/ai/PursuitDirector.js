@@ -14,6 +14,8 @@ export const CopState = {
   // ease in front to brake-check the player. Transient + single-holder, like a box.
   OVERTAKE:  'OVERTAKE',
   BLOCK:     'BLOCK',
+  // Heavy parked BROADSIDE across the lane (mobile solo roadblock).
+  ROADBLOCK: 'ROADBLK',
 };
 
 // PursuitDirector — the coordination brain for an active chase.
@@ -85,6 +87,17 @@ export class PursuitDirector {
     this.draftMargin       = 70;   // px/s over the player's speed it may use to close when farther back
     this._maneuverHolder   = null; // the single cop currently running a maneuver
 
+    // --- Heavy mobile solo roadblock (ability 'block'; see the heavy branch in update) ---
+    // When the heavy is ahead it LATCHES a fixed road point ahead of you, drives there, and
+    // parks BROADSIDE across the lane (a park override stops + turns it). Committed to that
+    // spot until you pass it / it times out, then it pursues and respawns ahead to retry.
+    this.blockSetupDist  = 230;  // px ahead of you the heavy latches its block point
+    this.blockParkDist   = 75;   // px from the block point at which it parks broadside
+    this.blockAheadMin    = 40;  // along-px ahead of you it must be to START a roadblock
+    this.blockMaxTime    = 6.0;  // s a parked block holds before giving up (you never came)
+    this.blockGiveUpDist = 1100; // px from the block point beyond which it gives up
+    this.blockCooldown   = 3.0;  // s after a block before it sets up another
+
     // --- Convoy relay (how a blind cop reaches the player) ---
     this.convoyEnabled   = false; // off by default — playtested better without the relay
                                   // churn; toggle on via Cop Tuning → Convoy
@@ -130,6 +143,7 @@ export class PursuitDirector {
 
     for (const cop of cops) {
       let target, speedCap = Infinity, boost = 0;
+      cop.parkAngle = null;   // cleared unless the roadblock branch parks this cop
 
       if (cop === holder && cop._maneuver) {
         // Committed maneuver wins over box/pursue. It only chooses WHERE (a drivable
@@ -183,6 +197,38 @@ export class PursuitDirector {
           target = { x: px, y: py };
           const d = this._dist(cop, px, py);
           speedCap = speed + this.boxPress + this.boxCloseMargin * Phaser.Math.Clamp((d - this.boxContactGap) / 120, 0, 1);
+        }
+      } else if (cop.unitDef && cop.unitDef.ability === 'block') {
+        // HEAVY mobile solo roadblock (draft). Latch a fixed road point ahead, drive there
+        // (shared brain), then PARK BROADSIDE (CopCar park override reads cop.parkAngle).
+        cop._blockCd = Math.max(0, (cop._blockCd || 0) - dt);
+        if (cop._blockPoint) {
+          cop._blockT += dt;
+          const bp = cop._blockPoint;
+          const passed = (px - bp.x) * Math.cos(cop._blockHeading) + (py - bp.y) * Math.sin(cop._blockHeading) > 30;
+          if (passed || cop._blockT > this.blockMaxTime ||
+              Math.hypot(px - bp.x, py - bp.y) > this.blockGiveUpDist) {
+            cop._blockPoint = null; cop._blockCd = this.blockCooldown;   // release
+          }
+        } else if (this._along(cop, px, py, h) > this.blockAheadMin && cop._blockCd <= 0) {
+          const tx = px + Math.cos(h) * this.blockSetupDist, ty = py + Math.sin(h) * this.blockSetupDist;
+          const n = this.nav.pos(this.nav.nearestNode(tx, ty));
+          cop._blockPoint = { x: n.x, y: n.y }; cop._blockHeading = h; cop._blockT = 0;
+        }
+
+        if (cop._blockPoint) {
+          target = cop._blockPoint;
+          if (Math.hypot(cop.sprite.x - target.x, cop.sprite.y - target.y) < this.blockParkDist) {
+            cop.role = CopState.ROADBLOCK;
+            // Broadside = perpendicular to the latched heading; pick the nearer of the two.
+            const perp = cop._blockHeading + Math.PI / 2, alt = perp + Math.PI;
+            const wrap = a => Math.atan2(Math.sin(a - cop.facing), Math.cos(a - cop.facing));
+            cop.parkAngle = Math.abs(wrap(perp)) <= Math.abs(wrap(alt)) ? perp : alt;
+          } else {
+            cop.role = CopState.BLOCK;        // still driving to the block point
+          }
+        } else {
+          cop.role = CopState.PURSUE; target = { x: px, y: py };  // behind → chase (then respawn ahead)
         }
       } else {
         cop.role = CopState.PURSUE;

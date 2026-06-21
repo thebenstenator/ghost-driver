@@ -64,6 +64,18 @@ export class CopCar extends Vehicle {
   // target: an object with .x / .y in world space (the player, or a last-known
   // position). A null target means "stand down" — coast to a stop.
   update(delta, target) {
+    // PARK override (mobile roadblock): brake to a stop and rotate to the broadside angle.
+    // Bypasses the AI entirely — it's a deliberate, drivable stop-and-turn, not driving.
+    if (this.parkAngle != null) {
+      const d = this.parkAngle - this.facing;
+      const err = Math.atan2(Math.sin(d), Math.cos(d));   // shortest signed angle
+      super.update(delta, {
+        up: false, down: false, left: err < -0.04, right: err > 0.04, handbrake: false, brake: true,
+      });
+      this.aiTarget = target || null;
+      this.debug = { mode: 'PARK', speed: this.getSpeed(), dist: 0, bend: 0, cornerLimit: 0, angleErr: err };
+      return;
+    }
     if (!target) {
       super.update(delta, { up: false, down: false, left: false, right: false, handbrake: false, brake: true });
       this.aiTarget = null;
