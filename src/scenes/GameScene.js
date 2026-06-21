@@ -157,9 +157,7 @@ export class GameScene extends Phaser.Scene {
     // threadable gap), with ONE axis-aligned static rectangle as the collider — exact-fit
     // and cheap precisely because it's static + on the axis-aligned grid (no capsule/Matter).
     this.roadblockDist = 750;  // px ahead a testbed roadblock is placed
-    this.rbBlockedMin  = 0.6;  // road fraction blocked at difficulty 1 (big gap)
-    this.rbBlockedMax  = 0.92; // …at difficulty 5 (small gap)
-    this.rbCarSpacing  = 26;   // px between formation cars (smaller = more cars, tighter seams)
+    this.rbMaxCars     = 3;    // most broadside cars in a block (≈ seals the 128px road)
     this.rbCarHealth   = 40;   // per-car health — a committed full-speed ram punches one out
     this.rbCarMass     = 1.0;  // per-car ram-damage divisor (higher = tankier block cars)
     this.searchSpeed = 250; // cop speed cap while searching (clean corners)
@@ -1019,36 +1017,41 @@ export class GameScene extends Phaser.Scene {
   }
 
   // --- Placed roadblocks --------------------------------------------------------------
-  // Drop a formation across the street at road point (x,y), facing the player's travel
-  // `heading`, blocking `difficulty` (1..5) of the lane. Each car is its OWN axis-aligned
-  // static collider + health, so you can ram a SEAM to break a car out and punch a hole
-  // (at the cost of your momentum). Heading is snapped to the grid so each car's AABB is an
-  // exact fit (no capsule/Matter — works because the pieces are static + axis-aligned).
+  // Drop a formation of cars parked BROADSIDE across the street (end-to-end), like a real
+  // roadblock. Each car is its OWN axis-aligned static collider + health — ram a SEAM (where
+  // two cars meet) hard enough and that car wrecks, punching a hole, at the cost of your
+  // momentum. Because the car's LENGTH spans the road, ~2–3 cars fill it; `difficulty`
+  // picks the car count (and tankiness): low = a gap to thread, high = sealed (must break).
+  // Heading snapped to the grid so each broadside AABB is an exact fit (no capsule/Matter).
   _spawnRoadblock(x, y, heading, difficulty = 2) {
     const snapped = Math.round(heading / (Math.PI / 2)) * (Math.PI / 2); // nearest N/S/E/W
     const perp = snapped + Math.PI / 2, cpx = Math.cos(perp), cpy = Math.sin(perp);
-    const frac = Phaser.Math.Linear(this.rbBlockedMin, this.rbBlockedMax, Phaser.Math.Clamp((difficulty - 1) / 4, 0, 1));
-    const span = ROAD * frac, gap = ROAD - span;
-    const gapSide = Math.random() < 0.5 ? 1 : -1;                 // which side the threadable gap sits
-    const bcx = x + cpx * (-gapSide * gap / 2), bcy = y + cpy * (-gapSide * gap / 2); // blocked-region centre
-    const horiz = Math.abs(cpx) > 0.5;                            // formation runs along x (travel vertical)?
-    const across = 22, along = 46;                                // a parked car's collider footprint
-    const bw = horiz ? across : along, bh = horiz ? along : across;
+    const horiz = Math.abs(cpx) > 0.5;                             // formation runs along x (travel vertical)?
+    const carLen = 50, carWid = 22;                               // a car laid broadside: LENGTH spans the road
+    const colLen = 48, colDepth = 20;                             // its collider footprint (length × depth)
+    const bw = horiz ? colLen : colDepth, bh = horiz ? colDepth : colLen;
+
+    const numCars = Math.max(1, Math.min(this.rbMaxCars, difficulty));
+    const healthMult = 1 + Math.max(0, difficulty - 3) * 0.5;     // diff 4–5 → tankier cars
+    const covered = numCars * carLen;
+    const gap = Math.max(0, ROAD - covered);                      // leftover lane = threadable gap (if any)
+    const spacing = covered <= ROAD ? carLen : ROAD / numCars;    // end-to-end, or overlap to seal
+    const blockCentre = (Math.random() < 0.5 ? 1 : -1) * (-gap / 2); // shift the block off the gap side
 
     const cars = [];
-    const n = Math.max(2, Math.round(span / this.rbCarSpacing));
-    for (let i = 0; i < n; i++) {
-      const off = (i - (n - 1) / 2) * (span / n);                 // evenly across the blocked span
-      const ix = bcx + cpx * off, iy = bcy + cpy * off;
+    for (let i = 0; i < numCars; i++) {
+      const off = blockCentre + (i - (numCars - 1) / 2) * spacing;
+      const ix = x + cpx * off, iy = y + cpy * off;
       const img = this.add.image(ix, iy, 'cop_patrol')
-        .setDisplaySize(22, 50).setDepth(9).setRotation(snapped - Math.PI / 2); // nose toward oncoming player
+        .setDisplaySize(carWid, carLen).setDepth(9).setRotation(perp + Math.PI / 2); // broadside across the road
       this.worldLayer.add(img);
       // Per-car static collider (PLAYER ONLY — cops don't pile onto the block).
       const col = this.physics.add.staticImage(ix, iy, '_px').setDisplaySize(bw, bh).refreshBody();
       col.setTintFill(0xff3b3b).setAlpha(this.devMode ? 0.18 : 0).setDepth(8);
       this.worldLayer.add(col);
       this.physics.add.collider(this.car.sprite, col);
-      cars.push({ img, col, health: this.rbCarHealth, maxHealth: this.rbCarHealth, mass: this.rbCarMass });
+      const hp = this.rbCarHealth * healthMult;
+      cars.push({ img, col, health: hp, maxHealth: hp, mass: this.rbCarMass });
     }
     const rb = { x, y, heading: snapped, cars };
     this.roadblocks.push(rb);
@@ -1154,9 +1157,7 @@ export class GameScene extends Phaser.Scene {
     rbf.add({ spawn: () => this._spawnRoadblockAhead(this._rbDifficulty) }, "spawn").name("▶ Spawn ahead");
     rbf.add({ clear: () => this._clearRoadblocks() }, "clear").name("✕ Clear roadblocks");
     rbf.add(this, "roadblockDist", 200, 2000, 25).name("Place ahead (px)");
-    rbf.add(this, "rbBlockedMin", 0.3, 1, 0.02).name("Blocked @ diff1");
-    rbf.add(this, "rbBlockedMax", 0.3, 1, 0.02).name("Blocked @ diff5");
-    rbf.add(this, "rbCarSpacing", 16, 60, 2).name("Car spacing (px)");
+    rbf.add(this, "rbMaxCars", 1, 5, 1).name("Max cars (seal level)");
     rbf.add(this, "rbCarHealth", 10, 200, 5).name("Car health (ram to break)");
     rbf.add(this, "rbCarMass", 0.5, 4, 0.1).name("Car mass (tankiness)");
     rbf.close();
