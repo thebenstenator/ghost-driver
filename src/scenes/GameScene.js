@@ -84,6 +84,13 @@ export class GameScene extends Phaser.Scene {
     this.worldLayer.add(this.car.sprite);
 
     this.physics.add.collider(this.car.sprite, this.walls);
+    // Player CAPSULE collider (custom): Arcade's body can't rotate, so the car is modelled
+    // as 3 circles along its spine and pushed out of walls by hand (rounded → slides along
+    // corners). The Arcade square above stays as a centre backstop. (Cars are the next step.)
+    this.playerCapHalfLen = 16; // circle offset from centre along the car's facing
+    this.playerCapR       = 20; // capsule radius (≈ half the car width)
+    this.capDebug = this.devMode ? this.add.graphics().setDepth(60) : null;
+    if (this.capDebug) this.worldLayer.add(this.capDebug);
 
     // --- Cops + pursuit ---
     this.navGrid = new NavGrid();
@@ -1136,6 +1143,49 @@ export class GameScene extends Phaser.Scene {
       }
       if (rb._t > this.rbLifetime || Phaser.Math.Distance.Between(px, py, rb.x, rb.y) > 3200)
         this._removeRoadblock(rb);
+    }
+  }
+
+  // Custom CAPSULE collision: the player car as 3 circles along its spine, pushed out of
+  // building walls by hand each frame (Arcade can't rotate a body). Rounded, so it slides
+  // along walls/corners instead of catching. Walls only for now — cars are the next step.
+  _resolvePlayerCapsule() {
+    const car = this.car, s = car.sprite, b = s.body;
+    const R = this.playerCapR, d = this.playerCapHalfLen;
+    const fx = Math.cos(car.facing), fy = Math.sin(car.facing);
+    const reach = d + R;
+    const offs = [[fx * d, fy * d], [0, 0], [-fx * d, -fy * d]]; // front, centre, rear
+    for (const wall of this.losRects) {
+      if (s.x + reach < wall.x || s.x - reach > wall.right ||
+          s.y + reach < wall.y || s.y - reach > wall.bottom) continue;       // cheap cull
+      for (const [ox, oy] of offs) {
+        const px = s.x + ox, py = s.y + oy;
+        const qx = Phaser.Math.Clamp(px, wall.x, wall.right);
+        const qy = Phaser.Math.Clamp(py, wall.y, wall.bottom);
+        const dx = px - qx, dy = py - qy, dist2 = dx * dx + dy * dy;
+        let nx, ny, pen;
+        if (dist2 > 1e-4) {
+          const dist = Math.sqrt(dist2);
+          if (dist >= R) continue;
+          nx = dx / dist; ny = dy / dist; pen = R - dist;
+        } else {                                                              // centre inside the wall
+          const dl = px - wall.x, dr = wall.right - px, dtp = py - wall.y, dbt = wall.bottom - py;
+          const m = Math.min(dl, dr, dtp, dbt);
+          if (m === dl) { nx = -1; ny = 0; pen = dl + R; }
+          else if (m === dr) { nx = 1; ny = 0; pen = dr + R; }
+          else if (m === dtp) { nx = 0; ny = -1; pen = dtp + R; }
+          else { nx = 0; ny = 1; pen = dbt + R; }
+        }
+        s.x += nx * pen; s.y += ny * pen;                                     // push the whole car out
+        b.x += nx * pen; b.y += ny * pen;
+        const vn = car.vx * nx + car.vy * ny;                                 // kill velocity into the wall
+        if (vn < 0) { car.vx -= vn * nx; car.vy -= vn * ny; }
+      }
+    }
+    b.velocity.set(car.vx, car.vy);
+    if (this.capDebug) {
+      this.capDebug.clear().lineStyle(1, 0x39ff14, 0.8);
+      for (const [ox, oy] of offs) this.capDebug.strokeCircle(s.x + ox, s.y + oy, R);
     }
   }
 
@@ -2664,6 +2714,7 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
         };
 
     this.car.update(delta, controls);
+    this._resolvePlayerCapsule(); // custom rotated-car wall collision (Arcade body can't rotate)
     this._carLastVx = this.car.vx;
     this._carLastVy = this.car.vy; // pre-collision cache (see _updateCopDamage)
 
