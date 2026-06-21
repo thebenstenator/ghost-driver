@@ -174,7 +174,8 @@ export class PursuitDirector {
           // Designated front cop, not in front yet → SPRINT around to a point ahead. Swings
           // wide (like the overtake) so it goes around, not through you. This is the box's
           // "get one in front" — the active move that was missing (cops felt hesitant).
-          cop.role = CopState.OVERTAKE;
+          // Labeled BOX_F (not OVERTAKE) so the OVERTAKE role stays the interceptor's ability.
+          cop.role = CopState.BOX_FRONT;
           const perp = h + Math.PI / 2;
           const lat  = (cop.sprite.x - px) * Math.cos(perp) + (cop.sprite.y - py) * Math.sin(perp);
           const side = lat >= 0 ? 1 : -1;
