@@ -159,8 +159,9 @@ export class GameScene extends Phaser.Scene {
     this.roadblockDist = 750;  // px ahead a testbed roadblock is placed
     this.rbBlockedMin  = 0.6;  // road fraction blocked at difficulty 1 (big gap)
     this.rbBlockedMax  = 0.92; // …at difficulty 5 (small gap)
-    this.rbDepth       = 46;   // collider depth along the road (≈ a parked car's length)
-    this.rbCarSpacing  = 26;   // px between the decorative formation cars
+    this.rbCarSpacing  = 26;   // px between formation cars (smaller = more cars, tighter seams)
+    this.rbCarHealth   = 40;   // per-car health — a committed full-speed ram punches one out
+    this.rbCarMass     = 1.0;  // per-car ram-damage divisor (higher = tankier block cars)
     this.searchSpeed = 250; // cop speed cap while searching (clean corners)
     this.searchDepth = 2; // STARTING search radius (blocks out from last-known)
     this.searchMaxDepth = 10; // search grows out to this many blocks as ground is checked
@@ -1018,37 +1019,38 @@ export class GameScene extends Phaser.Scene {
   }
 
   // --- Placed roadblocks --------------------------------------------------------------
-  // Drop a formation at a road point (x,y) facing the player's travel `heading`, blocking
-  // `difficulty` (1..5) of the lane. The heading is snapped to the axis-aligned grid so the
-  // formation sits square across the street → one rectangular static AABB is an exact fit.
+  // Drop a formation across the street at road point (x,y), facing the player's travel
+  // `heading`, blocking `difficulty` (1..5) of the lane. Each car is its OWN axis-aligned
+  // static collider + health, so you can ram a SEAM to break a car out and punch a hole
+  // (at the cost of your momentum). Heading is snapped to the grid so each car's AABB is an
+  // exact fit (no capsule/Matter — works because the pieces are static + axis-aligned).
   _spawnRoadblock(x, y, heading, difficulty = 2) {
     const snapped = Math.round(heading / (Math.PI / 2)) * (Math.PI / 2); // nearest N/S/E/W
-    const perp = snapped + Math.PI / 2;
+    const perp = snapped + Math.PI / 2, cpx = Math.cos(perp), cpy = Math.sin(perp);
     const frac = Phaser.Math.Linear(this.rbBlockedMin, this.rbBlockedMax, Phaser.Math.Clamp((difficulty - 1) / 4, 0, 1));
     const span = ROAD * frac, gap = ROAD - span;
     const gapSide = Math.random() < 0.5 ? 1 : -1;                 // which side the threadable gap sits
-    const cpx = Math.cos(perp), cpy = Math.sin(perp);
-    const cx = x + cpx * (-gapSide * gap / 2), cy = y + cpy * (-gapSide * gap / 2); // blocked-region centre
-    const horiz = Math.abs(cpx) > 0.5;                            // formation runs along x?
-    const cw = horiz ? span : this.rbDepth, ch = horiz ? this.rbDepth : span;
+    const bcx = x + cpx * (-gapSide * gap / 2), bcy = y + cpy * (-gapSide * gap / 2); // blocked-region centre
+    const horiz = Math.abs(cpx) > 0.5;                            // formation runs along x (travel vertical)?
+    const across = 22, along = 46;                                // a parked car's collider footprint
+    const bw = horiz ? across : along, bh = horiz ? along : across;
 
-    // One static collider for the blocked span — PLAYER ONLY (cops don't pile onto it).
-    const col = this.physics.add.staticImage(cx, cy, '_px').setDisplaySize(cw, ch).refreshBody();
-    col.setTintFill(0xff3b3b).setAlpha(this.devMode ? 0.16 : 0).setDepth(8); // faint in dev, invisible in play
-    this.worldLayer.add(col);
-    this.physics.add.collider(this.car.sprite, col);
-
-    // Decorative parked cars along the blocked span (facing the oncoming player).
-    const sprites = [];
+    const cars = [];
     const n = Math.max(2, Math.round(span / this.rbCarSpacing));
     for (let i = 0; i < n; i++) {
-      const t = n === 1 ? 0 : i / (n - 1) - 0.5;                  // -0.5..0.5 across the span
-      const s = this.add.image(cx + cpx * t * span, cy + cpy * t * span, 'cop_patrol')
+      const off = (i - (n - 1) / 2) * (span / n);                 // evenly across the blocked span
+      const ix = bcx + cpx * off, iy = bcy + cpy * off;
+      const img = this.add.image(ix, iy, 'cop_patrol')
         .setDisplaySize(22, 50).setDepth(9).setRotation(snapped - Math.PI / 2); // nose toward oncoming player
-      this.worldLayer.add(s);
-      sprites.push(s);
+      this.worldLayer.add(img);
+      // Per-car static collider (PLAYER ONLY — cops don't pile onto the block).
+      const col = this.physics.add.staticImage(ix, iy, '_px').setDisplaySize(bw, bh).refreshBody();
+      col.setTintFill(0xff3b3b).setAlpha(this.devMode ? 0.18 : 0).setDepth(8);
+      this.worldLayer.add(col);
+      this.physics.add.collider(this.car.sprite, col);
+      cars.push({ img, col, health: this.rbCarHealth, maxHealth: this.rbCarHealth, mass: this.rbCarMass });
     }
-    const rb = { x, y, heading: snapped, sprites, col };
+    const rb = { x, y, heading: snapped, cars };
     this.roadblocks.push(rb);
     return rb;
   }
@@ -1062,9 +1064,19 @@ export class GameScene extends Phaser.Scene {
     this._spawnRoadblock(p.x, p.y, dir, difficulty);
   }
 
+  // Knock a rammed car out of the block: kill its collider (the hole opens) and leave a
+  // smashed red wreck askew.
+  _breakRoadblockCar(car) {
+    car.disabled = true;
+    car.col.body.enable = false;
+    car.col.setAlpha(0);
+    car.img.setTintFill(0xff2a2a).setAlpha(0.85);
+    this.tweens.add({ targets: car.img, angle: car.img.angle + (Math.random() < 0.5 ? -45 : 45),
+                      duration: 300, ease: 'Cubic.easeOut' });
+  }
+
   _removeRoadblock(rb) {
-    for (const s of rb.sprites) s.destroy();
-    rb.col.destroy();
+    for (const c of rb.cars) { this.tweens.killTweensOf(c.img); c.img.destroy(); c.col.destroy(); }
     this.roadblocks = this.roadblocks.filter((r) => r !== rb);
   }
 
@@ -1072,12 +1084,24 @@ export class GameScene extends Phaser.Scene {
     for (const rb of [...this.roadblocks]) this._removeRoadblock(rb);
   }
 
-  // Despawn a roadblock once the player has driven PAST it (or strayed far) — placed
-  // blocks stand down behind you instead of lingering.
-  _updateRoadblocks(px, py) {
+  // Despawn a roadblock once the player has driven PAST it (or strayed far), and apply
+  // ram damage to individual cars so you can break a seam to punch through.
+  _updateRoadblocks(px, py, dt) {
+    const pSpeed = Math.hypot(this._carLastVx ?? this.car.vx, this._carLastVy ?? this.car.vy);
     for (const rb of [...this.roadblocks]) {
       const passed = (px - rb.x) * Math.cos(rb.heading) + (py - rb.y) * Math.sin(rb.heading) > 60;
-      if (passed || Phaser.Math.Distance.Between(px, py, rb.x, rb.y) > 2600) this._removeRoadblock(rb);
+      if (passed || Phaser.Math.Distance.Between(px, py, rb.x, rb.y) > 2600) { this._removeRoadblock(rb); continue; }
+      for (const car of rb.cars) {
+        if (car.disabled) continue;
+        car._dmgCd = Math.max(0, (car._dmgCd || 0) - dt);
+        const near = Phaser.Math.Distance.Between(car.img.x, car.img.y, px, py) < this.ramContactDist + 6;
+        if (near && !car._wasNear && car._dmgCd <= 0 && pSpeed > this.ramThreshold) {
+          car.health -= (pSpeed - this.ramThreshold) * this.ramScale / car.mass; // car is parked → rel = your speed
+          car._dmgCd = this.ramDmgCooldown;
+          if (car.health <= 0) this._breakRoadblockCar(car);
+        }
+        car._wasNear = near;
+      }
     }
   }
 
@@ -1132,7 +1156,9 @@ export class GameScene extends Phaser.Scene {
     rbf.add(this, "roadblockDist", 200, 2000, 25).name("Place ahead (px)");
     rbf.add(this, "rbBlockedMin", 0.3, 1, 0.02).name("Blocked @ diff1");
     rbf.add(this, "rbBlockedMax", 0.3, 1, 0.02).name("Blocked @ diff5");
-    rbf.add(this, "rbDepth", 20, 100, 2).name("Collider depth (px)");
+    rbf.add(this, "rbCarSpacing", 16, 60, 2).name("Car spacing (px)");
+    rbf.add(this, "rbCarHealth", 10, 200, 5).name("Car health (ram to break)");
+    rbf.add(this, "rbCarMass", 0.5, 4, 0.1).name("Car mass (tankiness)");
     rbf.close();
 
     // Respawn-ahead retry (interceptor head-on loop). Binds straight to the live scene.
@@ -2580,7 +2606,7 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
     // velocity is touched this frame, so a hit's onset reads the true approach speed.
     this._updateCopDamage(delta / 1000);
     this._updateWrecks(delta / 1000);
-    this._updateRoadblocks(this.car.sprite.x, this.car.sprite.y);
+    this._updateRoadblocks(this.car.sprite.x, this.car.sprite.y, delta / 1000);
 
     // While spectating a cop (camera not on the player), freeze the car so the
     // observer can't accidentally drive or re-trigger anything.
