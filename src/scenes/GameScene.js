@@ -87,8 +87,8 @@ export class GameScene extends Phaser.Scene {
     // Player CAPSULE collider (custom): Arcade's body can't rotate, so the car is modelled
     // as 3 circles along its spine and pushed out of walls by hand (rounded → slides along
     // corners). The Arcade square above stays as a centre backstop. (Cars are the next step.)
-    this.playerCapHalfLen = 14; // circle offset from centre along the car's facing
-    this.playerCapR       = 17; // capsule radius (≈ half the car width)
+    this.playerCapHalfLen = 17; // circle offset from centre along the car's facing
+    this.playerCapR       = 14; // capsule radius (≈ half the car width)
     this.capDebug = this.devMode ? this.add.graphics().setDepth(60) : null;
     if (this.capDebug) this.worldLayer.add(this.capDebug);
 
