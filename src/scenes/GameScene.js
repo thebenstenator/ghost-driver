@@ -1553,7 +1553,11 @@ export class GameScene extends Phaser.Scene {
     spike.add(d, "spikeTrigSpeed", 0, 400, 10).name("Only if player above (px/s)");
     spike.add(d, "spikeRange", 100, 800, 20).name("Cop within (px)");
     spike.add(d, "spikeBehind", 0, 200, 5).name("Must be behind by (px)");
+    spike.add(d, "spikeAhead", 80, 500, 10).name("Sprint-to ahead (px)");
+    spike.add(d, "spikeSide", 0, 120, 2).name("Sprint swing-wide (px)");
+    spike.add(d, "spikeBoost", 0, 300, 10).name("Sprint speed boost (px/s)");
     spike.add(d, "spikeDropAhead", 0, 200, 5).name("Deploy when ahead-by (px)");
+    spike.add(d, "spikeDropLead", 0, 200, 5).name("Strip lands ahead-of-cop (px)");
     spike.add(d, "spikeMaxTime", 1, 12, 0.5).name("Give up after (s)");
     spike.add(d, "spikeDropCd", 0, 12, 0.5).name("Cooldown between drops (s)");
     spike.add(d, "spikeReload", 1, 30, 0.5).name("Reload when empty (s)");
@@ -1567,7 +1571,7 @@ export class GameScene extends Phaser.Scene {
       .add({ copy: () => this._copyManeuverStats() }, "copy")
       .name("Copy Maneuvers → Console");
 
-    this._persistPanel(gui, "gd_maneuverTune_v6"); // bumped: added spike-run knobs
+    this._persistPanel(gui, "gd_maneuverTune_v7"); // bumped: spike sprint boost/geometry + drop lead
 
     gui.domElement.style.position = "fixed";
     gui.domElement.style.top = "8px";

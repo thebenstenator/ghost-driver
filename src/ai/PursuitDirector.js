@@ -149,11 +149,15 @@ export class PursuitDirector {
     this.spikeTrigSpeed   = 180;   // only run when the player is at least this fast (so a strip ahead matters)
     this.spikeRange       = 320;   // px the cop must be within to start a run
     this.spikeBehind      = 20;    // px the cop must be BEHIND the player to start (it has to get ahead)
-    this.spikeDropAhead   = 45;    // along-px ahead the cop must reach to DEPLOY (drop the strip)
-    this.spikeMaxTime     = 5.0;   // s a run may take before timing out (fail)
+    this.spikeAhead       = 200;   // px ahead of the player the spike unit sprints to (its overtake point)
+    this.spikeSide        = 16;    // px lateral swing while sprinting (less than the overtake so it ends up in-lane)
+    this.spikeBoost       = 150;   // EXTRA top speed while sprinting — its own lever so it can actually get clear
+    this.spikeDropAhead   = 25;    // along-px ahead the cop must reach to DEPLOY (drop the strip)
+    this.spikeMaxTime     = 7.0;   // s a run may take before timing out (fail)
     this.spikeDropCd      = 2.5;   // s between drops (and between runs) for one unit
     this.spikeReload      = 12.0;  // s reload after a unit empties its strip count
     this.spikeStripCount  = 3;     // strips a unit carries before the reload (per-unit default in units.js)
+    this.spikeDropLead    = 30;    // px AHEAD of the cop's projection the strip lands (a little reaction gap)
     this.spikeEaseAhead   = 70;    // px ahead the deployer eases to after dropping (forward-block)
     this.spikeEaseFactor  = 0.7;   // it eases to this fraction of your speed so the pack catches up
     this._spikeHolder     = null;  // the single cop currently running a spike deploy
@@ -230,10 +234,10 @@ export class PursuitDirector {
           const lat  = (cop.sprite.x - px) * Math.cos(perp) + (cop.sprite.y - py) * Math.sin(perp);
           const side = lat >= 0 ? 1 : -1;
           target = this._clearTarget(px, py, {
-            x: px + Math.cos(h) * this.overtakeAhead + Math.cos(perp) * this.overtakeSide * side,
-            y: py + Math.sin(h) * this.overtakeAhead + Math.sin(perp) * this.overtakeSide * side,
+            x: px + Math.cos(h) * this.spikeAhead + Math.cos(perp) * this.spikeSide * side,
+            y: py + Math.sin(h) * this.spikeAhead + Math.sin(perp) * this.spikeSide * side,
           });
-          boost = this.overtakeBoost;
+          boost = this.spikeBoost;
         } else {
           cop.role = CopState.DEPLOY;
           target = this._clearTarget(px, py, { x: px + Math.cos(h) * this.spikeEaseAhead, y: py + Math.sin(h) * this.spikeEaseAhead });
@@ -501,7 +505,7 @@ export class PursuitDirector {
         run.t += dt;
         const along = this._along(s, px, py, h);
         if (run.phase === 'SPIKE') {
-          if (along > this.spikeDropAhead) { this._requestSpikeDrop(s, h); run.phase = 'DEPLOY'; }
+          if (along > this.spikeDropAhead) { this._requestSpikeDrop(s, px, py, h, along); run.phase = 'DEPLOY'; }
           else if (run.t > this.spikeMaxTime) { this._endSpikeRun(s); s = null; } // never got ahead
         } else { // DEPLOY: hold in front until the player passes the strip (falls behind) or time-out
           if (along < this.blockLost || run.t > this.spikeMaxTime) { this._endSpikeRun(s); s = null; }
@@ -527,12 +531,14 @@ export class PursuitDirector {
     return s;
   }
 
-  // Queue a strip drop at the cop's current spot (GameScene builds it + clears the request) and
-  // decrement the unit's strip count.
-  _requestSpikeDrop(cop, h) {
+  // Queue a strip drop IN THE PLAYER'S PATH (GameScene builds it + clears the request) and
+  // decrement the unit's strip count. The strip lands on the player's centreline at the cop's
+  // forward distance (+ a small lead), so a wide-swung deployer still drops it in the lane.
+  _requestSpikeDrop(cop, px, py, h, along) {
     if (cop._spikeStrips == null) cop._spikeStrips = (cop.unitDef.spikeStrips ?? this.spikeStripCount);
     if (cop._spikeStrips <= 0) return;
-    cop._spikeDrop = { x: cop.sprite.x, y: cop.sprite.y, heading: h };
+    const lead = along + this.spikeDropLead;
+    cop._spikeDrop = { x: px + Math.cos(h) * lead, y: py + Math.sin(h) * lead, heading: h };
     cop._spikeStrips--;
     cop._spikeRun.dropped = true;
   }

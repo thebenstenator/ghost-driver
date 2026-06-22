@@ -133,8 +133,8 @@ export const UNITS = {
     name: 'Spike',
     appearance: { texture: 'cop_patrol', displayWidth: 25, displayHeight: 58, bodySize: 23, capR: 11, capHalfLen: 16 },
     handling: {
-      maxSpeed:       525,   // faster than patrol (495) so it can pull ahead to deploy
-      acceleration:   400,
+      maxSpeed:       560,   // matches the interceptor — with the spike boost it can clear ahead to deploy
+      acceleration:   430,
       gripLow:        0.6,
       gripHigh:       0.21,
       gripSpeedRef:   480,
