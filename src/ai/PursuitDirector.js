@@ -75,7 +75,9 @@ export class PursuitDirector {
     this.maneuverRange     = 160;  // cop must be within this of the player to start/own a maneuver
     this.maneuverBehind    = 20;   // px the cop must be BEHIND the player to start an overtake
     this.overtakeAhead     = 260;  // px ahead of the player the overtaker sprints to (full speed)
-    this.overtakeSide      = 28;   // px lateral offset so it swings around you, not through you
+    this.overtakeSide      = 40;   // px lateral offset so it swings around you, not through you. MUST clear
+                                   // the capsule envelope (player capR + cop capR ≈ 23) or the cop can't get
+                                   // beside you — it rams your rear and friction pins it there. 40 leaves margin.
     this.overtakeBoost     = 100;  // EXTRA top speed (px/s) while overtaking, so it can actually pass
     this.overtakeDone      = 50;   // px ahead the cop must reach to switch OVERTAKE → BLOCK
     this.blockAhead        = 90;   // px ahead the blocker sits to cut you off
@@ -153,7 +155,9 @@ export class PursuitDirector {
     this.spikeRange       = 320;   // px the cop must be within to start a run
     this.spikeBehind      = 20;    // px the cop must be BEHIND the player to start (it has to get ahead)
     this.spikeAhead       = 200;   // px ahead of the player the spike unit sprints to (its overtake point)
-    this.spikeSide        = 16;    // px lateral swing while sprinting (less than the overtake so it ends up in-lane)
+    this.spikeSide        = 40;    // px lateral swing while sprinting — MUST clear the capsule envelope
+                                   // (~23px) or it can't get beside you to pass. The drop projects back
+                                   // onto your centreline anyway, so a wide swing still lands the strip in-lane.
     this.spikeBoost       = 150;   // EXTRA top speed while sprinting — its own lever so it can actually get clear
     this.spikeDropAhead   = 25;    // along-px ahead the cop must reach to DEPLOY (drop the strip)
     // Give-up is PROGRESS-based, not a fixed clock: while the cop keeps gaining ground toward the
