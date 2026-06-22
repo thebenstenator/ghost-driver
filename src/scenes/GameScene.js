@@ -100,10 +100,11 @@ export class GameScene extends Phaser.Scene {
     this.wrecks = []; // disabled cops, kept as inert obstacles until they despawn
     this.roadblocks = []; // placed block formations (each = dynamic car bodies + visuals)
     // Roadblock cars are DYNAMIC bodies with mass — you SHOVE through them (losing speed),
-    // not a brick wall. One group + two colliders: the player pushes them, and the walls
-    // stop a shoved car flying off-road. (Cops pass through — the block is for the player.)
+    // not a brick wall. Player↔car collision is handled by the rotating CAPSULE (so when a
+    // car spins broadside-off you can slip past its ends) — see _resolveCapsules. The Arcade
+    // body is just a small square backstop + velocity/drag integrator; the walls collider
+    // stops a shoved car flying off-road.
     this.roadblockGroup = this.physics.add.group();
-    this.physics.add.collider(this.car.sprite, this.roadblockGroup, (_p, body) => this._onRoadblockHit(body));
     this.physics.add.collider(this.roadblockGroup, this.walls);
     this.sightRange = 900; // px — cop spotting range in clear line
     this.proximityRange = 70; // px — sensed THROUGH walls only at point-blank (can't
@@ -1057,10 +1058,11 @@ export class GameScene extends Phaser.Scene {
   _spawnRoadblock(x, y, heading, difficulty = 2) {
     const snapped = Math.round(heading / (Math.PI / 2)) * (Math.PI / 2); // nearest N/S/E/W
     const perp = snapped + Math.PI / 2, cpx = Math.cos(perp), cpy = Math.sin(perp);
-    const horiz = Math.abs(cpx) > 0.5;                             // formation runs along x (travel vertical)?
+    // These ARE normal cop cars (patrol / heavy) — same display + capsule dims as the live
+    // units, so the block collides via the rotating capsule (slip through a spun car).
     const SPEC = {
-      car:   { tex: 'cop_patrol', visW: 22, visL: 50, colLen: 48, colDepth: 20, mass: this.rbCarMass },
-      heavy: { tex: 'cop_heavy',  visW: 28, visL: 58, colLen: 56, colDepth: 26, mass: this.rbHeavyMass },
+      car:   { tex: 'cop_patrol', visW: 25, visL: 58, body: 23, capR: 11, capHalfLen: 16, mass: this.rbCarMass },
+      heavy: { tex: 'cop_heavy',  visW: 32, visL: 67, body: 27, capR: 14, capHalfLen: 18, mass: this.rbHeavyMass },
     };
     const specs = this._roadblockComposition(difficulty).map((t) => SPEC[t]);
     const totalLen = specs.reduce((s, v) => s + v.visL, 0);
@@ -1077,9 +1079,10 @@ export class GameScene extends Phaser.Scene {
       const off = cursor + s.visL / 2;
       const ix = x + cpx * off, iy = y + cpy * off;
       cursor += s.visL;
-      // Invisible dynamic body = the exact broadside collider; the car sprite follows it.
-      const bw = horiz ? s.colLen : s.colDepth, bh = horiz ? s.colDepth : s.colLen;
-      const body = this.roadblockGroup.create(ix, iy, '_px').setDisplaySize(bw, bh);
+      // Small SQUARE dynamic body (drag + velocity integrator + wall backstop); the rotating
+      // capsule (capR/capHalfLen) does the real player/cop collision, so the body needn't be
+      // the car's full footprint — a square that can't block slip-through, like the cops.
+      const body = this.roadblockGroup.create(ix, iy, '_px').setDisplaySize(s.body, s.body);
       body.setTintFill(0xff3b3b).setAlpha(this.devMode ? 0.18 : 0).setDepth(8);
       body.body.setDrag(this.rbCarDrag, this.rbCarDrag);
       body.body.mass = s.mass;
@@ -1089,8 +1092,9 @@ export class GameScene extends Phaser.Scene {
       const img = this.add.image(ix, iy, s.tex)
         .setDisplaySize(s.visW, s.visL).setDepth(9).setRotation(baseRot);
       this.worldLayer.add(img);
-      const car = { body, img, baseRot, mass: s.mass, spin: 0, angVel: 0, _spinCd: 0 };
-      body.rbCar = car;                            // so the collision callback can find it
+      const car = { body, img, baseRot, mass: s.mass, spin: 0, angVel: 0, _spinCd: 0,
+                    capR: s.capR, capHalfLen: s.capHalfLen };
+      body.rbCar = car;                            // so the spin trigger can find it
       cars.push(car);
     }
     const rb = { x, y, heading: snapped, cars };
@@ -1147,17 +1151,28 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
-  // Custom CAPSULE collision for the player AND cops — Arcade's box can't cover a rotated
-  // car, so each is modelled as 3 circles along its spine and pushed out of walls + apart
-  // from each other by hand. Rounded → slides along walls/corners. Additive to the Arcade
-  // bodies (velocity-cancel is idempotent, so they cooperate, not fight). Roadblock cars are
-  // left on Arcade for now. The spine circle centres are kept as a flat [x,y,x,y,x,y] on the
-  // agent and shifted whenever the agent is pushed, so all checks stay consistent.
+  // Custom CAPSULE collision for the player, cops AND roadblock cars — Arcade's box can't
+  // cover a rotated car, so each is modelled as 3 circles along its spine and pushed out of
+  // walls + apart from each other by hand. Rounded → slides along walls/corners. Additive to
+  // the Arcade bodies (velocity-cancel is idempotent, so they cooperate, not fight). Roadblock
+  // cars join as agents so a SPUN block car (capsule rotated end-on) lets the player slip past
+  // its ends. The spine circle centres are kept as a flat [x,y,x,y,x,y] on the agent and
+  // shifted whenever the agent is pushed, so all checks stay consistent.
   _resolveCapsules() {
     const agents = (this._capAgents ||= []);
     agents.length = 0;
     agents.push({ v: this.car, R: this.playerCapR, hl: this.playerCapHalfLen, m: this.playerMass, player: true });
     for (const cop of this.cops) agents.push({ v: cop, R: cop.capR, hl: cop.capHalfLen, m: cop.mass || 1 });
+    // Roadblock cars: a per-frame shim exposing the Vehicle-like fields the resolver needs.
+    // facing runs along the car's LENGTH (sprite rotation − π/2), so the capsule rotates with
+    // the scripted spin. vx/vy seed from the Arcade body; the resolver writes back through it.
+    for (const rb of this.roadblocks) for (const c of rb.cars) {
+      const b = c.body;
+      agents.push({
+        v: { sprite: b, facing: c.baseRot + c.spin - Math.PI / 2, vx: b.body.velocity.x, vy: b.body.velocity.y },
+        R: c.capR, hl: c.capHalfLen, m: c.mass, rbCar: c,
+      });
+    }
     for (const a of agents) {
       const s = a.v.sprite, fx = Math.cos(a.v.facing), fy = Math.sin(a.v.facing), d = a.hl;
       a.c = [s.x + fx * d, s.y + fy * d, s.x, s.y, s.x - fx * d, s.y - fy * d]; // front · centre · rear
@@ -1171,10 +1186,12 @@ export class GameScene extends Phaser.Scene {
         if (dx * dx + dy * dy <= rr * rr) this._capsuleVsCapsule(a, b);        // broad-phase cull
       }
     }
+    // Roadblock car visuals follow their (just-pushed) body — keep the art on the collider.
+    for (const a of agents) if (a.rbCar) a.rbCar.img.setPosition(a.v.sprite.x, a.v.sprite.y);
     if (this.capDebug) {
       this.capDebug.clear();
       for (const a of agents) {
-        this.capDebug.lineStyle(1, a.player ? 0x39ff14 : 0x4a90ff, 0.7);
+        this.capDebug.lineStyle(1, a.player ? 0x39ff14 : a.rbCar ? 0xff3b3b : 0x4a90ff, 0.7);
         for (let k = 0; k < 6; k += 2) this.capDebug.strokeCircle(a.c[k], a.c[k + 1], a.R);
       }
     }
@@ -1226,6 +1243,10 @@ export class GameScene extends Phaser.Scene {
         a.v.sprite.body.velocity.set(a.v.vx, a.v.vy);
         b.v.sprite.body.velocity.set(b.v.vx, b.v.vy);
       }
+      // The player ramming a roadblock car off-centre torques it (scripted spin — moved here
+      // from the old Arcade collision callback). Throttled inside _onRoadblockHit.
+      if (a.player && b.rbCar) this._onRoadblockHit(b.rbCar.body);
+      else if (b.player && a.rbCar) this._onRoadblockHit(a.rbCar.body);
     }
   }
 
