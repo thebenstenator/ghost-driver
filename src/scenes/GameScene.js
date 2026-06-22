@@ -117,6 +117,8 @@ export class GameScene extends Phaser.Scene {
     this.wrecks = []; // disabled cops, kept as inert obstacles until they despawn
     this.spikes = []; // deployed spike strips (hazard wiring next; visible placeholder for now)
     this.spikeLifetime = 20; // s a dropped strip persists before it despawns
+    this.spikeStripLen = 28; // px across — a cop-deployed strip is ~car-width (DODGEABLE). Roadblock
+                             // spike strips (future, L3+) stay wider; they pass their own width.
     this.roadblocks = []; // placed block formations (each = dynamic car bodies + visuals)
     // Roadblock cars are DYNAMIC bodies with mass — you SHOVE through them (losing speed),
     // not a brick wall. Player↔car collision is handled by the rotating CAPSULE (so when a
@@ -170,6 +172,12 @@ export class GameScene extends Phaser.Scene {
     // unit (interceptor) spawns, to set up a head-on
     this.interceptEntrySpeed = 260; // px/s an ahead-spawned interceptor enters AT (rolling toward
     // you for the head-on, not parked) — moderate, not full speed
+    // Spike unit entry: it spawns AHEAD driving the SAME way as you (leads, doesn't ram), closer
+    // than the interceptor (you should SEE it ahead), and with a drop cooldown so you get a chance
+    // to ditch before it can spike you.
+    this.spikeSpawnAhead   = 320; // px ahead of you a spike unit spawns
+    this.spikeEntrySpeed   = 320; // px/s it's already rolling forward at on entry
+    this.spikeRespawnDropCd = 6;  // s it CAN'T deploy after spawning (your window to ditch)
 
     // --- Cop health / ramming (scripted from velocities, NOT collider geometry) ---
     // Damage = relative impact speed, so a full head-on wrecks a patrol, a rear-end at
@@ -632,7 +640,7 @@ export class GameScene extends Phaser.Scene {
         cop._respawnCd <= 0 &&
         this._offCamera(cop.sprite.x, cop.sprite.y, this.respawnMargin) &&
         (ahead
-          ? this._placeAhead(cop, px, py)
+          ? this._placeAheadFor(cop, px, py)
           : this._tryRespawnCop(cop, px, py))
       ) {
         cop._lostT = 0;
@@ -703,12 +711,13 @@ export class GameScene extends Phaser.Scene {
     return false;
   }
 
-  // Hard-reset a cop at (x,y) facing the player, clearing all transient chase state.
-  _placeCop(cop, x, y, px, py) {
+  // Hard-reset a cop at (x,y), clearing all transient chase state. Faces the player by default;
+  // pass `facing` (radians) to override — e.g. a spike unit spawns facing the way you're driving.
+  _placeCop(cop, x, y, px, py, facing = null) {
     cop.sprite.body.reset(x, y); // moves the body + zeroes its velocity
     cop.vx = 0;
     cop.vy = 0;
-    cop.facing = Math.atan2(py - y, px - x);
+    cop.facing = facing != null ? facing : Math.atan2(py - y, px - x);
     cop.sprite.setRotation(cop.facing + Math.PI / 2);
     cop._trail = [];
     cop.pursuitMode = "LONE";
@@ -796,8 +805,8 @@ export class GameScene extends Phaser.Scene {
     const cop = this._spawnCop(px, py, this._nextReinforcementType()); // temp position; relocated below
     cop.ai.reactionTime = this.pursuitLevel.cfg().reaction;
     if (cop.unitDef.placement === "ahead-of-travel") {
-      // Interceptor enters AHEAD for a head-on, not from the flank.
-      this._placeAhead(cop, px, py);
+      // Interceptor enters AHEAD for a head-on; spike leads ahead same-direction.
+      this._placeAheadFor(cop, px, py);
     } else {
       // Flank-offscreen: bias the spawn to a random bearing so reinforcements don't all
       // come from one spot.
@@ -874,7 +883,7 @@ export class GameScene extends Phaser.Scene {
   // picks WHERE it appears — the cop then drives with the same shared CopAI brain.
   _placeByStrategy(cop, px, py) {
     if (cop.unitDef.placement === "ahead-of-travel") {
-      this._placeAhead(cop, px, py); // interceptor head-on entry (and respawn retry)
+      this._placeAheadFor(cop, px, py); // interceptor head-on / spike leads ahead
       return;
     }
     // flank-offscreen (default): a road node a few blocks out at a random bearing.
@@ -926,6 +935,33 @@ export class GameScene extends Phaser.Scene {
     cop.vx = Math.cos(cop.facing) * s;
     cop.vy = Math.sin(cop.facing) * s;
     cop.sprite.body.setVelocity(cop.vx, cop.vy);
+    return true;
+  }
+
+  // Route an 'ahead-of-travel' entry by unit: a spike unit spawns ahead driving the SAME way as
+  // you (to lead + deploy), everything else spawns ahead facing back for a head-on.
+  _placeAheadFor(cop, px, py) {
+    return cop.unitDef && cop.unitDef.ability === "spike"
+      ? this._placeAheadSpike(cop, px, py)
+      : this._placeAhead(cop, px, py);
+  }
+
+  // Spike-unit entry: spawn AHEAD of the player, facing the DIRECTION OF TRAVEL and already
+  // rolling that way (it leads you, it doesn't ram). It enters with a drop COOLDOWN so it can't
+  // spike you the instant it appears — you get a few seconds to ditch or reroute first.
+  _placeAheadSpike(cop, px, py) {
+    const car = this.car;
+    const dir = car.getSpeed() > 40 ? Math.atan2(car.vy, car.vx) : car.facing;
+    const tx = px + Math.cos(dir) * this.spikeSpawnAhead,
+      ty = py + Math.sin(dir) * this.spikeSpawnAhead;
+    const p = this.navGrid.pos(this.navGrid.nearestNodeAhead(tx, ty, px, py, dir));
+    this._placeCop(cop, p.x, p.y, px, py, dir); // face the way the player is going
+    const s = this.spikeEntrySpeed;
+    cop.vx = Math.cos(dir) * s;
+    cop.vy = Math.sin(dir) * s;
+    cop.sprite.body.setVelocity(cop.vx, cop.vy);
+    cop._spikeCd = this.spikeRespawnDropCd; // can't deploy for N seconds (chance to ditch)
+    cop._spikeStrips = cop.unitDef.spikeStrips ?? this.director.spikeStripCount;
     return true;
   }
 
@@ -1186,9 +1222,9 @@ export class GameScene extends Phaser.Scene {
   // DRAFT: this lays down a ~car-width strip oriented across the player's path and tracks it; the
   // HAZARD effect (pop the player's tires on contact) is the next step. Kept as data + a drawn
   // placeholder so the deploy maneuver is fully testable now.
-  _dropSpike({ x, y, heading }) {
+  _dropSpike({ x, y, heading }, len = this.spikeStripLen) {
     const angle = heading + Math.PI / 2; // strip lies ACROSS the direction of travel
-    this.spikes.push({ x, y, angle, len: 76, depth: 12, t: 0 });
+    this.spikes.push({ x, y, angle, len, depth: 12, t: 0 });
   }
 
   // Age out deployed strips and redraw them. (Collision/tire-pop wiring comes next.)
@@ -1557,8 +1593,9 @@ export class GameScene extends Phaser.Scene {
     spike.add(d, "spikeAhead", 60, 400, 10).name("Sprint lead (ahead of cop)");
     spike.add(d, "spikeSide", 0, 120, 2).name("Sprint swing-wide (px)");
     spike.add(d, "spikeBoost", 0, 300, 10).name("Sprint speed boost (px/s)");
-    spike.add(d, "spikeDropAhead", 0, 200, 5).name("Deploy when ahead-by (px)");
+    spike.add(d, "spikeDropAhead", 0, 400, 5).name("Deploy when ahead-by (px)");
     spike.add(d, "spikeDropLead", 0, 200, 5).name("Strip lands ahead-of-cop (px)");
+    spike.add(this, "spikeStripLen", 10, 100, 2).name("Strip width (px)");
     spike.add(d, "spikeProgressEps", 0, 40, 1).name("Progress = gain over (px)");
     spike.add(d, "spikeStallTime", 0.3, 5, 0.1).name("Give up if stalled (s)");
     spike.add(d, "spikeDeployHold", 0.5, 8, 0.5).name("Hold in front after drop (s)");
@@ -1567,14 +1604,18 @@ export class GameScene extends Phaser.Scene {
     spike.add(d, "spikeStripCount", 1, 8, 1).name("Strips per unit");
     spike.add(d, "spikeEaseAhead", 0, 300, 5).name("Ease-in-front ahead (px)");
     spike.add(d, "spikeEaseFactor", 0.1, 1, 0.05).name("Ease to × your speed");
+    spike.add(d, "spikeLeadDist", 50, 400, 10).name("Lead aim-ahead (px)");
     spike.add(this, "spikeLifetime", 3, 60, 1).name("Strip lifetime (s)");
+    spike.add(this, "spikeSpawnAhead", 100, 800, 10).name("Spawn-ahead dist (px)");
+    spike.add(this, "spikeEntrySpeed", 0, 600, 10).name("Spawn entry speed (px/s)");
+    spike.add(this, "spikeRespawnDropCd", 0, 12, 0.5).name("Spawn drop cooldown (s)");
     spike.close();
 
     gui
       .add({ copy: () => this._copyManeuverStats() }, "copy")
       .name("Copy Maneuvers → Console");
 
-    this._persistPanel(gui, "gd_maneuverTune_v10"); // bumped: parallel-lane spike sprint + box excludes maneuverers
+    this._persistPanel(gui, "gd_maneuverTune_v11"); // bumped: spike deploy-ahead 225 + car-width strip
 
     gui.domElement.style.position = "fixed";
     gui.domElement.style.top = "8px";
