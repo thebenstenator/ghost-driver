@@ -6,6 +6,7 @@ import { NavGrid } from "../ai/NavGrid.js";
 import { segmentClear } from "../ai/lineOfSight.js";
 import { CopAI } from "../ai/CopAI.js";
 import { UNITS } from "../ai/units.js";
+import { TOOLTIPS } from "../ui/tooltips.js";
 import { PursuitDirector, CopState } from "../ai/PursuitDirector.js";
 import { Pursuit, PursuitState } from "../systems/Pursuit.js";
 import { PursuitLevel } from "../systems/PursuitLevel.js";
@@ -193,6 +194,11 @@ export class GameScene extends Phaser.Scene {
     this.ramDmgCooldown = 0.7; // s between damage ticks on one cop (so a single ram = one tick)
     this.selfImpactDrop = 200; // px/s sudden speed loss in a frame that reads as a CRASH (> braking)
     this.selfScale = 0.05; // cop self-damage per px/s of crash, while mid-aggressive-action
+    // Cop↔cop (and cop↔roadblock) ram damage is SEPARATE from the player's ram, so cops crashing
+    // into each other can be tuned without touching how hard YOUR rams hit.
+    this.copCopRamThreshold = 250; // closing speed (px/s) a cop↔cop crash needs to deal damage (higher
+    // than the player's 150, so pack jostling is free — only a real high-speed wreck counts)
+    this.copCopRamMult = 0.6; // cop↔cop damage as a fraction of the base ram damage (0 = cops never hurt each other)
     this.wreckDespawn = 30; // s a disabled wreck sits as an obstacle before it's removed
     this.wreckMass = 0.8; // disabled cop body mass — light, so you shove it aside
     this.copHealthPerLevel = 0.1; // +fraction of base health per pursuit level above 1 (heat buff:
@@ -1066,12 +1072,12 @@ export class GameScene extends Phaser.Scene {
   // so a head-on does full damage no matter how fast the solver then arrests it. One tick per
   // contact via the shared _dmgCd cooldown. Disable is deferred (the caller drains _capDisable
   // after the agent loop, so this.cops isn't mutated mid-resolve).
-  _agentRamDamage(copAgent, otherAgent) {
+  _agentRamDamage(copAgent, otherAgent, threshold = this.ramThreshold, mult = 1) {
     const cop = copAgent.v;
     if (cop.disabled || (cop._dmgCd || 0) > 0) return;
     const rel = Math.hypot(copAgent.preVx - otherAgent.preVx, copAgent.preVy - otherAgent.preVy);
-    if (rel <= this.ramThreshold) return;
-    cop.health -= ((rel - this.ramThreshold) * this.ramScale) / (cop.mass || 1);
+    if (rel <= threshold) return;
+    cop.health -= ((rel - threshold) * this.ramScale * mult) / (cop.mass || 1);
     cop._dmgCd = this.ramDmgCooldown;
     if (cop.health <= 0) (this._capDisable ||= []).push(cop);
   }
@@ -1494,9 +1500,12 @@ export class GameScene extends Phaser.Scene {
     else if (b.player && a.rbCar) { this._onRoadblockHit(a.rbCar.body); this._rbDamage(a, b); }
     else if (a.player && bCop) { this._applyRamImpact(b.v, cnx, cny); this._agentRamDamage(b, a); }
     else if (b.player && aCop) { this._applyRamImpact(a.v, -cnx, -cny); this._agentRamDamage(a, b); }
-    else if (aCop && bCop) { this._agentRamDamage(a, b); this._agentRamDamage(b, a); } // cop↔cop crash hurts both
-    else if (aCop && b.rbCar) { this._agentRamDamage(a, b); this._rbDamage(b, a); } // cop ↔ block car: both take it
-    else if (bCop && a.rbCar) { this._agentRamDamage(b, a); this._rbDamage(a, b); }
+    else if (aCop && bCop) { // cop↔cop crash hurts both — own threshold/mult (decoupled from player ram)
+      this._agentRamDamage(a, b, this.copCopRamThreshold, this.copCopRamMult);
+      this._agentRamDamage(b, a, this.copCopRamThreshold, this.copCopRamMult);
+    }
+    else if (aCop && b.rbCar) { this._agentRamDamage(a, b, this.copCopRamThreshold, this.copCopRamMult); this._rbDamage(b, a); }
+    else if (bCop && a.rbCar) { this._agentRamDamage(b, a, this.copCopRamThreshold, this.copCopRamMult); this._rbDamage(a, b); }
   }
 
   // A FRONTAL high-closing-speed cop hit dumps extra player speed and bogs the engine briefly,
@@ -1621,6 +1630,8 @@ export class GameScene extends Phaser.Scene {
     gui
       .add({ copy: () => this._copyTestbedStats() }, "copy")
       .name("Copy Testbed → Console");
+
+    this._applyTooltips(gui); // testbed panel isn't persisted, so apply tooltips directly
 
     gui.domElement.style.position = "fixed";
     gui.domElement.style.top = "8px";
@@ -1782,6 +1793,10 @@ this.interceptAheadDist = ${this.interceptAheadDist}; this.interceptEntrySpeed =
       .name("Counts as crash above (px/s)");
     self.add(this, "selfScale", 0, 2, 0.05).name("Damage per px/s");
 
+    const cc = gui.addFolder("Cop↔cop / cop↔roadblock ram");
+    cc.add(this, "copCopRamThreshold", 0, 600, 10).name("No damage below (px/s)");
+    cc.add(this, "copCopRamMult", 0, 2, 0.05).name("Damage × (0 = off)");
+
     const dis = gui.addFolder("Disable / wreck");
     dis.add(this, "wreckDespawn", 5, 120, 5).name("Wreck despawn (s)");
     dis
@@ -1793,7 +1808,7 @@ this.interceptAheadDist = ${this.interceptAheadDist}; this.interceptEntrySpeed =
       .add({ copy: () => this._copyHealthStats() }, "copy")
       .name("Copy Health → Console");
 
-    this._persistPanel(gui, "gd_healthTune_v6"); // bumped: self-damage softened (cooldown/drop/scale)
+    this._persistPanel(gui, "gd_healthTune_v7"); // bumped: decoupled cop↔cop ram threshold/mult
 
     gui.domElement.style.position = "fixed";
     gui.domElement.style.top = "8px";
@@ -1816,7 +1831,8 @@ ${perType}
 this.ramThreshold = ${this.ramThreshold}; this.ramScale = ${this.ramScale}; this.ramContactDist = ${this.ramContactDist}; this.ramDmgCooldown = ${this.ramDmgCooldown};
 this.selfImpactDrop = ${this.selfImpactDrop}; this.selfScale = ${this.selfScale};
 this.wreckDespawn = ${this.wreckDespawn}; this.wreckMass = ${this.wreckMass}; this.disableReinforceMult = ${this.disableReinforceMult};
-this.copHealthPerLevel = ${this.copHealthPerLevel};`);
+this.copHealthPerLevel = ${this.copHealthPerLevel};
+this.copCopRamThreshold = ${this.copCopRamThreshold}; this.copCopRamMult = ${this.copCopRamMult};`);
   }
 
   // Dump the director's maneuver/box tuning, paste-ready for the PursuitDirector ctor.
@@ -3074,7 +3090,17 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
   // Wire a lil-gui panel to localStorage: restore on open, save on change, and a
   // Reset button that clears the saved values and restores the code defaults
   // (important after a defaults change — a stale save would otherwise mask it).
+  // Set a native hover tooltip on every controller whose bound property has an entry in TOOLTIPS.
+  // One map covers the property everywhere it appears across all panels.
+  _applyTooltips(gui) {
+    for (const c of gui.controllersRecursive()) {
+      const t = TOOLTIPS[c.property];
+      if (t && c.domElement) c.domElement.title = t;
+    }
+  }
+
   _persistPanel(gui, key) {
+    this._applyTooltips(gui); // tooltips for every panel that persists (i.e. all the tuning panels)
     const defaults = gui.save(); // snapshot the code defaults BEFORE applying any save
     try {
       const saved = localStorage.getItem(key);
