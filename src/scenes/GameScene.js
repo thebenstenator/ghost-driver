@@ -192,9 +192,11 @@ export class GameScene extends Phaser.Scene {
     this.ramContactDist = 40; // px centre-distance counted as a player↔cop hit
     this.ramDmgCooldown = 0.4; // s between damage ticks on one cop (so a single ram = one tick)
     this.selfImpactDrop = 150; // px/s sudden speed loss in a frame that reads as a CRASH (> braking)
-    this.selfScale = 0.5; // cop self-damage per px/s of crash, while mid-aggressive-action
+    this.selfScale = 1.2; // cop self-damage per px/s of crash, while mid-aggressive-action
     this.wreckDespawn = 30; // s a disabled wreck sits as an obstacle before it's removed
     this.wreckMass = 0.8; // disabled cop body mass — light, so you shove it aside
+    this.copHealthPerLevel = 0.1; // +fraction of base health per pursuit level above 1 (heat buff:
+    // a cop spawned at L3 has +20% health). Applied at spawn from the level then; 0 = off.
     this.disableReinforceMult = 1.3; // replacement after a disable takes this × the normal reinforce
 
     // --- Placed roadblocks (static set-pieces, NOT cap units; player-only collider) ---
@@ -362,6 +364,13 @@ export class GameScene extends Phaser.Scene {
 
   _spawnCop(x, y, unitType = "patrol") {
     const cop = new CopCar(this, x, y, this.navGrid, this.losRects, unitType);
+    // Heat health buff: a cop spawned at higher pursuit level is tankier (+copHealthPerLevel per
+    // level above 1), baked at spawn. Pursuit-only (sandbox has no level).
+    if (this.pursuitLevel && this.copHealthPerLevel) {
+      const buff = 1 + this.copHealthPerLevel * (this.pursuitLevel.level - 1);
+      cop.maxHealth = Math.round(cop.maxHealth * buff);
+      cop.health = cop.maxHealth;
+    }
     this.worldLayer.add(cop.sprite); // world layer → rendered by main cam, not the UI cam
     cop.searchSlot = this.cops.length; // 0,1,2… — its angular sector when searching
     // Floating debug label so each cop's AI state is visible in the world (dev only)
@@ -1603,10 +1612,28 @@ export class GameScene extends Phaser.Scene {
     rs.add(this, "heavyRespawnCooldown", 0, 40, 1).name("Heavy respawn gate (s)");
     rs.close();
 
+    gui
+      .add({ copy: () => this._copyTestbedStats() }, "copy")
+      .name("Copy Testbed → Console");
+
     gui.domElement.style.position = "fixed";
     gui.domElement.style.top = "8px";
     gui.domElement.style.left = "8px";
     gui.domElement.style.zIndex = "9999";
+  }
+
+  // Paste-ready dump of the testbed's scene-level tunables (roadblock / swarm-physics / respawn).
+  _copyTestbedStats() {
+    console.log(`// --- Testbed scene tunables (paste into GameScene create) ---
+// roadblock
+this.roadblockDist = ${this.roadblockDist}; this.rbCarMass = ${this.rbCarMass}; this.rbHeavyMass = ${this.rbHeavyMass}; this.rbCarDrag = ${this.rbCarDrag};
+this.rbLifetime = ${this.rbLifetime}; this.rbSpinFactor = ${this.rbSpinFactor}; this.rbSpikeChance = ${this.rbSpikeChance}; this.roadblockInterval = ${this.roadblockInterval};
+// swarm / capsule + ram impact
+this.capIters = ${this.capIters}; this.capSlop = ${this.capSlop}; this.capRelax = ${this.capRelax}; this.capFriction = ${this.capFriction}; this.playerMass = ${this.playerMass};
+this.ramSpeedKill = ${this.ramSpeedKill}; this.ramBogTime = ${this.ramBogTime}; this.ramBogAccel = ${this.ramBogAccel}; this.ramRefSpeed = ${this.ramRefSpeed}; this.ramMinClosing = ${this.ramMinClosing};
+// respawn-ahead
+this.respawnDist = ${this.respawnDist}; this.respawnTime = ${this.respawnTime}; this.respawnCooldown = ${this.respawnCooldown};
+this.interceptAheadDist = ${this.interceptAheadDist}; this.interceptEntrySpeed = ${this.interceptEntrySpeed}; this.heavyRespawnCooldown = ${this.heavyRespawnCooldown};`);
   }
 
   // Live tuning for the director's maneuver/box behavior (drafting, overtake-and-block,
@@ -1735,6 +1762,7 @@ export class GameScene extends Phaser.Scene {
       f.add(def, "mass", 0.2, 5, 0.1).name("Mass");
       f.close();
     }
+    types.add(this, "copHealthPerLevel", 0, 0.5, 0.05).name("+Health / pursuit level");
 
     const ram = gui.addFolder("Player ram damage");
     ram.add(this, "ramThreshold", 0, 600, 10).name("No damage below (px/s)");
@@ -1759,7 +1787,7 @@ export class GameScene extends Phaser.Scene {
       .add({ copy: () => this._copyHealthStats() }, "copy")
       .name("Copy Health → Console");
 
-    this._persistPanel(gui, "gd_healthTune_v3"); // bumped: unit health + ramScale/selfScale/wreckMass rebaked
+    this._persistPanel(gui, "gd_healthTune_v4"); // bumped: selfScale 1.2 + per-level health buff
 
     gui.domElement.style.position = "fixed";
     gui.domElement.style.top = "8px";
@@ -1781,7 +1809,8 @@ ${perType}
 // --- GameScene ram/disable model ---
 this.ramThreshold = ${this.ramThreshold}; this.ramScale = ${this.ramScale}; this.ramContactDist = ${this.ramContactDist}; this.ramDmgCooldown = ${this.ramDmgCooldown};
 this.selfImpactDrop = ${this.selfImpactDrop}; this.selfScale = ${this.selfScale};
-this.wreckDespawn = ${this.wreckDespawn}; this.wreckMass = ${this.wreckMass}; this.disableReinforceMult = ${this.disableReinforceMult};`);
+this.wreckDespawn = ${this.wreckDespawn}; this.wreckMass = ${this.wreckMass}; this.disableReinforceMult = ${this.disableReinforceMult};
+this.copHealthPerLevel = ${this.copHealthPerLevel};`);
   }
 
   // Dump the director's maneuver/box tuning, paste-ready for the PursuitDirector ctor.
@@ -2067,12 +2096,30 @@ this.boxTriggerSpeed = ${d.boxTriggerSpeed}; this.boxReleaseSpeed = ${d.boxRelea
       f.close();
     }
 
-    this._persistPanel(gui, "gd_pursuitLevel3"); // bumped: per-level spans + bleed profile + L1-5
+    gui
+      .add({ copy: () => this._copyPursuitLevels() }, "copy")
+      .name("Copy Levels → Console");
+
+    this._persistPanel(gui, "gd_pursuitLevel4"); // bumped: reinforce values rebaked
 
     gui.domElement.style.position = "fixed";
     gui.domElement.style.top = "8px";
     gui.domElement.style.left = "320px";
     gui.domElement.style.zIndex = "9999";
+  }
+
+  // Paste-ready dump of the live pursuit-level tuning (numbers only — rosters/roadblock flags
+  // stay authored in code). Drop into PursuitLevel.defaultConfig.
+  _copyPursuitLevels() {
+    const P = this.pursuitLevel, b = P.bleed;
+    let s = `// --- Pursuit levels (paste numbers into PursuitLevel.defaultConfig) ---
+activeRate: ${P.activeRate}, ramHeat: ${P.ramHeat}, heatFloor: ${P.heatFloor}, disableHeat: ${P.disableHeat},
+bleed: { fastFrac: ${b.fastFrac}, fastRate: ${b.fastRate}, slowRate: ${b.slowRate} },\n`;
+    for (let lv = 1; lv <= P.maxLevel; lv++) {
+      const L = P.levels[lv], span = lv < P.maxLevel ? L.span : 0;
+      s += `// L${lv}: span ${span}, cap ${L.cap}, reinforce ${L.reinforce}, cooldown ${L.cooldown}, reaction ${L.reaction}, boxTrigger ${L.boxTrigger}\n`;
+    }
+    console.log(s);
   }
 
   _buildWorld() {
