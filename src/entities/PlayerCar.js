@@ -11,6 +11,9 @@ export class PlayerCar extends Vehicle {
       displayHeight: 66,
       bodySize: 30,        // square backstop ≈ the (narrower) car width; capsule does the real work
       depth: 10,
+      // Rotate about a point behind centre so the nose leads the turn (less floaty). Tunable live
+      // in the car panel ("Rear pivot"); cops keep 0 (centre yaw) for their path-following.
+      stats: { pivotOffset: 16 },
     });
   }
 }

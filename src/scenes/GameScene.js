@@ -2592,6 +2592,9 @@ this.boxTriggerSpeed = ${d.boxTriggerSpeed}; this.boxReleaseSpeed = ${d.boxRelea
     steering
       .add(car, "maxDriftAngle", 0.5, Math.PI * 0.95, 0.01)
       .name("Max Drift Angle (rad)");
+    steering
+      .add(car, "pivotOffset", 0, 40, 1)
+      .name("Rear pivot (nose-lead)"); // 0 = centre yaw (floaty); higher = front leads more
 
     const drag = gui.addFolder("Drag");
     drag
@@ -2652,7 +2655,7 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
     cap.add(this, "playerCapHalfLen", 0, 40, 1).name("Spine half-length");
 
     // Persist across refresh (binds directly to the car, so load sets car fields).
-    this._persistPanel(gui, "gd_carTuning_v2"); // bumped: player capsule -10% sizes rebaked
+    this._persistPanel(gui, "gd_carTuning_v3"); // bumped: added rear-pivot (nose-lead) steering
 
     gui.domElement.style.position = "fixed";
     gui.domElement.style.top = "8px";

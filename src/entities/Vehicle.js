@@ -49,6 +49,10 @@ export class Vehicle {
     // "can't pivot in place" feel; cops use a higher value so they can always
     // rotate out of a low-speed deadlock instead of getting stuck facing a wall.
     this.minSteerFactor  = 0;
+    // Rear-axle pivot: how far BEHIND centre (px) the car rotates about while steering. 0 = yaw
+    // about the centre (reads floaty / spins in place); >0 keeps a rear point planted so the NOSE
+    // swings into the turn and the tail tracks it — the front "leads". Player-only by default.
+    this.pivotOffset     = 0;
 
     this.handBrakeDrag  = 0.975;
     this.coastDrag      = 0.992;
@@ -143,7 +147,21 @@ export class Vehicle {
     const steerFrac   = Math.min(speed / this.gripSpeedRef, 1);
     const turnRate    = Phaser.Math.Linear(this.turnSpeedLow, this.turnSpeed, steerFrac);
     const steer       = (right ? 1 : 0) - (left ? 1 : 0);
-    this.facing += steer * turnRate * speedFactor * dt;
+    const turnDelta   = steer * turnRate * speedFactor * dt;
+    this.facing += turnDelta;
+
+    // Rear-axle pivot: shift the body so the rotation keeps a point `pivotOffset` behind centre
+    // fixed (the nose swings into the turn, the tail tracks) instead of spinning about the centre.
+    // Only while genuinely rolling and not drifting (the handbrake kick owns the rear during a slide).
+    if (this.pivotOffset !== 0 && turnDelta !== 0 && speed > 30 && !handbrake) {
+      const fOld = this.facing - turnDelta;
+      const dx = this.pivotOffset * (Math.cos(this.facing) - Math.cos(fOld));
+      const dy = this.pivotOffset * (Math.sin(this.facing) - Math.sin(fOld));
+      this.sprite.x += dx;
+      this.sprite.y += dy;
+      const b = this.sprite.body;
+      if (b) { b.x += dx; b.y += dy; } // move the Arcade body too (capsule reads from the sprite centre)
+    }
 
     // Drift angle cap: during a handbrake, facing can't deviate more than
     // maxDriftAngle from the velocity vector. Simulates front-wheel grip
