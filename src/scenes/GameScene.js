@@ -203,7 +203,8 @@ export class GameScene extends Phaser.Scene {
     this.wreckMass = 0.8; // disabled cop body mass — light, so you shove it aside
     this.copHealthPerLevel = 0.1; // +fraction of base health per pursuit level above 1 (heat buff:
     // a cop spawned at L3 has +20% health). Applied at spawn from the level then; 0 = off.
-    this.disableReinforceMult = 1.3; // replacement after a disable takes this × the normal reinforce
+    this.disableReinforceMult = 0.4; // after a disable, wait only this × the normal reinforce interval
+    // (capped — never slower). <1 = refill the gap fast so disabling doesn't make the chase easier.
 
     // --- Placed roadblocks (static set-pieces, NOT cap units; player-only collider) ---
     // A formation spans the street across `rbBlockedMin..Max` of its width (the rest is a
@@ -1143,8 +1144,12 @@ export class GameScene extends Phaser.Scene {
 
     if (this.pursuitLevel) {
       this.pursuitLevel.onCopDisabled(); // heat spike
-      this._reinforceTimer =
-        this.pursuitLevel.cfg().reinforce * this.disableReinforceMult;
+      // Refill the gap FASTER after a disable (Math.min → never slower than the pending timer), so
+      // wrecking a cop doesn't thin the pack into an easy ditch — especially at low-cap early levels.
+      this._reinforceTimer = Math.min(
+        this._reinforceTimer,
+        this.pursuitLevel.cfg().reinforce * this.disableReinforceMult,
+      );
     }
     if (this.copLog)
       console.log(
@@ -1802,13 +1807,13 @@ this.interceptAheadDist = ${this.interceptAheadDist}; this.interceptEntrySpeed =
     dis
       .add(this, "wreckMass", 0.05, 2, 0.05)
       .name("Wreck mass (shove-ability)");
-    dis.add(this, "disableReinforceMult", 1, 3, 0.1).name("Replace delay ×");
+    dis.add(this, "disableReinforceMult", 0, 2, 0.05).name("Replace-after-disable ×");
 
     gui
       .add({ copy: () => this._copyHealthStats() }, "copy")
       .name("Copy Health → Console");
 
-    this._persistPanel(gui, "gd_healthTune_v7"); // bumped: decoupled cop↔cop ram threshold/mult
+    this._persistPanel(gui, "gd_healthTune_v8"); // bumped: disableReinforceMult inverted (faster refill)
 
     gui.domElement.style.position = "fixed";
     gui.domElement.style.top = "8px";

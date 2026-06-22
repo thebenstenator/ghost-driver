@@ -53,7 +53,7 @@ export const TOOLTIPS = {
   copCopRamMult: "Cop↔cop damage as a fraction of base ram damage. Lower (or 0) so cops barely hurt each other.",
   wreckDespawn: "Seconds a disabled wreck stays as an obstacle. Raise to leave wrecks around longer.",
   wreckMass: "Disabled cop body weight. Lower to shove wrecks aside more easily.",
-  disableReinforceMult: "Replacement-spawn delay multiplier after you disable a cop. Raise so a disable buys more breathing room.",
+  disableReinforceMult: "Fraction of the normal reinforcement interval to wait after YOU disable a cop (capped — never slower). Lower = the gap refills faster so disabling doesn't thin the pack into an easy ditch.",
   copHealthPerLevel: "Extra fraction of base health per pursuit level above 1 (heat buff). Raise to make the pack tankier as heat rises.",
   health: "Damage this unit type soaks before it's disabled. Raise to make it tankier.",
   mass: "Unit weight — ram exchange, shove resistance, and damage division. Raise to make it shove harder and take less ram damage.",
