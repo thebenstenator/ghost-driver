@@ -948,55 +948,59 @@ export class GameScene extends Phaser.Scene {
     );
   }
 
-  // Cop damage + disabling, scripted from POSITIONS/VELOCITIES (no collider geometry — see
-  // the head-on/rear-end/T-bone note on the tunables). Runs in pursuit AND the testbed so
-  // disabling can be developed by ramming. Reads velocities at the TOP of the frame (pre-
-  // physics), so a hit's onset uses the real approach speed.
+  // Cop SELF-damage + the per-cop damage cooldown. Player↔cop RAM damage is measured at the
+  // genuine capsule contact instead (see _ramDamageCop, called from _resolveCapsules) — the old
+  // proximity gate (ramContactDist) fired AFTER the solver had already bled the closing speed,
+  // so rams read as softer than they hit. This path only handles a cop crashing itself into a
+  // wall / another cop mid-aggression. Reads velocities at the TOP of the frame (pre-physics).
   _updateCopDamage(dt) {
     const px = this.car.sprite.x,
       py = this.car.sprite.y;
-    // PRE-collision velocities cached at the end of last frame (Arcade resolves collisions
-    // before scene.update, so the live velocities here are already post-impact/reduced).
-    const pvx = this._carLastVx ?? this.car.vx,
-      pvy = this._carLastVy ?? this.car.vy;
     let toDisable = null;
     for (const cop of this.cops) {
       cop._dmgCd = Math.max(0, (cop._dmgCd || 0) - dt);
       const spd = cop.getSpeed();
       const drop = (cop._prevSpeed ?? spd) - spd; // sudden loss of ACTUAL speed = a crash this frame
       cop._prevSpeed = spd;
+      // Don't double-count a hit on the PLAYER as a self-crash — that's the ram path's job.
       const near =
         Phaser.Math.Distance.Between(cop.sprite.x, cop.sprite.y, px, py) <
         this.ramContactDist;
 
-      if (cop._dmgCd <= 0) {
-        let dmg = 0;
-        if (near && !cop._wasNear) {
-          // Player↔cop hit onset: relative impact speed (head-on huge, rear-end tiny).
-          const rel = Math.hypot(
-            pvx - (cop._lastVx ?? cop.vx),
-            pvy - (cop._lastVy ?? cop.vy),
-          );
-          if (rel > this.ramThreshold)
-            dmg = ((rel - this.ramThreshold) * this.ramScale) / (cop.mass || 1);
-        } else if (
-          !near &&
-          drop > this.selfImpactDrop &&
-          this._isAggressiveRole(cop)
-        ) {
-          // Mid-aggression crash into a wall / another cop.
-          dmg =
-            ((drop - this.selfImpactDrop) * this.selfScale) / (cop.mass || 1);
-        }
+      if (
+        cop._dmgCd <= 0 &&
+        !near &&
+        drop > this.selfImpactDrop &&
+        this._isAggressiveRole(cop)
+      ) {
+        // Mid-aggression crash into a wall / another cop.
+        const dmg =
+          ((drop - this.selfImpactDrop) * this.selfScale) / (cop.mass || 1);
         if (dmg > 0) {
           cop.health -= dmg;
           cop._dmgCd = this.ramDmgCooldown;
           if (cop.health <= 0) (toDisable ||= []).push(cop);
         }
       }
-      cop._wasNear = near;
     }
     if (toDisable) for (const cop of toDisable) this._disableCop(cop);
+  }
+
+  // Player↔cop RAM damage, called from the capsule contact (_capsuleVsCapsule) at the real
+  // moment of impact. Uses the PRE-collision closing speed (the caches the solver hasn't touched
+  // yet), so a head-on does full damage no matter how fast the solver then bleeds it off. One
+  // tick per ram via the shared _dmgCd cooldown. Disable is deferred (the caller drains the list
+  // after the agent loop, so this.cops isn't mutated mid-resolve).
+  _ramDamageCop(cop) {
+    if (cop.disabled || (cop._dmgCd || 0) > 0) return;
+    const rel = Math.hypot(
+      (this._carLastVx ?? this.car.vx) - (cop._lastVx ?? cop.vx),
+      (this._carLastVy ?? this.car.vy) - (cop._lastVy ?? cop.vy),
+    );
+    if (rel <= this.ramThreshold) return;
+    cop.health -= ((rel - this.ramThreshold) * this.ramScale) / (cop.mass || 1);
+    cop._dmgCd = this.ramDmgCooldown;
+    if (cop.health <= 0) (this._capDisable ||= []).push(cop);
   }
 
   // Disable a cop: spin it out, drop it from the active pack, leave it as a low-mass wreck
@@ -1213,6 +1217,9 @@ export class GameScene extends Phaser.Scene {
     }
     // Roadblock car visuals follow their (just-pushed) body — keep the art on the collider.
     for (const a of agents) if (a.rbCar) a.rbCar.img.setPosition(a.v.sprite.x, a.v.sprite.y);
+    // Cops killed by ram damage this frame are disabled now (deferred so this.cops wasn't
+    // mutated mid-resolve). Their stale agents finish this frame harmlessly as zeroed wrecks.
+    if (this._capDisable) { for (const cop of this._capDisable) this._disableCop(cop); this._capDisable = null; }
     if (this.capDebug) {
       this.capDebug.clear();
       for (const a of agents) {
@@ -1293,8 +1300,8 @@ export class GameScene extends Phaser.Scene {
     // bog when the player takes a frontal cop hit. (cnx,cny) is the a→b normal.
     if (a.player && b.rbCar) this._onRoadblockHit(b.rbCar.body);
     else if (b.player && a.rbCar) this._onRoadblockHit(a.rbCar.body);
-    else if (a.player && !b.rbCar) this._applyRamImpact(b.v, cnx, cny);       // b is a cop
-    else if (b.player && !a.rbCar) this._applyRamImpact(a.v, -cnx, -cny);     // a is a cop
+    else if (a.player && !b.rbCar) { this._applyRamImpact(b.v, cnx, cny); this._ramDamageCop(b.v); }     // b is a cop
+    else if (b.player && !a.rbCar) { this._applyRamImpact(a.v, -cnx, -cny); this._ramDamageCop(a.v); }   // a is a cop
   }
 
   // A FRONTAL high-closing-speed cop hit dumps extra player speed and bogs the engine briefly,
