@@ -206,6 +206,15 @@ export class GameScene extends Phaser.Scene {
     this.rbHeavyMass   = 2.7;  // a heavy's mass — much harder to push through
     this.rbCarDrag     = 600;  // px/s² drag so a shoved car settles instead of sliding forever
     this.rbLifetime    = 30;   // s a placed block lasts before it despawns
+    this.rbSpikeChance = 0.4;  // chance a non-anchor roadblock slot is a SPIKE STRIP (difficulty 3+)
+    this.rbSpikeWidth  = 76;   // px across — roadblock spike strips stay WIDE (vs the car-width cop drop)
+    // Pursuit-side roadblock auto-spawn: from level roadblockMinLevel, drop one ahead every
+    // roadblockInterval s while you're moving. Difficulty is derived from the level (L3 light →
+    // L5 max), so blocks intensify as the chase escalates.
+    this.roadblockMinLevel = 3;   // lowest pursuit level that auto-spawns roadblocks
+    this.roadblockInterval = 22;  // s between auto-spawned roadblocks
+    this.roadblockMinSpeed = 120; // only place ahead while you're actually moving this fast
+    this._roadblockTimer   = 8;   // s until the next auto-spawn (small initial delay)
     // Scripted spin (Arcade has no angular physics): an OFF-CENTRE hit torques the car so it
     // rotates out of the way — hardest/best at the ends (the MW rear-quarter).
     this.rbSpinFactor  = 0.0004; // hit offset × your speed → spin impulse (÷ car mass)
@@ -639,7 +648,7 @@ export class GameScene extends Phaser.Scene {
       // An 'ahead-of-travel' unit (interceptor) that's fallen behind respawns AHEAD to
       // retry the head-on, not behind via the flank relocator — that's its whole loop.
       const ahead = cop.unitDef && cop.unitDef.placement === "ahead-of-travel";
-      const isHeavy = cop.unitDef && cop.unitDef.ability === "block";
+      const isHeavy = cop.unitType === "heavy";
       // Heavy respawns are rate-limited pack-wide: only ONE may come back at a time, then not
       // again for heavyRespawnCooldown — two heavy roadblocks ahead at once is overpowered.
       if (isHeavy && this._heavyRespawnCd > 0) continue;
@@ -1117,17 +1126,25 @@ export class GameScene extends Phaser.Scene {
   }
 
   // --- Placed roadblocks --------------------------------------------------------------
-  // The composition per difficulty (= pursuit level). Cars parked BROADSIDE end-to-end;
-  // 2+ are biased to one side so a gap to slip through is left on the other. Heavies join
-  // at the top tiers (heavier → harder to shove). (Spike-strip slots from L3 up are a TODO.)
+  // The composition per difficulty. Cars parked BROADSIDE end-to-end; 2+ are biased to one
+  // side so a gap to slip through is left on the other. Heavies join at the top tiers. From
+  // difficulty 3+, a non-anchor slot MAY (by chance, not always) be a SPIKE STRIP instead of a
+  // vehicle — always keep ≥1 car (the first slot is the anchor).
   _roadblockComposition(difficulty) {
-    switch (Phaser.Math.Clamp(Math.round(difficulty), 1, 5)) {
-      case 1:  return ['car'];
-      case 2:  return ['car', 'car'];
-      case 3:  return ['car', 'car', 'car'];
-      case 4:  return ['car', 'car', 'heavy'];
-      default: return ['car', 'heavy', 'heavy'];
+    const d = Phaser.Math.Clamp(Math.round(difficulty), 1, 5);
+    let comp;
+    switch (d) {
+      case 1:  comp = ['car']; break;
+      case 2:  comp = ['car', 'car']; break;
+      case 3:  comp = ['car', 'car', 'car']; break;
+      case 4:  comp = ['car', 'car', 'heavy']; break;
+      default: comp = ['car', 'heavy', 'heavy'];
     }
+    if (d >= 3) {
+      for (let i = 1; i < comp.length; i++)
+        if (Math.random() < this.rbSpikeChance) comp[i] = 'spike';
+    }
+    return comp;
   }
 
   // Drop a roadblock at road point (x,y) across the player's travel `heading`. Each vehicle
@@ -1142,6 +1159,7 @@ export class GameScene extends Phaser.Scene {
     const SPEC = {
       car:   { tex: 'cop_patrol', visW: 25, visL: 58, body: 23, capR: 11, capHalfLen: 16, mass: this.rbCarMass },
       heavy: { tex: 'cop_heavy',  visW: 32, visL: 67, body: 27, capR: 14, capHalfLen: 18, mass: this.rbHeavyMass },
+      spike: { spike: true, visL: this.rbSpikeWidth }, // a strip filling this slot (no vehicle)
     };
     const specs = this._roadblockComposition(difficulty).map((t) => SPEC[t]);
     const totalLen = specs.reduce((s, v) => s + v.visL, 0);
@@ -1153,11 +1171,18 @@ export class GameScene extends Phaser.Scene {
       : -totalLen / 2;
 
     const cars = [];
+    const strips = [];
     let cursor = start;
     for (const s of specs) {
       const off = cursor + s.visL / 2;
       const ix = x + cpx * off, iy = y + cpy * off;
       cursor += s.visL;
+      if (s.spike) {
+        // Spike-strip slot: lay a wide strip across this part of the road (no vehicle). Tracked
+        // on the block so it lives + dies with it. (Hazard effect TBD — visual for now.)
+        strips.push(this._dropSpike({ x: ix, y: iy, heading: snapped }, s.visL, this.rbLifetime));
+        continue;
+      }
       // Small SQUARE dynamic body (drag + velocity integrator + wall backstop); the rotating
       // capsule (capR/capHalfLen) does the real player/cop collision, so the body needn't be
       // the car's full footprint — a square that can't block slip-through, like the cops.
@@ -1176,9 +1201,19 @@ export class GameScene extends Phaser.Scene {
       body.rbCar = car;                            // so the spin trigger can find it
       cars.push(car);
     }
-    const rb = { x, y, heading: snapped, cars };
+    const rb = { x, y, heading: snapped, cars, strips };
     this.roadblocks.push(rb);
     return rb;
+  }
+
+  // Roadblock difficulty derived from the pursuit level: L3 light → L4 escalating (sub-phase via
+  // progress through the level) → L5 max. Sandbox falls back to the testbed difficulty dial.
+  _roadblockDifficulty() {
+    if (!this.pursuitLevel) return this._rbDifficulty || 2;
+    const lvl = this.pursuitLevel.level;
+    if (lvl <= 3) return 1;
+    if (lvl === 4) return this.pursuitLevel.heatFraction() > 0.5 ? 3 : 2;
+    return 5; // L5 — max
   }
 
   // Place a roadblock down the player's predicted travel (for the testbed Spawn button).
@@ -1192,6 +1227,8 @@ export class GameScene extends Phaser.Scene {
 
   _removeRoadblock(rb) {
     for (const c of rb.cars) { c.body.destroy(); c.img.destroy(); }
+    if (rb.strips && rb.strips.length)
+      this.spikes = this.spikes.filter((s) => !rb.strips.includes(s));
     this.roadblocks = this.roadblocks.filter((r) => r !== rb);
   }
 
@@ -1234,9 +1271,11 @@ export class GameScene extends Phaser.Scene {
   // DRAFT: this lays down a ~car-width strip oriented across the player's path and tracks it; the
   // HAZARD effect (pop the player's tires on contact) is the next step. Kept as data + a drawn
   // placeholder so the deploy maneuver is fully testable now.
-  _dropSpike({ x, y, heading }, len = this.spikeStripLen) {
+  _dropSpike({ x, y, heading }, len = this.spikeStripLen, life = this.spikeLifetime) {
     const angle = heading + Math.PI / 2; // strip lies ACROSS the direction of travel
-    this.spikes.push({ x, y, angle, len, depth: 12, t: 0 });
+    const strip = { x, y, angle, len, depth: 12, t: 0, life };
+    this.spikes.push(strip);
+    return strip;
   }
 
   // Age out deployed strips and redraw them. (Collision/tire-pop wiring comes next.)
@@ -1246,9 +1285,10 @@ export class GameScene extends Phaser.Scene {
     if (!this.spikes.length) return;
     for (const s of [...this.spikes]) {
       s.t += dt;
-      if (s.t > this.spikeLifetime) { this.spikes = this.spikes.filter((o) => o !== s); continue; }
+      const life = s.life ?? this.spikeLifetime;
+      if (s.t > life) { this.spikes = this.spikes.filter((o) => o !== s); continue; }
       // Fade out over the last 3s of life.
-      const fade = Phaser.Math.Clamp((this.spikeLifetime - s.t) / 3, 0, 1);
+      const fade = Phaser.Math.Clamp((life - s.t) / 3, 0, 1);
       const cos = Math.cos(s.angle), sin = Math.sin(s.angle), hl = s.len / 2, hd = s.depth / 2;
       // strip body (drawn as an absolute-point polygon — no transform needed)
       g.fillStyle(0x222222, 0.55 * fade);
@@ -1488,6 +1528,8 @@ export class GameScene extends Phaser.Scene {
     rbf.add(this, "rbCarDrag", 100, 1500, 50).name("Shoved-car drag");
     rbf.add(this, "rbLifetime", 5, 90, 5).name("Lifetime (s)");
     rbf.add(this, "rbSpinFactor", 0, 0.002, 0.0001).name("Spin on off-centre hit");
+    rbf.add(this, "rbSpikeChance", 0, 1, 0.05).name("Spike-strip chance (diff 3+)");
+    rbf.add(this, "roadblockInterval", 5, 60, 1).name("Auto-spawn every (s)");
     rbf.close();
 
     // Swarm feel: capsule solver quality (anti-jitter + containment) and frontal-ram impact.
@@ -1569,13 +1611,6 @@ export class GameScene extends Phaser.Scene {
     box.add(d, "boxContactGap", 0, 150, 5).name("Rear hold gap (px)");
     box.add(d, "boxPress", 0, 200, 5).name("Rear press above pace (px/s)");
     box.add(d, "boxFrontAhead", 0, 150, 5).name("Front-runner ahead-by (px)");
-
-    const rb = gui.addFolder("Heavy roadblock");
-    rb.add(d, "blockSetupDist", 80, 600, 10).name("Latch point ahead (px)");
-    rb.add(d, "blockParkDist", 30, 200, 5).name("Park within (px)");
-    rb.add(d, "blockAheadMin", 0, 200, 5).name("Start when ahead-by (px)");
-    rb.add(d, "blockMaxTime", 1, 15, 0.5).name("Hold a block (s)");
-    rb.add(d, "blockCooldown", 0, 12, 0.5).name("Cooldown between (s)");
 
     const pit = gui.addFolder("PIT maneuver");
     pit.add(this, "pitTestLevel", 1, 5, 1).name("Sandbox level (power)");
@@ -3186,6 +3221,20 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
       // A spike unit that reached its deploy point queued a drop — build the strip + clear it.
       for (const cop of this.cops) {
         if (cop._spikeDrop) { this._dropSpike(cop._spikeDrop); cop._spikeDrop = null; }
+      }
+      // Auto-spawn roadblocks ahead from L3+, on a timer, while you're moving. Difficulty rises
+      // with the level (L3 light → L5 max). Cleared by their lifetime; spawning stops on ditch.
+      if (
+        this.pursuitLevel &&
+        this.pursuitLevel.level >= this.roadblockMinLevel &&
+        this.pursuitLevel.cfg().roadblocks
+      ) {
+        this._roadblockTimer -= delta / 1000;
+        if (this._roadblockTimer <= 0) {
+          if (this.car.getSpeed() > this.roadblockMinSpeed)
+            this._spawnRoadblockAhead(this._roadblockDifficulty());
+          this._roadblockTimer = this.roadblockInterval;
+        }
       }
     }
 

@@ -114,12 +114,13 @@ export const UNITS = {
     },
     ai:         {},                  // SAME decision tunables as patrol (identical brain)
     placement:  'ahead-of-travel',
-    role:       'block',
+    role:       'pursue',            // tanky head-on unit + pursuer (solo-roadblock removed — the
+                                     // static roadblock formation handles road-blocking now)
     health:     220,                 // tanky — multiple committed rams to put down
     mass:       2.4,                 // heavy enough that a head-on mass exchange alone ~stops you
     ramStrength: 1.0,                // a frontal heavy hit is a near-complete stop
     priority:   3,                   // top threat — retired last
-    ability:    'block',
+    ability:    null,
   },
 
   // Spike unit (L5). The spike-strip cruiser: it NEVER rams — it gets AHEAD of the player and

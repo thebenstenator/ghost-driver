@@ -350,38 +350,6 @@ export class PursuitDirector {
           const d = this._dist(cop, px, py);
           speedCap = speed + this.boxPress + this.boxCloseMargin * Phaser.Math.Clamp((d - this.boxContactGap) / 120, 0, 1);
         }
-      } else if (cop.unitDef && cop.unitDef.ability === 'block') {
-        // HEAVY mobile solo roadblock (draft). Latch a fixed road point ahead, drive there
-        // (shared brain), then PARK BROADSIDE (CopCar park override reads cop.parkAngle).
-        cop._blockCd = Math.max(0, (cop._blockCd || 0) - dt);
-        if (cop._blockPoint) {
-          cop._blockT += dt;
-          const bp = cop._blockPoint;
-          const passed = (px - bp.x) * Math.cos(cop._blockHeading) + (py - bp.y) * Math.sin(cop._blockHeading) > 30;
-          if (passed || cop._blockT > this.blockMaxTime ||
-              Math.hypot(px - bp.x, py - bp.y) > this.blockGiveUpDist) {
-            cop._blockPoint = null; cop._blockCd = this.blockCooldown;   // release
-          }
-        } else if (this._along(cop, px, py, h) > this.blockAheadMin && cop._blockCd <= 0) {
-          const tx = px + Math.cos(h) * this.blockSetupDist, ty = py + Math.sin(h) * this.blockSetupDist;
-          const n = this.nav.pos(this.nav.nearestNode(tx, ty));
-          cop._blockPoint = { x: n.x, y: n.y }; cop._blockHeading = h; cop._blockT = 0;
-        }
-
-        if (cop._blockPoint) {
-          target = cop._blockPoint;
-          if (Math.hypot(cop.sprite.x - target.x, cop.sprite.y - target.y) < this.blockParkDist) {
-            cop.role = CopState.ROADBLOCK;
-            // Broadside = perpendicular to the latched heading; pick the nearer of the two.
-            const perp = cop._blockHeading + Math.PI / 2, alt = perp + Math.PI;
-            const wrap = a => Math.atan2(Math.sin(a - cop.facing), Math.cos(a - cop.facing));
-            cop.parkAngle = Math.abs(wrap(perp)) <= Math.abs(wrap(alt)) ? perp : alt;
-          } else {
-            cop.role = CopState.BLOCK;        // still driving to the block point
-          }
-        } else {
-          cop.role = CopState.PURSUE; target = { x: px, y: py };  // behind → chase (then respawn ahead)
-        }
       } else {
         cop.role = CopState.PURSUE;
         target = { x: px, y: py };           // everyone just chases the player's real position
