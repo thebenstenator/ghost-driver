@@ -190,9 +190,9 @@ export class GameScene extends Phaser.Scene {
     this.ramThreshold = 150; // relative impact speed (px/s) below which a hit does NOTHING
     this.ramScale = 0.12; // cop damage per px/s of relative impact above the threshold
     this.ramContactDist = 40; // px centre-distance counted as a player↔cop hit
-    this.ramDmgCooldown = 0.4; // s between damage ticks on one cop (so a single ram = one tick)
-    this.selfImpactDrop = 150; // px/s sudden speed loss in a frame that reads as a CRASH (> braking)
-    this.selfScale = 0.1; // cop self-damage per px/s of crash, while mid-aggressive-action
+    this.ramDmgCooldown = 0.7; // s between damage ticks on one cop (so a single ram = one tick)
+    this.selfImpactDrop = 200; // px/s sudden speed loss in a frame that reads as a CRASH (> braking)
+    this.selfScale = 0.05; // cop self-damage per px/s of crash, while mid-aggressive-action
     this.wreckDespawn = 30; // s a disabled wreck sits as an obstacle before it's removed
     this.wreckMass = 0.8; // disabled cop body mass — light, so you shove it aside
     this.copHealthPerLevel = 0.1; // +fraction of base health per pursuit level above 1 (heat buff:
@@ -208,6 +208,7 @@ export class GameScene extends Phaser.Scene {
     this.rbHeavyMass   = 2.7;  // a heavy's mass — much harder to push through
     this.rbCarDrag     = 600;  // px/s² drag so a shoved car settles instead of sliding forever
     this.rbLifetime    = 30;   // s a placed block lasts before it despawns
+    this.rbDamageMult  = 1.5;  // ram-through damage multiplier for block cars (toughness = health, NOT shove mass)
     this.rbSpikeChance = 0.4;  // chance a non-anchor roadblock slot is a SPIKE STRIP (difficulty 3+)
     this.rbSpikeWidth  = 76;   // px across — roadblock spike strips stay WIDE (vs the car-width cop drop)
     // Pursuit-side roadblock auto-spawn: from level roadblockMinLevel, drop one ahead every
@@ -1083,7 +1084,10 @@ export class GameScene extends Phaser.Scene {
     if (c._dead || c.health == null || (c._dmgCd || 0) > 0) return;
     const rel = Math.hypot(rbAgent.preVx - otherAgent.preVx, rbAgent.preVy - otherAgent.preVy);
     if (rel <= this.ramThreshold) return;
-    c.health -= ((rel - this.ramThreshold) * this.ramScale) / (c.mass || 1);
+    // NOT divided by the car's (high) shove mass — that's for resisting the PUSH, not the damage.
+    // Toughness comes from health (heavy 220 vs car 100); rbDamageMult lets you ram through in a
+    // few committed hits rather than a dozen.
+    c.health -= (rel - this.ramThreshold) * this.ramScale * this.rbDamageMult;
     c._dmgCd = this.ramDmgCooldown;
     if (c.health <= 0) { c._dead = true; (this._capRbDead ||= []).push(c); }
   }
@@ -1535,9 +1539,10 @@ export class GameScene extends Phaser.Scene {
       g.fillStyle(col, 1);
       g.fillRect(x, y, w * frac, h);
     }
-    // Roadblock car health — only once DAMAGED (a fresh block would be a wall of full bars).
+    // Roadblock car health — shown on every block car (a block is only 1–3 cars, so it's clear
+    // feedback that they're damageable, not clutter).
     for (const rb of this.roadblocks) for (const c of rb.cars) {
-      if (c.health == null || c.health >= c.maxHealth) continue;
+      if (c.health == null) continue;
       const frac = Phaser.Math.Clamp(c.health / c.maxHealth, 0, 1);
       const x = c.body.x - w / 2, y = c.body.y - 36;
       g.fillStyle(0x000000, 0.7);
@@ -1581,6 +1586,7 @@ export class GameScene extends Phaser.Scene {
     rbf.add(this, "rbCarDrag", 100, 1500, 50).name("Shoved-car drag");
     rbf.add(this, "rbLifetime", 5, 90, 5).name("Lifetime (s)");
     rbf.add(this, "rbSpinFactor", 0, 0.002, 0.0001).name("Spin on off-centre hit");
+    rbf.add(this, "rbDamageMult", 0, 5, 0.1).name("Ram-through damage ×");
     rbf.add(this, "rbSpikeChance", 0, 1, 0.05).name("Spike-strip chance (diff 3+)");
     rbf.add(this, "roadblockInterval", 5, 60, 1).name("Auto-spawn every (s)");
     rbf.close();
@@ -1787,7 +1793,7 @@ this.interceptAheadDist = ${this.interceptAheadDist}; this.interceptEntrySpeed =
       .add({ copy: () => this._copyHealthStats() }, "copy")
       .name("Copy Health → Console");
 
-    this._persistPanel(gui, "gd_healthTune_v5"); // bumped: ramScale 0.12 + selfScale 0.1 corrected
+    this._persistPanel(gui, "gd_healthTune_v6"); // bumped: self-damage softened (cooldown/drop/scale)
 
     gui.domElement.style.position = "fixed";
     gui.domElement.style.top = "8px";
