@@ -7,9 +7,9 @@ export class PlayerCar extends Vehicle {
   constructor(scene, x, y) {
     super(scene, x, y, {
       texture: 'player_car',
-      displayWidth: 46,    // bumped to read at the cops' (tight-cropped) on-screen size
-      displayHeight: 73,   // keeps the prowler's 0.633 aspect (no distortion)
-      bodySize: 36,        // collider scaled to match the bigger sprite
+      displayWidth: 37,    // new prowler art is sleeker (0.51 aspect) — keep length, narrower
+      displayHeight: 73,
+      bodySize: 34,        // square backstop ≈ the (narrower) car width; capsule does the real work
       depth: 10,
     });
   }
