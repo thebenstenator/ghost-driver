@@ -43,7 +43,10 @@ export class Vehicle {
     this.brakeForce      = 275;
     this.reverseAccel    = 200;
     this.turnSpeedLow    = 2.2;   // radians/second at low speed
-    this.turnSpeed       = 1.2;   // radians/second at high speed (gripSpeedRef)
+    this.turnSpeed       = 0.95;  // radians/second at high speed (gripSpeedRef)
+    this.turnSpeedHandbrake = 1.2; // high-speed turn rate WHILE handbraking — kept higher than the
+                                   // grippy on-throttle turnSpeed so a handbrake still whips the nose
+                                   // around. (Player-only in practice; cops don't handbrake.)
     this.maxDriftAngle   = 1.9163715186897738; // ~110°
     // Floor on steering authority at low speed. 0 = the player's weighty
     // "can't pivot in place" feel; cops use a higher value so they can always
@@ -60,7 +63,7 @@ export class Vehicle {
     this.accelDragCurve = 0.018; // subtracted as speedFraction² × this value
 
     this.gripLow        = 0.14;  // grip at near-zero speed
-    this.gripHigh       = 0.03;  // grip at gripSpeedRef
+    this.gripHigh       = 0.1;   // grip at gripSpeedRef (raised — the car bites at speed, less floaty)
     this.gripSpeedRef   = 350;   // speed (px/s) at which gripHigh is fully reached
     this.gripHandbrake  = 0.008; // grip during handbrake drift
 
@@ -145,7 +148,10 @@ export class Vehicle {
     // Speed-gated so the car can't spin on the spot.
     const speedFactor = Math.max(Phaser.Math.Clamp(speed / 60, 0, 1), this.minSteerFactor);
     const steerFrac   = Math.min(speed / this.gripSpeedRef, 1);
-    const turnRate    = Phaser.Math.Linear(this.turnSpeedLow, this.turnSpeed, steerFrac);
+    // Handbrake uses its own high-speed turn rate so a planted (low turnSpeed) on-throttle feel
+    // doesn't make the handbrake sluggish — the slide still whips the nose around.
+    const highTurn    = handbrake ? this.turnSpeedHandbrake : this.turnSpeed;
+    const turnRate    = Phaser.Math.Linear(this.turnSpeedLow, highTurn, steerFrac);
     const steer       = (right ? 1 : 0) - (left ? 1 : 0);
     const turnDelta   = steer * turnRate * speedFactor * dt;
     this.facing += turnDelta;

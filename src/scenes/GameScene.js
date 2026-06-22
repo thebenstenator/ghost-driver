@@ -2590,6 +2590,9 @@ this.boxTriggerSpeed = ${d.boxTriggerSpeed}; this.boxReleaseSpeed = ${d.boxRelea
       .add(car, "turnSpeed", 0.5, 8.0, 0.05)
       .name("Turn Speed high (rad/s)");
     steering
+      .add(car, "turnSpeedHandbrake", 0.5, 8.0, 0.05)
+      .name("Turn Speed high — handbrake");
+    steering
       .add(car, "maxDriftAngle", 0.5, Math.PI * 0.95, 0.01)
       .name("Max Drift Angle (rad)");
     steering
@@ -2631,6 +2634,7 @@ this.brakeForce      = ${s.brakeForce};
 this.reverseAccel    = ${s.reverseAccel};
 this.turnSpeedLow    = ${s.turnSpeedLow};
 this.turnSpeed       = ${s.turnSpeed};
+this.turnSpeedHandbrake = ${s.turnSpeedHandbrake};
 this.maxDriftAngle   = ${s.maxDriftAngle};
 this.handBrakeDrag   = ${s.handBrakeDrag};
 this.coastDrag       = ${s.coastDrag};
@@ -2655,7 +2659,7 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
     cap.add(this, "playerCapHalfLen", 0, 40, 1).name("Spine half-length");
 
     // Persist across refresh (binds directly to the car, so load sets car fields).
-    this._persistPanel(gui, "gd_carTuning_v3"); // bumped: added rear-pivot (nose-lead) steering
+    this._persistPanel(gui, "gd_carTuning_v4"); // bumped: baked grip/turn + handbrake turn-rate lever
 
     gui.domElement.style.position = "fixed";
     gui.domElement.style.top = "8px";
