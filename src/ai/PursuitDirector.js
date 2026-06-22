@@ -108,39 +108,35 @@ export class PursuitDirector {
     this.blockGiveUpDist = 1100; // px from the block point beyond which it gives up
     this.blockCooldown   = 3.0;  // s after a block before it sets up another
 
-    // --- PIT maneuver (Pursuit Intervention Technique; see _updatePit / collisions-and-pit.md) ---
-    // One cop at a time swipes the player's REAR QUARTER co-directionally to spin them out. It's a
+    // --- PIT maneuver (Pursuit Intervention Technique; see _updatePit) ---
+    // One cop at a time presses the player's REAR QUARTER co-directionally and PUSHES — applying a
+    // steady yaw force that rotates the player. NO scripted spin animation: it's a force the player
+    // can fight with COUNTERSTEER (the push adds to facing; your steering subtracts from it). It's a
     // committed transient (single attacker, commits then cools down) like the overtake — NOT a
-    // standing role. Availability + severity are gated by level: GameScene sets pitEnabled (L2+)
-    // and pitPower (0 at the min level → 1 at L5), so a low-level PIT barely nudges and a high-level
-    // one spins you hard. The scripted spin itself lives in Vehicle.spinOut.
+    // standing role. Availability + force are level-gated: GameScene sets pitEnabled (L2+) and
+    // pitPower (0 at the min level → 1 at L5), so a low-level push is easily countersteered and a
+    // high-level one overwhelms your steering.
     this.pitMinLevel      = 2;     // lowest pursuit level at which a PIT may be attempted (L2+)
     this.pitEnabled       = false; // set per-frame by GameScene from the derived level
     this.pitPower         = 0;     // 0..1 level severity, set per-frame by GameScene
     this.pitCooldown      = 7.0;   // s between PIT attempts across the WHOLE pack (the cadence)
     this.pitUnitCooldown  = 12.0;  // s before the SAME cop may attempt another
     this.pitRange         = 240;   // px — attacker must be this close to the player to commit
-    this.pitMinSpeed      = 180;   // px/s — both the player and the attacker must be moving (a real swipe)
-    this.pitMaxTime       = 2.5;   // s an attempt runs before giving up (fail → cadence cooldown)
-    this.pitBoost         = 80;    // EXTRA top speed while committing, so it has the pace to swing in
-    // Detection geometry (rear-quarter classifier — collisions-and-pit.md §4). All vs the PLAYER frame.
-    this.pitContactDist   = 46;    // px centre-distance at which the swipe registers (square is loose)
+    this.pitMinSpeed      = 180;   // px/s — both the player and the attacker must be moving
+    this.pitMaxTime       = 2.5;   // s an attempt presses before releasing (→ cadence cooldown)
+    this.pitGiveUp        = 0.6;   // s of LOST rear-quarter contact before the attempt ends
+    this.pitBoost         = 80;    // EXTRA top speed while committing, so it has the pace to press in
+    // Detection geometry (rear-quarter classifier). All vs the PLAYER frame.
+    this.pitContactDist   = 46;    // px centre-distance at which the push registers (square is loose)
     this.pitCoDirMin      = 0.3;   // min facing·facing (co-directional → PIT, not a head-on)
     this.pitRearMax       = 12;    // along-px the attacker may be AHEAD of player centre (rear-biased)
     this.pitSideMin       = 16;    // px lateral: clearly to one SIDE (not dead behind)
     this.pitSideMax       = 58;    // px lateral: …but still in contact, not way out wide
-    this.pitClosingMin    = 35;    // px/s the attacker is turning INTO the player's centreline (the swipe)
-    // Spin severity (scaled by attacker speed × level power between the *Floor and the max).
-    this.pitRefSpeed      = 420;   // attacker speed (px/s) that counts as a "full-power" swipe
-    this.pitPowerFloor    = 0.45;  // intensity multiplier at the lowest enabled level (so L2 still does something)
-    this.pitDurMin        = 0.35;  // s of lost control at min intensity …
-    this.pitDurMax        = 0.85;  // … up to this at full intensity
-    this.pitYawMin        = 4.0;   // rad/s forced yaw at min intensity …
-    this.pitYawMax        = 9.0;   // … up to this at full intensity
-    this.pitGripMult      = 0.25;  // grip during the spin (lower = more slide, less clean pivot)
-    this.pitSpeedScrub    = 0.94;  // per-frame speed retention while spun (a PIT scrubs momentum)
-    this.pitLateralKick   = 140;   // one-time sideways velocity shove (× intensity) at impact
-    this.pitVictimCooldown = 1.0;  // s the player can't be re-PIT'd after recovering
+    // Push force (scaled by attacker speed × level power between the floor and full).
+    this.pitRefSpeed      = 420;   // attacker speed (px/s) that counts as a "full-force" push
+    this.pitPowerFloor    = 0.45;  // force multiplier at the lowest enabled level (so L2 still pushes)
+    this.pitYawRate       = 1.4;   // rad/s yaw at FULL force — compare to your high-speed turn (~0.95):
+                                   // L5 overwhelms your countersteer, L2 (×floor) is easily held
     this._pitAttacker     = null;  // the single cop currently committed to a PIT
     this._pitCd           = 0;     // pack-wide cadence timer
 
@@ -209,7 +205,7 @@ export class PursuitDirector {
     this._assignConvoy(cops, px, py, dt);
 
     // Committed PIT attempt (single attacker, pack-wide cadence). Resolved first so the
-    // attacker is excluded from the maneuver/box. May fire player.spinOut() this frame.
+    // attacker is excluded from the maneuver/box. Sets playerCar._pitYaw while pressing.
     const pitAttacker = this._updatePit(cops, playerCar, px, py, h, speed, dt);
 
     // Committed spike run (single holder, spike units) — sprint ahead then deploy a strip.
@@ -426,22 +422,33 @@ export class PursuitDirector {
   }
 
   // The committed PIT attempt. Pack-wide cadence (_pitCd) limits it to one attempt every
-  // pitCooldown seconds; the chosen cop commits (drives into the rear quarter) until it either
-  // connects (fires the spin) or times out, then everyone cools down. Returns the attacker (or null).
+  // pitCooldown seconds. The chosen cop drives into the player's rear quarter and, while in
+  // contact, PUSHES — setting playerCar._pitYaw (a yaw force the player countersteers). The
+  // attempt holds for pitMaxTime, or ends early if it loses the rear quarter for pitGiveUp.
   _updatePit(cops, playerCar, px, py, h, speed, dt) {
     this._pitCd = Math.max(0, this._pitCd - dt);
     for (const c of cops) c._pitCd = Math.max(0, (c._pitCd || 0) - dt);
+    playerCar._pitYaw = 0; // cleared unless an active PIT pushes this frame
 
     if (!this.pitEnabled) { if (this._pitAttacker) this._endPit(); return null; }
 
     let a = this._pitAttacker;
     if (a) {
-      // Drop an attacker that vanished or lost sight (it can't line up a swipe blind).
+      // Drop an attacker that vanished or lost sight (it can't line up the press blind).
       if (!cops.includes(a) || !a.hasLOS) { this._endPit(); a = null; }
       else {
         a._pitT = (a._pitT || 0) + dt;
-        if (this._tryPitStrike(a, playerCar, px, py)) { this._endPit(); a = null; }   // connected
-        else if (a._pitT > this.pitMaxTime)            { this._endPit(); a = null; }   // gave up
+        const dir = this._pitPush(a, playerCar, px, py);  // rear-quarter contact → push dir, else 0
+        if (dir !== 0) {
+          a._pitLostT = 0;
+          // Force scales with the attacker's speed and the level power (floor..1).
+          const intensity = Phaser.Math.Clamp(a.getSpeed() / this.pitRefSpeed, 0, 1)
+                          * Phaser.Math.Linear(this.pitPowerFloor, 1, Phaser.Math.Clamp(this.pitPower, 0, 1));
+          playerCar._pitYaw = this.pitYawRate * intensity * dir; // countersteerable yaw push
+        } else {
+          a._pitLostT = (a._pitLostT || 0) + dt;
+        }
+        if (a._pitT > this.pitMaxTime || (a._pitLostT || 0) > this.pitGiveUp) { this._endPit(); a = null; }
       }
     }
 
@@ -450,7 +457,7 @@ export class PursuitDirector {
       let best = null, bestD = Infinity;
       for (const c of cops) {
         if (c === this._maneuverHolder || c === this._spikeHolder || (c._pitCd || 0) > 0 || !c.hasLOS) continue;
-        if (c.unitDef && c.unitDef.ability === 'spike') continue; // spike units never ram → never PIT
+        if (c.unitDef && c.unitDef.ability === 'spike') continue; // spike units don't PIT
         if (c.getSpeed() < this.pitMinSpeed) continue;
         const d = this._dist(c, px, py);
         if (d > this.pitRange) continue;
@@ -458,17 +465,16 @@ export class PursuitDirector {
         const coDir = Math.cos(c.facing) * Math.cos(h) + Math.sin(c.facing) * Math.sin(h);
         if (coDir < this.pitCoDirMin) continue;                            // co-directional, not a head-on
         if (Math.abs(this._lateral(c, px, py, h)) < this.pitSideMin) continue; // to one side, not dead behind
-        if (d < bestD) { bestD = d; best = c; }                           // closest gets the swipe
+        if (d < bestD) { bestD = d; best = c; }                           // closest gets the press
       }
-      if (best) { best._pitT = 0; this._pitAttacker = best; a = best; }
+      if (best) { best._pitT = 0; best._pitLostT = 0; this._pitAttacker = best; a = best; }
     }
     return a;
   }
 
-  // Rear-quarter classifier (collisions-and-pit.md §4) in the PLAYER's local frame. When the
-  // attacker qualifies, fire the scripted spin on the player scaled by attacker speed × level
-  // power, and report success. Returns false until it connects.
-  _tryPitStrike(a, playerCar, px, py) {
+  // Rear-quarter classifier in the PLAYER's local frame. Returns the push DIRECTION (±1: the rear
+  // is shoved away from the attacker) while the attacker is in rear-quarter contact, else 0.
+  _pitPush(a, playerCar, px, py) {
     const tf = playerCar.facing;
     const fx = Math.cos(tf), fy = Math.sin(tf);          // player forward
     const rx = -Math.sin(tf), ry = Math.cos(tf);         // player right
@@ -476,31 +482,14 @@ export class PursuitDirector {
     const alongT = dx * fx + dy * fy;                    // + ahead of player · − behind
     const lateralT = dx * rx + dy * ry;                  // + on player's right
     const coDir = Math.cos(a.facing) * fx + Math.sin(a.facing) * fy;
-    const closingLat = -Math.sign(lateralT) * (a.vx * rx + a.vy * ry); // turning toward centreline
-    const dist = Math.hypot(dx, dy);
 
-    if (!(dist < this.pitContactDist &&
+    if (!(Math.hypot(dx, dy) < this.pitContactDist &&
           coDir > this.pitCoDirMin &&
           alongT < this.pitRearMax &&
           Math.abs(lateralT) > this.pitSideMin &&
           Math.abs(lateralT) < this.pitSideMax &&
-          a.getSpeed() > this.pitMinSpeed &&
-          closingLat > this.pitClosingMin)) return false;
-
-    // The struck rear swings AWAY from the attacker: dir = -sign(lateralT). Severity scales with
-    // the attacker's speed and the level power (floor..1), so L2 nudges and L5 spins hard.
-    const dir = -Math.sign(lateralT) || 1;
-    const intensity = Phaser.Math.Clamp(a.getSpeed() / this.pitRefSpeed, 0, 1)
-                    * Phaser.Math.Linear(this.pitPowerFloor, 1, Phaser.Math.Clamp(this.pitPower, 0, 1));
-    playerCar.spinOut(dir, {
-      duration:    Phaser.Math.Linear(this.pitDurMin, this.pitDurMax, intensity),
-      yawRate:     Phaser.Math.Linear(this.pitYawMin, this.pitYawMax, intensity),
-      gripMult:    this.pitGripMult,
-      speedScrub:  this.pitSpeedScrub,
-      lateralKick: this.pitLateralKick * intensity,
-      cooldown:    this.pitVictimCooldown,
-    });
-    return true;
+          a.getSpeed() > this.pitMinSpeed)) return 0;
+    return -Math.sign(lateralT) || 1;                    // rear swings away from the attacker's side
   }
 
   // End the current PIT attempt: the attacker takes its long personal cooldown, the pack takes
