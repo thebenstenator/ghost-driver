@@ -1558,7 +1558,9 @@ export class GameScene extends Phaser.Scene {
     spike.add(d, "spikeBoost", 0, 300, 10).name("Sprint speed boost (px/s)");
     spike.add(d, "spikeDropAhead", 0, 200, 5).name("Deploy when ahead-by (px)");
     spike.add(d, "spikeDropLead", 0, 200, 5).name("Strip lands ahead-of-cop (px)");
-    spike.add(d, "spikeMaxTime", 1, 12, 0.5).name("Give up after (s)");
+    spike.add(d, "spikeProgressEps", 0, 40, 1).name("Progress = gain over (px)");
+    spike.add(d, "spikeStallTime", 0.3, 5, 0.1).name("Give up if stalled (s)");
+    spike.add(d, "spikeDeployHold", 0.5, 8, 0.5).name("Hold in front after drop (s)");
     spike.add(d, "spikeDropCd", 0, 12, 0.5).name("Cooldown between drops (s)");
     spike.add(d, "spikeReload", 1, 30, 0.5).name("Reload when empty (s)");
     spike.add(d, "spikeStripCount", 1, 8, 1).name("Strips per unit");
@@ -1571,7 +1573,7 @@ export class GameScene extends Phaser.Scene {
       .add({ copy: () => this._copyManeuverStats() }, "copy")
       .name("Copy Maneuvers → Console");
 
-    this._persistPanel(gui, "gd_maneuverTune_v7"); // bumped: spike sprint boost/geometry + drop lead
+    this._persistPanel(gui, "gd_maneuverTune_v8"); // bumped: spike give-up now progress/stall-based
 
     gui.domElement.style.position = "fixed";
     gui.domElement.style.top = "8px";

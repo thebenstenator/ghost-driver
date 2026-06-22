@@ -153,7 +153,12 @@ export class PursuitDirector {
     this.spikeSide        = 16;    // px lateral swing while sprinting (less than the overtake so it ends up in-lane)
     this.spikeBoost       = 150;   // EXTRA top speed while sprinting — its own lever so it can actually get clear
     this.spikeDropAhead   = 25;    // along-px ahead the cop must reach to DEPLOY (drop the strip)
-    this.spikeMaxTime     = 7.0;   // s a run may take before timing out (fail)
+    // Give-up is PROGRESS-based, not a fixed clock: while the cop keeps gaining ground toward the
+    // front (along increasing) it commits; it only bails once it STALLS (no real gain for a beat) —
+    // so a cop that's slowly winning the overtake isn't abandoned, but one stuck alongside is.
+    this.spikeProgressEps = 8;     // px of forward gain that counts as real progress (ignores jitter)
+    this.spikeStallTime   = 1.5;   // s of NO progress before the run gives up
+    this.spikeDeployHold  = 3.0;   // s the deployer holds in front after dropping (if you don't pass it)
     this.spikeDropCd      = 2.5;   // s between drops (and between runs) for one unit
     this.spikeReload      = 12.0;  // s reload after a unit empties its strip count
     this.spikeStripCount  = 3;     // strips a unit carries before the reload (per-unit default in units.js)
@@ -505,10 +510,18 @@ export class PursuitDirector {
         run.t += dt;
         const along = this._along(s, px, py, h);
         if (run.phase === 'SPIKE') {
-          if (along > this.spikeDropAhead) { this._requestSpikeDrop(s, px, py, h, along); run.phase = 'DEPLOY'; }
-          else if (run.t > this.spikeMaxTime) { this._endSpikeRun(s); s = null; } // never got ahead
+          // Track progress toward the front: any real forward gain resets the stall timer.
+          if (along > run.bestAlong + this.spikeProgressEps) { run.bestAlong = along; run.stallT = 0; }
+          else run.stallT += dt;
+          if (along > this.spikeDropAhead) {
+            this._requestSpikeDrop(s, px, py, h, along);
+            run.phase = 'DEPLOY'; run.deployT = 0;
+          } else if (run.stallT > this.spikeStallTime) {
+            this._endSpikeRun(s); s = null;   // stuck alongside, not gaining → give up
+          }
         } else { // DEPLOY: hold in front until the player passes the strip (falls behind) or time-out
-          if (along < this.blockLost || run.t > this.spikeMaxTime) { this._endSpikeRun(s); s = null; }
+          run.deployT += dt;
+          if (along < this.blockLost || run.deployT > this.spikeDeployHold) { this._endSpikeRun(s); s = null; }
         }
       }
     }
@@ -526,7 +539,10 @@ export class PursuitDirector {
         if (along > -this.spikeBehind) continue;               // must be behind to get ahead
         if (along > bestAlong) { bestAlong = along; best = c; } // closest-to-even → best shot at passing
       }
-      if (best) { best._spikeRun = { phase: 'SPIKE', t: 0, dropped: false }; this._spikeHolder = best; s = best; }
+      if (best) {
+        best._spikeRun = { phase: 'SPIKE', t: 0, dropped: false, bestAlong: bestAlong, stallT: 0, deployT: 0 };
+        this._spikeHolder = best; s = best;
+      }
     }
     return s;
   }
