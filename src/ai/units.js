@@ -101,7 +101,7 @@ export const UNITS = {
   // head-on (reuses placement/respawn-ahead); SLICE 2 adds the park-across-the-road block.
   heavy: {
     name: 'Heavy',
-    appearance: { texture: 'cop_heavy', displayWidth: 32, displayHeight: 67, bodySize: 27, capR: 14, capHalfLen: 18 }, // bigger SUV footprint
+    appearance: { texture: 'cop_heavy', displayWidth: 35, displayHeight: 67, bodySize: 27, capR: 15, capHalfLen: 18 }, // WIDER (stretched ~10%) so the heavy reads as distinct; capsule widened to match
     handling: {
       maxSpeed:       430,   // slower than patrol — it can't chase you down, it BLOCKS you
       acceleration:   300,   // sluggish pickup (lots of metal to move)

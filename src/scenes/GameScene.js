@@ -160,6 +160,9 @@ export class GameScene extends Phaser.Scene {
     this.respawnCooldown = 6.0; // s before a just-respawned cop can respawn again (anti-thrash —
     // when zoomed out, off-screen spots are far, so a cop can land
     // still-"lost" and otherwise re-trigger every few seconds)
+    this.heavyRespawnCooldown = 15; // s pack-wide gate so only ONE heavy respawns ahead at a time
+    // (two heavy roadblocks ahead at once is overpowered)
+    this._heavyRespawnCd = 0;
     this.respawnMinGain = 350; // a relocation must be at least this much closer than the cop's
     // current distance, or it's not worth doing (skip and wait)
     this.respawnSpacing = 300; // a relocation spot must clear other cops by this much, so several
@@ -622,6 +625,7 @@ export class GameScene extends Phaser.Scene {
   // spot is available (e.g. player in the open) — it just waits, so no pop-in.
   _respawnLostCops(px, py, dt) {
     if (!this.respawnEnabled) return;
+    this._heavyRespawnCd = Math.max(0, this._heavyRespawnCd - dt);
     for (const cop of this.cops) {
       cop._respawnCd = Math.max(0, (cop._respawnCd || 0) - dt);
       const dp = Phaser.Math.Distance.Between(
@@ -635,6 +639,10 @@ export class GameScene extends Phaser.Scene {
       // An 'ahead-of-travel' unit (interceptor) that's fallen behind respawns AHEAD to
       // retry the head-on, not behind via the flank relocator — that's its whole loop.
       const ahead = cop.unitDef && cop.unitDef.placement === "ahead-of-travel";
+      const isHeavy = cop.unitDef && cop.unitDef.ability === "block";
+      // Heavy respawns are rate-limited pack-wide: only ONE may come back at a time, then not
+      // again for heavyRespawnCooldown — two heavy roadblocks ahead at once is overpowered.
+      if (isHeavy && this._heavyRespawnCd > 0) continue;
       if (
         cop._lostT > this.respawnTime &&
         cop._respawnCd <= 0 &&
@@ -645,6 +653,7 @@ export class GameScene extends Phaser.Scene {
       ) {
         cop._lostT = 0;
         cop._respawnCd = this.respawnCooldown;
+        if (isHeavy) this._heavyRespawnCd = this.heavyRespawnCooldown;
         if (this.copLog) {
           const ndp = Phaser.Math.Distance.Between(
             cop.sprite.x,
@@ -1505,6 +1514,7 @@ export class GameScene extends Phaser.Scene {
       "Spawn-ahead dist (px)",
     );
     rs.add(this, "interceptEntrySpeed", 0, 600, 10).name("Entry speed (px/s)");
+    rs.add(this, "heavyRespawnCooldown", 0, 40, 1).name("Heavy respawn gate (s)");
     rs.close();
 
     gui.domElement.style.position = "fixed";
@@ -1852,7 +1862,7 @@ this.boxTriggerSpeed = ${d.boxTriggerSpeed}; this.boxReleaseSpeed = ${d.boxRelea
       .add({ copy: () => this._copyUnitDef(type) }, "copy")
       .name("Copy UnitDef → Console");
 
-    this._persistPanel(gui, `gd_unitTune_${type}_v4`); // bumped: added mass + ramStrength
+    this._persistPanel(gui, `gd_unitTune_${type}_v5`); // bumped: heavy capsule widened (capR 14->15)
     this._applyUnitTuning(type); // sync def + live cops to the (possibly restored) values
 
     gui.domElement.style.position = "fixed";
