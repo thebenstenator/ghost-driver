@@ -199,8 +199,8 @@ export class GameScene extends Phaser.Scene {
     // threadable gap), with ONE axis-aligned static rectangle as the collider — exact-fit
     // and cheap precisely because it's static + on the axis-aligned grid (no capsule/Matter).
     this.roadblockDist = 750;  // px ahead a testbed roadblock is placed
-    this.rbCarMass     = 1.0;  // a normal block car's mass (you shove it, losing speed)
-    this.rbHeavyMass   = 2.4;  // a heavy's mass — much harder to push through
+    this.rbCarMass     = 1.5;  // a normal block car's mass (you shove it, losing speed)
+    this.rbHeavyMass   = 2.7;  // a heavy's mass — much harder to push through
     this.rbCarDrag     = 600;  // px/s² drag so a shoved car settles instead of sliding forever
     this.rbLifetime    = 30;   // s a placed block lasts before it despawns
     // Scripted spin (Arcade has no angular physics): an OFF-CENTRE hit torques the car so it
@@ -1061,7 +1061,10 @@ export class GameScene extends Phaser.Scene {
     cop.sprite.body.setVelocity(0, 0);
     cop.sprite.body.setDrag(400, 400); // bleed off any shove so it settles
     cop.sprite.body.mass = this.wreckMass;
-    cop.sprite.setTintFill(0xff2a2a).setAlpha(0.7); // red = unmistakably disabled
+    cop.mass = this.wreckMass; // the capsule resolver reads cop.mass — a wreck is light, shoves easily
+    // TINT (multiply), not tintFill — keep the car's actual MODEL, just redden it (a wrecked cruiser,
+    // not a flat silhouette). Per-type art shows through since each cop keeps its own texture.
+    cop.sprite.setTint(0xff5555).setAlpha(0.85); // red = unmistakably disabled
     this.tweens.add({
       targets: cop.sprite,
       angle: cop.sprite.angle + (Math.random() < 0.5 ? -120 : 120),
@@ -1280,6 +1283,16 @@ export class GameScene extends Phaser.Scene {
         R: c.capR, hl: c.capHalfLen, m: c.mass, rbCar: c,
       });
     }
+    // Wrecks (disabled cops): inert but still proper rotated cars, so you can't phase through one
+    // and you slip past its ends. Facing comes from the SPRITE's actual rotation — the spin-out
+    // tween turned the sprite, not cop.facing. Low mass (wreckMass) → it shoves out of the way.
+    for (const w of this.wrecks) {
+      const s = w.sprite;
+      agents.push({
+        v: { sprite: s, facing: s.rotation - Math.PI / 2 - (w.textureRotation || 0), vx: s.body.velocity.x, vy: s.body.velocity.y },
+        R: w.capR, hl: w.capHalfLen, m: w.mass || this.wreckMass, wreck: true,
+      });
+    }
     for (const a of agents) {
       const s = a.v.sprite, fx = Math.cos(a.v.facing), fy = Math.sin(a.v.facing), d = a.hl;
       a.c = [s.x + fx * d, s.y + fy * d, s.x, s.y, s.x - fx * d, s.y - fy * d]; // front · centre · rear
@@ -1309,7 +1322,7 @@ export class GameScene extends Phaser.Scene {
     if (this.capDebug) {
       this.capDebug.clear();
       for (const a of agents) {
-        this.capDebug.lineStyle(1, a.player ? 0x39ff14 : a.rbCar ? 0xff3b3b : 0x4a90ff, 0.7);
+        this.capDebug.lineStyle(1, a.player ? 0x39ff14 : a.rbCar ? 0xff3b3b : a.wreck ? 0x882222 : 0x4a90ff, 0.7);
         for (let k = 0; k < 6; k += 2) this.capDebug.strokeCircle(a.c[k], a.c[k + 1], a.R);
       }
     }
