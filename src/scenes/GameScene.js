@@ -188,13 +188,13 @@ export class GameScene extends Phaser.Scene {
     // crashing into walls/each other, but ONLY mid-aggressive-action (the cost of choosing
     // to box/block/overtake) — ordinary driving into a wall is free.
     this.ramThreshold = 150; // relative impact speed (px/s) below which a hit does NOTHING
-    this.ramScale = 0.12; // cop damage per px/s of relative impact above the threshold
+    this.ramScale = 0.17; // cop damage per px/s of relative impact above the threshold
     this.ramContactDist = 40; // px centre-distance counted as a player↔cop hit
     this.ramDmgCooldown = 0.4; // s between damage ticks on one cop (so a single ram = one tick)
-    this.selfImpactDrop = 200; // px/s sudden speed loss in a frame that reads as a CRASH (> braking)
-    this.selfScale = 0.12; // cop self-damage per px/s of crash, while mid-aggressive-action
+    this.selfImpactDrop = 150; // px/s sudden speed loss in a frame that reads as a CRASH (> braking)
+    this.selfScale = 0.5; // cop self-damage per px/s of crash, while mid-aggressive-action
     this.wreckDespawn = 30; // s a disabled wreck sits as an obstacle before it's removed
-    this.wreckMass = 0.9; // disabled cop body mass — light, so you shove it aside
+    this.wreckMass = 0.8; // disabled cop body mass — light, so you shove it aside
     this.disableReinforceMult = 1.3; // replacement after a disable takes this × the normal reinforce
 
     // --- Placed roadblocks (static set-pieces, NOT cap units; player-only collider) ---
@@ -1012,8 +1012,8 @@ export class GameScene extends Phaser.Scene {
     );
   }
 
-  // Cop SELF-damage + the per-cop damage cooldown. Player↔cop RAM damage is measured at the
-  // genuine capsule contact instead (see _ramDamageCop, called from _resolveCapsules) — the old
+  // Cop SELF-damage + the per-cop damage cooldown. Player↔cop (and cop↔cop / cop↔roadblock) RAM
+  // damage is measured at the genuine capsule contact instead (see _agentRamDamage) — the old
   // proximity gate (ramContactDist) fired AFTER the solver had already bled the closing speed,
   // so rams read as softer than they hit. This path only handles a cop crashing itself into a
   // wall / another cop mid-aggression. Reads velocities at the TOP of the frame (pre-physics).
@@ -1050,17 +1050,16 @@ export class GameScene extends Phaser.Scene {
     if (toDisable) for (const cop of toDisable) this._disableCop(cop);
   }
 
-  // Player↔cop RAM damage, called from the capsule contact (_capsuleVsCapsule) at the real
-  // moment of impact. Uses the PRE-collision closing speed (the caches the solver hasn't touched
-  // yet), so a head-on does full damage no matter how fast the solver then bleeds it off. One
-  // tick per ram via the shared _dmgCd cooldown. Disable is deferred (the caller drains the list
+  // RAM damage to a cop, called from the capsule contact at the real moment of impact. `copAgent`
+  // is the cop taking damage; `otherAgent` is whatever hit it (player, another cop, or a roadblock
+  // car). Uses the PRE-collision closing speed (agent.preVx/preVy — the solver hasn't bled it yet),
+  // so a head-on does full damage no matter how fast the solver then arrests it. One tick per
+  // contact via the shared _dmgCd cooldown. Disable is deferred (the caller drains _capDisable
   // after the agent loop, so this.cops isn't mutated mid-resolve).
-  _ramDamageCop(cop) {
+  _agentRamDamage(copAgent, otherAgent) {
+    const cop = copAgent.v;
     if (cop.disabled || (cop._dmgCd || 0) > 0) return;
-    const rel = Math.hypot(
-      (this._carLastVx ?? this.car.vx) - (cop._lastVx ?? cop.vx),
-      (this._carLastVy ?? this.car.vy) - (cop._lastVy ?? cop.vy),
-    );
+    const rel = Math.hypot(copAgent.preVx - otherAgent.preVx, copAgent.preVy - otherAgent.preVy);
     if (rel <= this.ramThreshold) return;
     cop.health -= ((rel - this.ramThreshold) * this.ramScale) / (cop.mass || 1);
     cop._dmgCd = this.ramDmgCooldown;
@@ -1320,8 +1319,8 @@ export class GameScene extends Phaser.Scene {
   _resolveCapsules() {
     const agents = (this._capAgents ||= []);
     agents.length = 0;
-    agents.push({ v: this.car, R: this.playerCapR, hl: this.playerCapHalfLen, m: this.playerMass, player: true });
-    for (const cop of this.cops) agents.push({ v: cop, R: cop.capR, hl: cop.capHalfLen, m: cop.mass || 1 });
+    agents.push({ v: this.car, R: this.playerCapR, hl: this.playerCapHalfLen, m: this.playerMass, player: true, preVx: this.car.vx, preVy: this.car.vy });
+    for (const cop of this.cops) agents.push({ v: cop, R: cop.capR, hl: cop.capHalfLen, m: cop.mass || 1, cop, preVx: cop.vx, preVy: cop.vy });
     // Roadblock cars: a per-frame shim exposing the Vehicle-like fields the resolver needs.
     // facing runs along the car's LENGTH (sprite rotation − π/2), so the capsule rotates with
     // the scripted spin. vx/vy seed from the Arcade body; the resolver writes back through it.
@@ -1329,7 +1328,7 @@ export class GameScene extends Phaser.Scene {
       const b = c.body;
       agents.push({
         v: { sprite: b, facing: c.baseRot + c.spin - Math.PI / 2, vx: b.body.velocity.x, vy: b.body.velocity.y },
-        R: c.capR, hl: c.capHalfLen, m: c.mass, rbCar: c,
+        R: c.capR, hl: c.capHalfLen, m: c.mass, rbCar: c, preVx: b.body.velocity.x, preVy: b.body.velocity.y,
       });
     }
     // Wrecks (disabled cops): inert but still proper rotated cars, so you can't phase through one
@@ -1444,12 +1443,17 @@ export class GameScene extends Phaser.Scene {
       a.v.sprite.body.velocity.set(a.v.vx, a.v.vy);
       b.v.sprite.body.velocity.set(b.v.vx, b.v.vy);
     }
-    // Scripted impacts (once per pair). Roadblock spin on the player ramming a block car; ram
-    // bog when the player takes a frontal cop hit. (cnx,cny) is the a→b normal.
+    // Scripted impacts (once per pair). (cnx,cny) is the a→b normal. Damage is computed from the
+    // PRE-collision closing speed (agent.preVx/preVy), gated by ramThreshold — so normal pack
+    // jostling (low relative speed) is free, but a real high-speed crash hurts.
+    const aCop = !!a.cop, bCop = !!b.cop;                       // live (damageable) cop agents
     if (a.player && b.rbCar) this._onRoadblockHit(b.rbCar.body);
     else if (b.player && a.rbCar) this._onRoadblockHit(a.rbCar.body);
-    else if (a.player && !b.rbCar) { this._applyRamImpact(b.v, cnx, cny); this._ramDamageCop(b.v); }     // b is a cop
-    else if (b.player && !a.rbCar) { this._applyRamImpact(a.v, -cnx, -cny); this._ramDamageCop(a.v); }   // a is a cop
+    else if (a.player && bCop) { this._applyRamImpact(b.v, cnx, cny); this._agentRamDamage(b, a); }
+    else if (b.player && aCop) { this._applyRamImpact(a.v, -cnx, -cny); this._agentRamDamage(a, b); }
+    else if (aCop && bCop) { this._agentRamDamage(a, b); this._agentRamDamage(b, a); } // cop↔cop crash hurts both
+    else if (aCop && b.rbCar) this._agentRamDamage(a, b);       // a cop slamming a roadblock car
+    else if (bCop && a.rbCar) this._agentRamDamage(b, a);
   }
 
   // A FRONTAL high-closing-speed cop hit dumps extra player speed and bogs the engine briefly,
@@ -1715,7 +1719,7 @@ export class GameScene extends Phaser.Scene {
       .add({ copy: () => this._copyHealthStats() }, "copy")
       .name("Copy Health → Console");
 
-    this._persistPanel(gui, "gd_healthTune_v2"); // bumped: patrol health / ramScale / wreckMass rebaked
+    this._persistPanel(gui, "gd_healthTune_v3"); // bumped: unit health + ramScale/selfScale/wreckMass rebaked
 
     gui.domElement.style.position = "fixed";
     gui.domElement.style.top = "8px";
@@ -2966,7 +2970,7 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
 
     // Persist across refresh. Key bumped to v16: huntLead removed (blind cops now go
     // straight to last-known, no forward projection).
-    this._persistPanel(gui, "gd_copTuning17"); // bumped: added Bust meter folder
+    this._persistPanel(gui, "gd_copTuning18"); // bumped: bust-meter fill slowed (≈6s min)
 
     gui.domElement.style.position = "fixed";
     gui.domElement.style.top = "8px";

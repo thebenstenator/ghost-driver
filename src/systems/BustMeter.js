@@ -10,7 +10,9 @@
 // slow burn you can usually wriggle out of; a full swarm boxing you in busts you fast.
 export class BustMeter {
   constructor({ pinDistance = 60, pinSpeed = 130, surroundRange = 120,
-                fillBase = 14, fillPerCop = 11, fillMax = 70, drainRate = 70 } = {}) {
+                fillBase = 5, fillPerCop = 2.4, fillMax = 17, drainRate = 70 } = {}) {
+    // Fill ramp (meter/sec): 1 cop 5 (≈20s) · 2 cops 7.4 · 4 cops 12.2 · 6+ cops 17 (capped →
+    // ≈6s, the fastest possible bust). 100% = busted.
     this.pinDistance   = pinDistance;   // px — a cop this close counts as "on you" (triggers the pin)
     this.pinSpeed      = pinSpeed;      // below this speed (px/s) you're pinnable
     this.surroundRange = surroundRange; // px — cops within this of you count toward the fill rate

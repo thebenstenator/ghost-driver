@@ -53,7 +53,7 @@ export const UNITS = {
     ai:         {},                  // baseline brain — all CopAI defaults
     placement:  'flank-offscreen',
     role:       'pursue',
-    health:     150,
+    health:     100,
     mass:       1.0,
     ramStrength: 0.3,                // a frontal patrol hit is noticeable but survivable
     priority:   0,
@@ -86,7 +86,7 @@ export const UNITS = {
     ai:         {},                  // SAME decision tunables as patrol (identical brain)
     placement:  'ahead-of-travel',
     role:       'intercept',
-    health:     180,                 // survives most rams; a full mutual head-on can drop it
+    health:     150,                 // survives most rams; a full mutual head-on can drop it
     mass:       1.0,
     ramStrength: 0.7,                // a frontal interceptor hit slows you HARD
     priority:   2,                   // threat unit — retired last
@@ -146,7 +146,7 @@ export const UNITS = {
     ai:         {},                  // SAME decision tunables as patrol (identical brain)
     placement:  'ahead-of-travel',
     role:       'deploy',
-    health:     170,                 // ≈ base, slightly boosted — lives long enough to deploy
+    health:     160,                 // ≈ base, slightly boosted — lives long enough to deploy
     mass:       1.1,
     ramStrength: 0,                  // it never rams — no frontal-ram special
     spikeStrips: 3,                  // strips carried before a long reload (spec start = 3)
