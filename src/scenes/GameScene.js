@@ -89,6 +89,7 @@ export class GameScene extends Phaser.Scene {
     // corners). The Arcade square above stays as a centre backstop. (Cars are the next step.)
     this.playerCapHalfLen = 17; // circle offset from centre along the car's facing
     this.playerCapR       = 14; // capsule radius (≈ half the car width)
+    this.playerMass       = 1.5; // capsule-collision weight vs cops (heavier → shoves them)
     this.capDebug = this.devMode ? this.add.graphics().setDepth(60) : null;
     if (this.capDebug) this.worldLayer.add(this.capDebug);
 
@@ -1146,46 +1147,85 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
-  // Custom CAPSULE collision: the player car as 3 circles along its spine, pushed out of
-  // building walls by hand each frame (Arcade can't rotate a body). Rounded, so it slides
-  // along walls/corners instead of catching. Walls only for now — cars are the next step.
-  _resolvePlayerCapsule() {
-    const car = this.car, s = car.sprite, b = s.body;
-    const R = this.playerCapR, d = this.playerCapHalfLen;
-    const fx = Math.cos(car.facing), fy = Math.sin(car.facing);
-    const reach = d + R;
-    const offs = [[fx * d, fy * d], [0, 0], [-fx * d, -fy * d]]; // front, centre, rear
-    for (const wall of this.losRects) {
-      if (s.x + reach < wall.x || s.x - reach > wall.right ||
-          s.y + reach < wall.y || s.y - reach > wall.bottom) continue;       // cheap cull
-      for (const [ox, oy] of offs) {
-        const px = s.x + ox, py = s.y + oy;
-        const qx = Phaser.Math.Clamp(px, wall.x, wall.right);
-        const qy = Phaser.Math.Clamp(py, wall.y, wall.bottom);
-        const dx = px - qx, dy = py - qy, dist2 = dx * dx + dy * dy;
-        let nx, ny, pen;
-        if (dist2 > 1e-4) {
-          const dist = Math.sqrt(dist2);
-          if (dist >= R) continue;
-          nx = dx / dist; ny = dy / dist; pen = R - dist;
-        } else {                                                              // centre inside the wall
-          const dl = px - wall.x, dr = wall.right - px, dtp = py - wall.y, dbt = wall.bottom - py;
-          const m = Math.min(dl, dr, dtp, dbt);
-          if (m === dl) { nx = -1; ny = 0; pen = dl + R; }
-          else if (m === dr) { nx = 1; ny = 0; pen = dr + R; }
-          else if (m === dtp) { nx = 0; ny = -1; pen = dtp + R; }
-          else { nx = 0; ny = 1; pen = dbt + R; }
-        }
-        s.x += nx * pen; s.y += ny * pen;                                     // push the whole car out
-        b.x += nx * pen; b.y += ny * pen;
-        const vn = car.vx * nx + car.vy * ny;                                 // kill velocity into the wall
-        if (vn < 0) { car.vx -= vn * nx; car.vy -= vn * ny; }
+  // Custom CAPSULE collision for the player AND cops — Arcade's box can't cover a rotated
+  // car, so each is modelled as 3 circles along its spine and pushed out of walls + apart
+  // from each other by hand. Rounded → slides along walls/corners. Additive to the Arcade
+  // bodies (velocity-cancel is idempotent, so they cooperate, not fight). Roadblock cars are
+  // left on Arcade for now. The spine circle centres are kept as a flat [x,y,x,y,x,y] on the
+  // agent and shifted whenever the agent is pushed, so all checks stay consistent.
+  _resolveCapsules() {
+    const agents = (this._capAgents ||= []);
+    agents.length = 0;
+    agents.push({ v: this.car, R: this.playerCapR, hl: this.playerCapHalfLen, m: this.playerMass, player: true });
+    for (const cop of this.cops) agents.push({ v: cop, R: cop.capR, hl: cop.capHalfLen, m: cop.mass || 1 });
+    for (const a of agents) {
+      const s = a.v.sprite, fx = Math.cos(a.v.facing), fy = Math.sin(a.v.facing), d = a.hl;
+      a.c = [s.x + fx * d, s.y + fy * d, s.x, s.y, s.x - fx * d, s.y - fy * d]; // front · centre · rear
+      a.reach = a.hl + a.R;
+    }
+    for (const a of agents) this._capsuleVsWalls(a);
+    for (let i = 0; i < agents.length; i++) {
+      for (let j = i + 1; j < agents.length; j++) {
+        const a = agents[i], b = agents[j];
+        const dx = b.v.sprite.x - a.v.sprite.x, dy = b.v.sprite.y - a.v.sprite.y, rr = a.reach + b.reach;
+        if (dx * dx + dy * dy <= rr * rr) this._capsuleVsCapsule(a, b);        // broad-phase cull
       }
     }
-    b.velocity.set(car.vx, car.vy);
     if (this.capDebug) {
-      this.capDebug.clear().lineStyle(1, 0x39ff14, 0.8);
-      for (const [ox, oy] of offs) this.capDebug.strokeCircle(s.x + ox, s.y + oy, R);
+      this.capDebug.clear();
+      for (const a of agents) {
+        this.capDebug.lineStyle(1, a.player ? 0x39ff14 : 0x4a90ff, 0.7);
+        for (let k = 0; k < 6; k += 2) this.capDebug.strokeCircle(a.c[k], a.c[k + 1], a.R);
+      }
+    }
+  }
+
+  // Move an agent (sprite + Arcade body + its tracked circle centres) by (dx,dy).
+  _capShift(a, dx, dy) {
+    const s = a.v.sprite, b = s.body;
+    s.x += dx; s.y += dy; b.x += dx; b.y += dy;
+    for (let k = 0; k < 6; k += 2) { a.c[k] += dx; a.c[k + 1] += dy; }
+  }
+
+  _capsuleVsWalls(a) {
+    const s = a.v.sprite, R = a.R;
+    for (const wall of this.losRects) {
+      if (s.x + a.reach < wall.x || s.x - a.reach > wall.right ||
+          s.y + a.reach < wall.y || s.y - a.reach > wall.bottom) continue;
+      for (let k = 0; k < 6; k += 2) {
+        const px = a.c[k], py = a.c[k + 1];
+        const qx = Phaser.Math.Clamp(px, wall.x, wall.right), qy = Phaser.Math.Clamp(py, wall.y, wall.bottom);
+        const dx = px - qx, dy = py - qy, dist2 = dx * dx + dy * dy;
+        let nx, ny, pen;
+        if (dist2 > 1e-4) { const dd = Math.sqrt(dist2); if (dd >= R) continue; nx = dx / dd; ny = dy / dd; pen = R - dd; }
+        else {
+          const dl = px - wall.x, dr = wall.right - px, dtp = py - wall.y, dbt = wall.bottom - py;
+          const m = Math.min(dl, dr, dtp, dbt);
+          if (m === dl) { nx = -1; ny = 0; pen = dl + R; } else if (m === dr) { nx = 1; ny = 0; pen = dr + R; }
+          else if (m === dtp) { nx = 0; ny = -1; pen = dtp + R; } else { nx = 0; ny = 1; pen = dbt + R; }
+        }
+        this._capShift(a, nx * pen, ny * pen);
+        const vn = a.v.vx * nx + a.v.vy * ny;
+        if (vn < 0) { a.v.vx -= vn * nx; a.v.vy -= vn * ny; a.v.sprite.body.velocity.set(a.v.vx, a.v.vy); }
+      }
+    }
+  }
+
+  _capsuleVsCapsule(a, b) {
+    const minD = a.R + b.R, inv = 1 / (a.m + b.m);
+    for (let i = 0; i < 6; i += 2) for (let j = 0; j < 6; j += 2) {
+      const dx = b.c[j] - a.c[i], dy = b.c[j + 1] - a.c[i + 1], d2 = dx * dx + dy * dy;
+      if (d2 >= minD * minD || d2 < 1e-6) continue;
+      const dd = Math.sqrt(d2), nx = dx / dd, ny = dy / dd, pen = minD - dd; // normal a→b
+      this._capShift(a, -nx * pen * b.m * inv, -ny * pen * b.m * inv);
+      this._capShift(b,  nx * pen * a.m * inv,  ny * pen * a.m * inv);
+      const rvn = (b.v.vx - a.v.vx) * nx + (b.v.vy - a.v.vy) * ny;            // cancel only if approaching
+      if (rvn < 0) {
+        a.v.vx += rvn * nx * b.m * inv; a.v.vy += rvn * ny * b.m * inv;
+        b.v.vx -= rvn * nx * a.m * inv; b.v.vy -= rvn * ny * a.m * inv;
+        a.v.sprite.body.velocity.set(a.v.vx, a.v.vy);
+        b.v.sprite.body.velocity.set(b.v.vx, b.v.vy);
+      }
     }
   }
 
@@ -1423,10 +1463,13 @@ this.boxTriggerSpeed = ${d.boxTriggerSpeed}; this.boxReleaseSpeed = ${d.boxRelea
     }
     const def = UNITS[type];
     const h = def.handling;
+    const look = (def.appearance ||= {});
     // Effective AI tunables = CopAI defaults overlaid with this def's `ai` overrides.
     const ai = new CopAI(this.navGrid, this.losRects, def.ai);
 
     const t = (this._unitTuning = {
+      capR: look.capR ?? 11,
+      capHalfLen: look.capHalfLen ?? 14,
       maxSpeed: h.maxSpeed,
       acceleration: h.acceleration,
       gripLow: h.gripLow,
@@ -1451,6 +1494,12 @@ this.boxTriggerSpeed = ${d.boxTriggerSpeed}; this.boxReleaseSpeed = ${d.boxRelea
     const gui = new GUI({ title: `Unit: ${def.name}`, width: 300 });
     this.unitGui = gui;
     const apply = () => this._applyUnitTuning(type);
+
+    // Capsule collider (the 3-circle spine pushed out of walls + other cars). R = half the
+    // car's WIDTH; half-length = how far front/rear circles sit from centre (≈ half LENGTH − R).
+    const cap = gui.addFolder("Capsule (collider)");
+    cap.add(t, "capR", 4, 30, 0.5).name("Radius (½ width)").onChange(apply);
+    cap.add(t, "capHalfLen", 4, 40, 0.5).name("Spine ½-length").onChange(apply);
 
     const drive = gui.addFolder("Handling");
     drive.add(t, "maxSpeed", 100, 1200, 10).name("Max Speed").onChange(apply);
@@ -1532,7 +1581,7 @@ this.boxTriggerSpeed = ${d.boxTriggerSpeed}; this.boxReleaseSpeed = ${d.boxRelea
       .add({ copy: () => this._copyUnitDef(type) }, "copy")
       .name("Copy UnitDef → Console");
 
-    this._persistPanel(gui, `gd_unitTune_${type}_v1`);
+    this._persistPanel(gui, `gd_unitTune_${type}_v2`);
     this._applyUnitTuning(type); // sync def + live cops to the (possibly restored) values
 
     gui.domElement.style.position = "fixed";
@@ -1546,6 +1595,8 @@ this.boxTriggerSpeed = ${d.boxTriggerSpeed}; this.boxReleaseSpeed = ${d.boxRelea
   _applyUnitTuning(type) {
     const t = this._unitTuning,
       def = UNITS[type];
+    (def.appearance ||= {}).capR = t.capR;
+    def.appearance.capHalfLen = t.capHalfLen;
     Object.assign(def.handling, {
       maxSpeed: t.maxSpeed,
       acceleration: t.acceleration,
@@ -1572,6 +1623,8 @@ this.boxTriggerSpeed = ${d.boxTriggerSpeed}; this.boxReleaseSpeed = ${d.boxRelea
     });
     for (const cop of this.cops) {
       if (cop.unitType !== type) continue;
+      cop.capR = t.capR;
+      cop.capHalfLen = t.capHalfLen;
       cop.baseMaxSpeed = t.maxSpeed;
       cop.maxSpeed = t.maxSpeed;
       cop.acceleration = t.acceleration;
@@ -1604,7 +1657,8 @@ this.boxTriggerSpeed = ${d.boxTriggerSpeed}; this.boxReleaseSpeed = ${d.boxRelea
   // Dump a paste-ready handling/ai block for the type's def in src/ai/units.js.
   _copyUnitDef(type) {
     const t = this._unitTuning;
-    console.log(`// --- UNITS.${type} (paste handling/ai into src/ai/units.js) ---
+    console.log(`// --- UNITS.${type} (paste into src/ai/units.js) ---
+    // appearance capsule: capR: ${t.capR}, capHalfLen: ${t.capHalfLen}
     handling: {
       maxSpeed: ${t.maxSpeed}, acceleration: ${t.acceleration},
       gripLow: ${t.gripLow}, gripHigh: ${t.gripHigh}, gripSpeedRef: ${t.gripSpeedRef},
@@ -2719,7 +2773,6 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
         };
 
     this.car.update(delta, controls);
-    this._resolvePlayerCapsule(); // custom rotated-car wall collision (Arcade body can't rotate)
     this._carLastVx = this.car.vx;
     this._carLastVy = this.car.vy; // pre-collision cache (see _updateCopDamage)
 
@@ -2886,6 +2939,11 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
       cop._lastVx = cop.vx;
       cop._lastVy = cop.vy; // pre-collision cache (see _updateCopDamage)
     }
+
+    // Custom rotated-car capsule collision: now that the player AND every cop have
+    // integrated this frame, push every agent's 3-circle spine out of walls and apart
+    // from each other (Arcade's AABB can't cover a rotated car). ADDITIVE to Arcade.
+    this._resolveCapsules();
 
     // Tier-2 rejoin: a cop that's been far + not chasing + off-screen for a while is
     // relocated off-screen near the player instead of grinding all the way back.

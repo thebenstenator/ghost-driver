@@ -46,6 +46,10 @@ export class CopCar extends Vehicle {
     // Mass drives BOTH the ram-damage math (heavier soaks more) AND the physics: a heavy
     // body shoves the player and barely budges in a collision.
     this.sprite.body.mass = def.mass;
+    // Capsule collider params (GameScene._resolveCapsules pushes the 3-circle spine out of
+    // walls + other cars — Arcade's box can't cover a rotated car). Per-type, tunable.
+    this.capR       = look.capR       ?? 11;
+    this.capHalfLen = look.capHalfLen ?? 14;
 
     this.ai = new CopAI(navGrid, rects, def.ai);
     this.aiTarget = { x, y }; // current steering target, for debug draw
