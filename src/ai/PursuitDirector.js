@@ -146,7 +146,10 @@ export class PursuitDirector {
     // holder, commits then cools down — same discipline as the overtake/PIT. The actual strip
     // is created by GameScene from a per-cop drop request (cop._spikeDrop), so scene-object
     // creation stays in the scene; the hazard effect is wired next.
-    this.spikeTrigSpeed   = 180;   // only run when the player is at least this fast (so a strip ahead matters)
+    this.spikeTrigSpeed   = 180;   // only START a run when the player is at least this fast
+    this.spikeDeployMinSpeed = 160; // ABORT the run if the player drops below this (slightly < trig for
+                                   // hysteresis). Spikes are for a MOVING target — if you've been boxed
+                                   // to a crawl, hand off to the box/bust instead of dropping on top of you.
     this.spikeRange       = 320;   // px the cop must be within to start a run
     this.spikeBehind      = 20;    // px the cop must be BEHIND the player to start (it has to get ahead)
     this.spikeAhead       = 200;   // px ahead of the player the spike unit sprints to (its overtake point)
@@ -162,7 +165,8 @@ export class PursuitDirector {
     this.spikeDropCd      = 2.5;   // s between drops (and between runs) for one unit
     this.spikeReload      = 12.0;  // s reload after a unit empties its strip count
     this.spikeStripCount  = 3;     // strips a unit carries before the reload (per-unit default in units.js)
-    this.spikeDropLead    = 30;    // px AHEAD of the cop's projection the strip lands (a little reaction gap)
+    this.spikeDropLead    = 70;    // px AHEAD of the cop's projection the strip lands (reaction gap, so it's
+                                   // in your path — not on your bumper)
     this.spikeEaseAhead   = 70;    // px ahead the deployer eases to after dropping (forward-block)
     this.spikeEaseFactor  = 0.7;   // it eases to this fraction of your speed so the pack catches up
     this._spikeHolder     = null;  // the single cop currently running a spike deploy
@@ -510,14 +514,19 @@ export class PursuitDirector {
         run.t += dt;
         const along = this._along(s, px, py, h);
         if (run.phase === 'SPIKE') {
-          // Track progress toward the front: any real forward gain resets the stall timer.
-          if (along > run.bestAlong + this.spikeProgressEps) { run.bestAlong = along; run.stallT = 0; }
-          else run.stallT += dt;
-          if (along > this.spikeDropAhead) {
-            this._requestSpikeDrop(s, px, py, h, along);
-            run.phase = 'DEPLOY'; run.deployT = 0;
-          } else if (run.stallT > this.spikeStallTime) {
-            this._endSpikeRun(s); s = null;   // stuck alongside, not gaining → give up
+          // Player slowed to a crawl (got boxed) before we got ahead → abort. A strip dropped on a
+          // near-stopped player is pointless; the box/bust owns that situation.
+          if (speed < this.spikeDeployMinSpeed) { this._endSpikeRun(s); s = null; }
+          else {
+            // Track progress toward the front: any real forward gain resets the stall timer.
+            if (along > run.bestAlong + this.spikeProgressEps) { run.bestAlong = along; run.stallT = 0; }
+            else run.stallT += dt;
+            if (along > this.spikeDropAhead) {
+              this._requestSpikeDrop(s, px, py, h, along);
+              run.phase = 'DEPLOY'; run.deployT = 0;
+            } else if (run.stallT > this.spikeStallTime) {
+              this._endSpikeRun(s); s = null;   // stuck alongside, not gaining → give up
+            }
           }
         } else { // DEPLOY: hold in front until the player passes the strip (falls behind) or time-out
           run.deployT += dt;

@@ -1550,7 +1550,8 @@ export class GameScene extends Phaser.Scene {
     pit.close();
 
     const spike = gui.addFolder("Spike run (deploy)");
-    spike.add(d, "spikeTrigSpeed", 0, 400, 10).name("Only if player above (px/s)");
+    spike.add(d, "spikeTrigSpeed", 0, 400, 10).name("Start if player above (px/s)");
+    spike.add(d, "spikeDeployMinSpeed", 0, 400, 10).name("Abort if player below (px/s)");
     spike.add(d, "spikeRange", 100, 800, 20).name("Cop within (px)");
     spike.add(d, "spikeBehind", 0, 200, 5).name("Must be behind by (px)");
     spike.add(d, "spikeAhead", 80, 500, 10).name("Sprint-to ahead (px)");
@@ -1573,7 +1574,7 @@ export class GameScene extends Phaser.Scene {
       .add({ copy: () => this._copyManeuverStats() }, "copy")
       .name("Copy Maneuvers → Console");
 
-    this._persistPanel(gui, "gd_maneuverTune_v8"); // bumped: spike give-up now progress/stall-based
+    this._persistPanel(gui, "gd_maneuverTune_v9"); // bumped: spike deploy-speed abort + bigger drop lead
 
     gui.domElement.style.position = "fixed";
     gui.domElement.style.top = "8px";
