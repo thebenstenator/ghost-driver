@@ -188,11 +188,11 @@ export class GameScene extends Phaser.Scene {
     // crashing into walls/each other, but ONLY mid-aggressive-action (the cost of choosing
     // to box/block/overtake) — ordinary driving into a wall is free.
     this.ramThreshold = 150; // relative impact speed (px/s) below which a hit does NOTHING
-    this.ramScale = 0.17; // cop damage per px/s of relative impact above the threshold
+    this.ramScale = 0.12; // cop damage per px/s of relative impact above the threshold
     this.ramContactDist = 40; // px centre-distance counted as a player↔cop hit
     this.ramDmgCooldown = 0.4; // s between damage ticks on one cop (so a single ram = one tick)
     this.selfImpactDrop = 150; // px/s sudden speed loss in a frame that reads as a CRASH (> braking)
-    this.selfScale = 1.2; // cop self-damage per px/s of crash, while mid-aggressive-action
+    this.selfScale = 0.1; // cop self-damage per px/s of crash, while mid-aggressive-action
     this.wreckDespawn = 30; // s a disabled wreck sits as an obstacle before it's removed
     this.wreckMass = 0.8; // disabled cop body mass — light, so you shove it aside
     this.copHealthPerLevel = 0.1; // +fraction of base health per pursuit level above 1 (heat buff:
@@ -1787,7 +1787,7 @@ this.interceptAheadDist = ${this.interceptAheadDist}; this.interceptEntrySpeed =
       .add({ copy: () => this._copyHealthStats() }, "copy")
       .name("Copy Health → Console");
 
-    this._persistPanel(gui, "gd_healthTune_v4"); // bumped: selfScale 1.2 + per-level health buff
+    this._persistPanel(gui, "gd_healthTune_v5"); // bumped: ramScale 0.12 + selfScale 0.1 corrected
 
     gui.domElement.style.position = "fixed";
     gui.domElement.style.top = "8px";
