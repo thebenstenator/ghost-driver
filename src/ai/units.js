@@ -121,6 +121,37 @@ export const UNITS = {
     priority:   3,                   // top threat — retired last
     ability:    'block',
   },
+
+  // Spike unit (L5). The spike-strip cruiser: it NEVER rams — it gets AHEAD of the player and
+  // drops a spike strip in their path, then eases in front so they drive onto it. SAME brain as
+  // everyone (ai: {}); it differs only in (1) the spike-run maneuver (a variant of the overtake
+  // that DEPLOYS instead of brake-checks — see PursuitDirector._updateSpikeRun), (2) its ability
+  // tag, and (3) carrying a strip count. Slightly boosted speed so it can actually get ahead.
+  // Health/mass ≈ base (it survives long enough to deploy, but it's not a tank). Dropped strips
+  // are the hazard wired next (pop the player's tires). Placeholder art = patrol cruiser for now.
+  spike: {
+    name: 'Spike',
+    appearance: { texture: 'cop_patrol', displayWidth: 25, displayHeight: 58, bodySize: 23, capR: 11, capHalfLen: 16 },
+    handling: {
+      maxSpeed:       525,   // faster than patrol (495) so it can pull ahead to deploy
+      acceleration:   400,
+      gripLow:        0.6,
+      gripHigh:       0.21,
+      gripSpeedRef:   480,
+      turnSpeedLow:   2.5,
+      turnSpeed:      5,
+      minSteerFactor: 0.8,
+    },
+    ai:         {},                  // SAME decision tunables as patrol (identical brain)
+    placement:  'ahead-of-travel',
+    role:       'deploy',
+    health:     170,                 // ≈ base, slightly boosted — lives long enough to deploy
+    mass:       1.1,
+    ramStrength: 0,                  // it never rams — no frontal-ram special
+    spikeStrips: 3,                  // strips carried before a long reload (spec start = 3)
+    priority:   2,                   // threat-ish — retired after filler patrols
+    ability:    'spike',
+  },
 };
 
 // Resolve a unit type to a def, falling back to patrol for an unknown key. A level

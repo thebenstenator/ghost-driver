@@ -115,6 +115,8 @@ export class GameScene extends Phaser.Scene {
     this.director = new PursuitDirector(this.navGrid, this.losRects);
     this.cops = [];
     this.wrecks = []; // disabled cops, kept as inert obstacles until they despawn
+    this.spikes = []; // deployed spike strips (hazard wiring next; visible placeholder for now)
+    this.spikeLifetime = 20; // s a dropped strip persists before it despawns
     this.roadblocks = []; // placed block formations (each = dynamic car bodies + visuals)
     // Roadblock cars are DYNAMIC bodies with mass — you SHOVE through them (losing speed),
     // not a brick wall. Player↔car collision is handled by the rotating CAPSULE (so when a
@@ -271,6 +273,10 @@ export class GameScene extends Phaser.Scene {
     // Per-cop health bars — drawn in world space above each damaged cop (see _drawHealthBars).
     this.healthBars = this.add.graphics().setDepth(11);
     this.worldLayer.add(this.healthBars);
+
+    // Deployed spike strips — drawn in world space under the cars (see _updateSpikes).
+    this.spikeGfx = this.add.graphics().setDepth(7);
+    this.worldLayer.add(this.spikeGfx);
 
     this._setupHud();
 
@@ -946,7 +952,9 @@ export class GameScene extends Phaser.Scene {
       r === CopState.BOX_REAR ||
       r === CopState.BLOCK ||
       r === CopState.OVERTAKE ||
-      r === CopState.PIT
+      r === CopState.PIT ||
+      r === CopState.SPIKE ||
+      r === CopState.DEPLOY
     );
   }
 
@@ -1171,6 +1179,46 @@ export class GameScene extends Phaser.Scene {
       }
       if (rb._t > this.rbLifetime || Phaser.Math.Distance.Between(px, py, rb.x, rb.y) > 3200)
         this._removeRoadblock(rb);
+    }
+  }
+
+  // Deploy a spike strip at a drop request (a spike unit reached its deploy point ahead of you).
+  // DRAFT: this lays down a ~car-width strip oriented across the player's path and tracks it; the
+  // HAZARD effect (pop the player's tires on contact) is the next step. Kept as data + a drawn
+  // placeholder so the deploy maneuver is fully testable now.
+  _dropSpike({ x, y, heading }) {
+    const angle = heading + Math.PI / 2; // strip lies ACROSS the direction of travel
+    this.spikes.push({ x, y, angle, len: 76, depth: 12, t: 0 });
+  }
+
+  // Age out deployed strips and redraw them. (Collision/tire-pop wiring comes next.)
+  _updateSpikes(px, py, dt) {
+    const g = this.spikeGfx;
+    g.clear();
+    if (!this.spikes.length) return;
+    for (const s of [...this.spikes]) {
+      s.t += dt;
+      if (s.t > this.spikeLifetime) { this.spikes = this.spikes.filter((o) => o !== s); continue; }
+      // Fade out over the last 3s of life.
+      const fade = Phaser.Math.Clamp((this.spikeLifetime - s.t) / 3, 0, 1);
+      const cos = Math.cos(s.angle), sin = Math.sin(s.angle), hl = s.len / 2, hd = s.depth / 2;
+      // strip body (drawn as an absolute-point polygon — no transform needed)
+      g.fillStyle(0x222222, 0.55 * fade);
+      const corners = [
+        [-hl, -hd], [hl, -hd], [hl, hd], [-hl, hd],
+      ].map(([lx, ld]) => ({ x: s.x + lx * cos - ld * sin, y: s.y + lx * sin + ld * cos }));
+      g.fillPoints(corners.map((c) => new Phaser.Geom.Point(c.x, c.y)), true);
+      // spike teeth (a row of little triangles along the strip) for readability
+      g.fillStyle(0xc0c0c0, 0.9 * fade);
+      const teeth = 9;
+      for (let i = 0; i < teeth; i++) {
+        const f = (i + 0.5) / teeth - 0.5;
+        const bx = s.x + f * s.len * cos, by = s.y + f * s.len * sin;
+        const tip = { x: bx - (hd + 4) * sin, y: by + (hd + 4) * cos };
+        const b1 = { x: bx - 3 * cos - hd * sin, y: by - 3 * sin + hd * cos };
+        const b2 = { x: bx + 3 * cos - hd * sin, y: by + 3 * sin + hd * cos };
+        g.fillPoints([new Phaser.Geom.Point(tip.x, tip.y), new Phaser.Geom.Point(b1.x, b1.y), new Phaser.Geom.Point(b2.x, b2.y)], true);
+      }
     }
   }
 
@@ -1501,11 +1549,25 @@ export class GameScene extends Phaser.Scene {
     ps.close();
     pit.close();
 
+    const spike = gui.addFolder("Spike run (deploy)");
+    spike.add(d, "spikeTrigSpeed", 0, 400, 10).name("Only if player above (px/s)");
+    spike.add(d, "spikeRange", 100, 800, 20).name("Cop within (px)");
+    spike.add(d, "spikeBehind", 0, 200, 5).name("Must be behind by (px)");
+    spike.add(d, "spikeDropAhead", 0, 200, 5).name("Deploy when ahead-by (px)");
+    spike.add(d, "spikeMaxTime", 1, 12, 0.5).name("Give up after (s)");
+    spike.add(d, "spikeDropCd", 0, 12, 0.5).name("Cooldown between drops (s)");
+    spike.add(d, "spikeReload", 1, 30, 0.5).name("Reload when empty (s)");
+    spike.add(d, "spikeStripCount", 1, 8, 1).name("Strips per unit");
+    spike.add(d, "spikeEaseAhead", 0, 300, 5).name("Ease-in-front ahead (px)");
+    spike.add(d, "spikeEaseFactor", 0.1, 1, 0.05).name("Ease to × your speed");
+    spike.add(this, "spikeLifetime", 3, 60, 1).name("Strip lifetime (s)");
+    spike.close();
+
     gui
       .add({ copy: () => this._copyManeuverStats() }, "copy")
       .name("Copy Maneuvers → Console");
 
-    this._persistPanel(gui, "gd_maneuverTune_v5"); // bumped: added PIT maneuver knobs
+    this._persistPanel(gui, "gd_maneuverTune_v6"); // bumped: added spike-run knobs
 
     gui.domElement.style.position = "fixed";
     gui.domElement.style.top = "8px";
@@ -2904,6 +2966,7 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
     this._updateCopDamage(delta / 1000);
     this._updateWrecks(delta / 1000);
     this._updateRoadblocks(this.car.sprite.x, this.car.sprite.y, delta / 1000);
+    this._updateSpikes(this.car.sprite.x, this.car.sprite.y, delta / 1000);
 
     // While spectating a cop (camera not on the player), freeze the car so the
     // observer can't accidentally drive or re-trigger anything.
@@ -3042,6 +3105,10 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
       this.director.pitEnabled = lvl >= minL;
       this.director.pitPower = Phaser.Math.Clamp((lvl - minL) / Math.max(1, 5 - minL), 0, 1);
       this.director.update(this.cops, this.car, delta / 1000);
+      // A spike unit that reached its deploy point queued a drop — build the strip + clear it.
+      for (const cop of this.cops) {
+        if (cop._spikeDrop) { this._dropSpike(cop._spikeDrop); cop._spikeDrop = null; }
+      }
     }
 
     // While searching, advance the coverage clock and let every cop paint what it

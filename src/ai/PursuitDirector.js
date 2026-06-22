@@ -18,6 +18,9 @@ export const CopState = {
   ROADBLOCK: 'ROADBLK',
   // Committed PIT attempt: one cop swipes the player's rear quarter to spin them out.
   PIT:       'PIT',
+  // Spike-unit run: sprint AHEAD (SPIKE) then drop a strip + ease in front (DEPLOY).
+  SPIKE:     'SPIKE',
+  DEPLOY:    'DEPLOY',
 };
 
 // PursuitDirector — the coordination brain for an active chase.
@@ -136,6 +139,25 @@ export class PursuitDirector {
     this._pitAttacker     = null;  // the single cop currently committed to a PIT
     this._pitCd           = 0;     // pack-wide cadence timer
 
+    // --- Spike run (ability 'spike'; see _updateSpikeRun) ---
+    // A spike unit's special: a VARIANT of the overtake where the brake-check becomes a DROP.
+    // It sprints AHEAD (reusing the overtake sprint geometry), and once in front it deploys a
+    // spike strip into the player's path then eases in front so they drive onto it. Single
+    // holder, commits then cools down — same discipline as the overtake/PIT. The actual strip
+    // is created by GameScene from a per-cop drop request (cop._spikeDrop), so scene-object
+    // creation stays in the scene; the hazard effect is wired next.
+    this.spikeTrigSpeed   = 180;   // only run when the player is at least this fast (so a strip ahead matters)
+    this.spikeRange       = 320;   // px the cop must be within to start a run
+    this.spikeBehind      = 20;    // px the cop must be BEHIND the player to start (it has to get ahead)
+    this.spikeDropAhead   = 45;    // along-px ahead the cop must reach to DEPLOY (drop the strip)
+    this.spikeMaxTime     = 5.0;   // s a run may take before timing out (fail)
+    this.spikeDropCd      = 2.5;   // s between drops (and between runs) for one unit
+    this.spikeReload      = 12.0;  // s reload after a unit empties its strip count
+    this.spikeStripCount  = 3;     // strips a unit carries before the reload (per-unit default in units.js)
+    this.spikeEaseAhead   = 70;    // px ahead the deployer eases to after dropping (forward-block)
+    this.spikeEaseFactor  = 0.7;   // it eases to this fraction of your speed so the pack catches up
+    this._spikeHolder     = null;  // the single cop currently running a spike deploy
+
     // --- Convoy relay (how a blind cop reaches the player) ---
     this.convoyEnabled   = false; // off by default — playtested better without the relay
                                   // churn; toggle on via Cop Tuning → Convoy
@@ -163,6 +185,9 @@ export class PursuitDirector {
     // Committed PIT attempt (single attacker, pack-wide cadence). Resolved first so the
     // attacker is excluded from the maneuver/box. May fire player.spinOut() this frame.
     const pitAttacker = this._updatePit(cops, playerCar, px, py, h, speed, dt);
+
+    // Committed spike run (single holder, spike units) — sprint ahead then deploy a strip.
+    const spiker = this._updateSpikeRun(cops, px, py, h, speed, dt);
 
     // Committed maneuver (single holder) — the aggressive overtake/brake-check. Resolved
     // before boxing so the holder is excluded from the box.
@@ -195,6 +220,25 @@ export class PursuitDirector {
         cop.role = CopState.PIT;
         target = { x: px, y: py };
         boost = this.pitBoost;
+      } else if (cop === spiker && cop._spikeRun) {
+        // Spike run: SPIKE = sprint ahead (boost, swing wide like an overtake); DEPLOY = it has
+        // dropped and now eases in front so the player drives onto the strip. The drop itself is
+        // requested in _updateSpikeRun (cop._spikeDrop) and built by GameScene.
+        if (cop._spikeRun.phase === 'SPIKE') {
+          cop.role = CopState.SPIKE;
+          const perp = h + Math.PI / 2;
+          const lat  = (cop.sprite.x - px) * Math.cos(perp) + (cop.sprite.y - py) * Math.sin(perp);
+          const side = lat >= 0 ? 1 : -1;
+          target = this._clearTarget(px, py, {
+            x: px + Math.cos(h) * this.overtakeAhead + Math.cos(perp) * this.overtakeSide * side,
+            y: py + Math.sin(h) * this.overtakeAhead + Math.sin(perp) * this.overtakeSide * side,
+          });
+          boost = this.overtakeBoost;
+        } else {
+          cop.role = CopState.DEPLOY;
+          target = this._clearTarget(px, py, { x: px + Math.cos(h) * this.spikeEaseAhead, y: py + Math.sin(h) * this.spikeEaseAhead });
+          speedCap = Math.max(this.blockMinSpeed, speed * this.spikeEaseFactor);
+        }
       } else if (cop === holder && cop._maneuver) {
         // Committed maneuver wins over box/pursue. It only chooses WHERE (a drivable
         // point) and a throttle CAP/boost — the shared CopAI still does the driving.
@@ -380,7 +424,8 @@ export class PursuitDirector {
     if (!a && this._pitCd <= 0 && speed >= this.pitMinSpeed) {
       let best = null, bestD = Infinity;
       for (const c of cops) {
-        if (c === this._maneuverHolder || (c._pitCd || 0) > 0 || !c.hasLOS) continue;
+        if (c === this._maneuverHolder || c === this._spikeHolder || (c._pitCd || 0) > 0 || !c.hasLOS) continue;
+        if (c.unitDef && c.unitDef.ability === 'spike') continue; // spike units never ram → never PIT
         if (c.getSpeed() < this.pitMinSpeed) continue;
         const d = this._dist(c, px, py);
         if (d > this.pitRange) continue;
@@ -439,6 +484,71 @@ export class PursuitDirector {
     if (this._pitAttacker) { this._pitAttacker._pitCd = this.pitUnitCooldown; this._pitAttacker._pitT = 0; }
     this._pitAttacker = null;
     this._pitCd = this.pitCooldown;
+  }
+
+  // The committed spike run (ability 'spike'): a variant of the overtake where the brake-check
+  // is replaced by a DROP. Single holder; sprint AHEAD, deploy a strip into the player's path,
+  // ease in front, then cool down (or reload when the strip count empties). Returns the holder.
+  _updateSpikeRun(cops, px, py, h, speed, dt) {
+    for (const c of cops) c._spikeCd = Math.max(0, (c._spikeCd || 0) - dt);
+
+    let s = this._spikeHolder;
+    if (s) {
+      // Drop a holder that vanished or lost sight (it can't line up a deploy blind).
+      if (!cops.includes(s) || !s.hasLOS || !s._spikeRun) { this._endSpikeRun(s); s = null; }
+      else {
+        const run = s._spikeRun;
+        run.t += dt;
+        const along = this._along(s, px, py, h);
+        if (run.phase === 'SPIKE') {
+          if (along > this.spikeDropAhead) { this._requestSpikeDrop(s, h); run.phase = 'DEPLOY'; }
+          else if (run.t > this.spikeMaxTime) { this._endSpikeRun(s); s = null; } // never got ahead
+        } else { // DEPLOY: hold in front until the player passes the strip (falls behind) or time-out
+          if (along < this.blockLost || run.t > this.spikeMaxTime) { this._endSpikeRun(s); s = null; }
+        }
+      }
+    }
+
+    // TRIGGER: a spike unit, behind & near, with strips + sight, while the player is moving.
+    if (!s && speed >= this.spikeTrigSpeed) {
+      let best = null, bestAlong = -Infinity;
+      for (const c of cops) {
+        if (!c.unitDef || c.unitDef.ability !== 'spike') continue;
+        if ((c._spikeCd || 0) > 0 || !c.hasLOS) continue;
+        if (c._spikeStrips == null) c._spikeStrips = (c.unitDef.spikeStrips ?? this.spikeStripCount);
+        if (c._spikeStrips <= 0) continue;
+        if (this._dist(c, px, py) > this.spikeRange) continue;
+        const along = this._along(c, px, py, h);
+        if (along > -this.spikeBehind) continue;               // must be behind to get ahead
+        if (along > bestAlong) { bestAlong = along; best = c; } // closest-to-even → best shot at passing
+      }
+      if (best) { best._spikeRun = { phase: 'SPIKE', t: 0, dropped: false }; this._spikeHolder = best; s = best; }
+    }
+    return s;
+  }
+
+  // Queue a strip drop at the cop's current spot (GameScene builds it + clears the request) and
+  // decrement the unit's strip count.
+  _requestSpikeDrop(cop, h) {
+    if (cop._spikeStrips == null) cop._spikeStrips = (cop.unitDef.spikeStrips ?? this.spikeStripCount);
+    if (cop._spikeStrips <= 0) return;
+    cop._spikeDrop = { x: cop.sprite.x, y: cop.sprite.y, heading: h };
+    cop._spikeStrips--;
+    cop._spikeRun.dropped = true;
+  }
+
+  // End a spike run: short cooldown between drops, or a long reload (refilling) once empty.
+  _endSpikeRun(cop) {
+    if (cop) {
+      cop._spikeRun = null;
+      if (cop._spikeStrips <= 0) {
+        cop._spikeCd = this.spikeReload;
+        cop._spikeStrips = (cop.unitDef.spikeStrips ?? this.spikeStripCount); // reloaded
+      } else {
+        cop._spikeCd = this.spikeDropCd;
+      }
+    }
+    if (this._spikeHolder === cop) this._spikeHolder = null;
   }
 
   // A unit whose speed edge must be expressed as committed maneuvers, not tailgating.
