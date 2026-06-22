@@ -87,8 +87,8 @@ export class GameScene extends Phaser.Scene {
     // Player CAPSULE collider (custom): Arcade's body can't rotate, so the car is modelled
     // as 3 circles along its spine and pushed out of walls by hand (rounded → slides along
     // corners). The Arcade square above stays as a centre backstop. (Cars are the next step.)
-    this.playerCapHalfLen = 15; // circle offset from centre along the car's facing
-    this.playerCapR       = 12; // capsule radius (≈ half the car width)
+    this.playerCapHalfLen = 13; // circle offset from centre along the car's facing (player −10%)
+    this.playerCapR       = 10; // capsule radius (≈ half the car width)
     this.playerMass       = 1.5; // capsule-collision weight vs cops (heavier → shoves them)
     // Capsule SOLVER quality. Iterating a Gauss–Seidel position solve (with a small slop +
     // relaxation) does two things at once: it stops a packed cluster from jittering (single-
@@ -1066,6 +1066,32 @@ export class GameScene extends Phaser.Scene {
     if (cop.health <= 0) (this._capDisable ||= []).push(cop);
   }
 
+  // RAM damage to a ROADBLOCK CAR (it has health tied to its unit type). Same closing-speed model
+  // as a cop — so you (or another cop) can RAM THROUGH a block car, clearing the slot. `rbAgent`
+  // is the block car's capsule agent; `otherAgent` is whatever hit it. Destruction is deferred.
+  _rbDamage(rbAgent, otherAgent) {
+    const c = rbAgent.rbCar;
+    if (c._dead || c.health == null || (c._dmgCd || 0) > 0) return;
+    const rel = Math.hypot(rbAgent.preVx - otherAgent.preVx, rbAgent.preVy - otherAgent.preVy);
+    if (rel <= this.ramThreshold) return;
+    c.health -= ((rel - this.ramThreshold) * this.ramScale) / (c.mass || 1);
+    c._dmgCd = this.ramDmgCooldown;
+    if (c.health <= 0) { c._dead = true; (this._capRbDead ||= []).push(c); }
+  }
+
+  // A wrecked block car is removed from its formation (the slot opens — ram-through counterplay).
+  _destroyRbCar(car) {
+    for (const rb of this.roadblocks) {
+      const i = rb.cars.indexOf(car);
+      if (i < 0) continue;
+      rb.cars.splice(i, 1);
+      car.body.destroy();
+      car.img.destroy();
+      if (rb.cars.length === 0 && (!rb.strips || rb.strips.length === 0)) this._removeRoadblock(rb);
+      return;
+    }
+  }
+
   // Disable a cop: spin it out, drop it from the active pack, leave it as a low-mass wreck
   // obstacle that despawns after a timer. In pursuit it also spikes heat and slows the
   // replacement (onCopDisabled + the disableReinforceMult delay).
@@ -1156,8 +1182,10 @@ export class GameScene extends Phaser.Scene {
     // These ARE normal cop cars (patrol / heavy) — same display + capsule dims as the live
     // units, so the block collides via the rotating capsule (slip through a spun car).
     const SPEC = {
-      car:   { tex: 'cop_patrol', visW: 25, visL: 58, body: 23, capR: 11, capHalfLen: 16, mass: this.rbCarMass },
-      heavy: { tex: 'cop_heavy',  visW: 32, visL: 67, body: 27, capR: 14, capHalfLen: 18, mass: this.rbHeavyMass },
+      // health is tied to the unit the block car IS (patrol / heavy), so a heavy block car is the
+      // tank to ram through and a patrol car gives way faster.
+      car:   { tex: 'cop_patrol', visW: 25, visL: 58, body: 23, capR: 11, capHalfLen: 16, mass: this.rbCarMass, health: UNITS.patrol.health },
+      heavy: { tex: 'cop_heavy',  visW: 32, visL: 67, body: 27, capR: 14, capHalfLen: 18, mass: this.rbHeavyMass, health: UNITS.heavy.health },
       spike: { spike: true, visL: this.rbSpikeWidth }, // a strip filling this slot (no vehicle)
     };
     const specs = this._roadblockComposition(difficulty).map((t) => SPEC[t]);
@@ -1196,7 +1224,7 @@ export class GameScene extends Phaser.Scene {
         .setDisplaySize(s.visW, s.visL).setDepth(9).setRotation(baseRot);
       this.worldLayer.add(img);
       const car = { body, img, baseRot, mass: s.mass, spin: 0, angVel: 0, _spinCd: 0,
-                    capR: s.capR, capHalfLen: s.capHalfLen };
+                    capR: s.capR, capHalfLen: s.capHalfLen, health: s.health, maxHealth: s.health };
       body.rbCar = car;                            // so the spin trigger can find it
       cars.push(car);
     }
@@ -1367,6 +1395,8 @@ export class GameScene extends Phaser.Scene {
     // Cops killed by ram damage this frame are disabled now (deferred so this.cops wasn't
     // mutated mid-resolve). Their stale agents finish this frame harmlessly as zeroed wrecks.
     if (this._capDisable) { for (const cop of this._capDisable) this._disableCop(cop); this._capDisable = null; }
+    // Block cars rammed to 0 health are removed now (deferred for the same reason) — the slot opens.
+    if (this._capRbDead) { for (const c of this._capRbDead) this._destroyRbCar(c); this._capRbDead = null; }
     if (this.capDebug) {
       this.capDebug.clear();
       for (const a of agents) {
@@ -1447,13 +1477,13 @@ export class GameScene extends Phaser.Scene {
     // PRE-collision closing speed (agent.preVx/preVy), gated by ramThreshold — so normal pack
     // jostling (low relative speed) is free, but a real high-speed crash hurts.
     const aCop = !!a.cop, bCop = !!b.cop;                       // live (damageable) cop agents
-    if (a.player && b.rbCar) this._onRoadblockHit(b.rbCar.body);
-    else if (b.player && a.rbCar) this._onRoadblockHit(a.rbCar.body);
+    if (a.player && b.rbCar) { this._onRoadblockHit(b.rbCar.body); this._rbDamage(b, a); }
+    else if (b.player && a.rbCar) { this._onRoadblockHit(a.rbCar.body); this._rbDamage(a, b); }
     else if (a.player && bCop) { this._applyRamImpact(b.v, cnx, cny); this._agentRamDamage(b, a); }
     else if (b.player && aCop) { this._applyRamImpact(a.v, -cnx, -cny); this._agentRamDamage(a, b); }
     else if (aCop && bCop) { this._agentRamDamage(a, b); this._agentRamDamage(b, a); } // cop↔cop crash hurts both
-    else if (aCop && b.rbCar) this._agentRamDamage(a, b);       // a cop slamming a roadblock car
-    else if (bCop && a.rbCar) this._agentRamDamage(b, a);
+    else if (aCop && b.rbCar) { this._agentRamDamage(a, b); this._rbDamage(b, a); } // cop ↔ block car: both take it
+    else if (bCop && a.rbCar) { this._agentRamDamage(b, a); this._rbDamage(a, b); }
   }
 
   // A FRONTAL high-closing-speed cop hit dumps extra player speed and bogs the engine briefly,
@@ -1494,6 +1524,16 @@ export class GameScene extends Phaser.Scene {
       g.fillRect(x - 1, y - 1, w + 2, h + 2); // background / empty track
       const col = frac > 0.5 ? 0x39ff14 : frac > 0.25 ? 0xffd23f : 0xff3b3b;
       g.fillStyle(col, 1);
+      g.fillRect(x, y, w * frac, h);
+    }
+    // Roadblock car health — only once DAMAGED (a fresh block would be a wall of full bars).
+    for (const rb of this.roadblocks) for (const c of rb.cars) {
+      if (c.health == null || c.health >= c.maxHealth) continue;
+      const frac = Phaser.Math.Clamp(c.health / c.maxHealth, 0, 1);
+      const x = c.body.x - w / 2, y = c.body.y - 36;
+      g.fillStyle(0x000000, 0.7);
+      g.fillRect(x - 1, y - 1, w + 2, h + 2);
+      g.fillStyle(frac > 0.5 ? 0x39ff14 : frac > 0.25 ? 0xffd23f : 0xff3b3b, 1);
       g.fillRect(x, y, w * frac, h);
     }
   }
@@ -2691,7 +2731,7 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
     cap.add(this, "playerCapHalfLen", 0, 40, 1).name("Spine half-length");
 
     // Persist across refresh (binds directly to the car, so load sets car fields).
-    this._persistPanel(gui, "gd_carTuning_v4"); // bumped: baked grip/turn + handbrake turn-rate lever
+    this._persistPanel(gui, "gd_carTuning_v5"); // bumped: player sprite + capsule −10%
 
     gui.domElement.style.position = "fixed";
     gui.domElement.style.top = "8px";
