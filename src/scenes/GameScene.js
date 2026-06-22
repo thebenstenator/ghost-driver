@@ -1554,7 +1554,7 @@ export class GameScene extends Phaser.Scene {
     spike.add(d, "spikeDeployMinSpeed", 0, 400, 10).name("Abort if player below (px/s)");
     spike.add(d, "spikeRange", 100, 800, 20).name("Cop within (px)");
     spike.add(d, "spikeBehind", 0, 200, 5).name("Must be behind by (px)");
-    spike.add(d, "spikeAhead", 80, 500, 10).name("Sprint-to ahead (px)");
+    spike.add(d, "spikeAhead", 60, 400, 10).name("Sprint lead (ahead of cop)");
     spike.add(d, "spikeSide", 0, 120, 2).name("Sprint swing-wide (px)");
     spike.add(d, "spikeBoost", 0, 300, 10).name("Sprint speed boost (px/s)");
     spike.add(d, "spikeDropAhead", 0, 200, 5).name("Deploy when ahead-by (px)");
@@ -1574,7 +1574,7 @@ export class GameScene extends Phaser.Scene {
       .add({ copy: () => this._copyManeuverStats() }, "copy")
       .name("Copy Maneuvers → Console");
 
-    this._persistPanel(gui, "gd_maneuverTune_v9"); // bumped: spike deploy-speed abort + bigger drop lead
+    this._persistPanel(gui, "gd_maneuverTune_v10"); // bumped: parallel-lane spike sprint + box excludes maneuverers
 
     gui.domElement.style.position = "fixed";
     gui.domElement.style.top = "8px";

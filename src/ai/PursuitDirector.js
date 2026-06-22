@@ -154,8 +154,8 @@ export class PursuitDirector {
                                    // to a crawl, hand off to the box/bust instead of dropping on top of you.
     this.spikeRange       = 320;   // px the cop must be within to start a run
     this.spikeBehind      = 20;    // px the cop must be BEHIND the player to start (it has to get ahead)
-    this.spikeAhead       = 200;   // px ahead of the player the spike unit sprints to (its overtake point)
-    this.spikeSide        = 40;    // px lateral swing while sprinting — MUST clear the capsule envelope
+    this.spikeAhead       = 130;   // px ahead of the COP it aims (in the adjacent lane) — its forward lead
+    this.spikeSide        = 44;    // px lateral swing while sprinting — MUST clear the capsule envelope
                                    // (~23px) or it can't get beside you to pass. The drop projects back
                                    // onto your centreline anyway, so a wide swing still lands the strip in-lane.
     this.spikeBoost       = 150;   // EXTRA top speed while sprinting — its own lever so it can actually get clear
@@ -210,15 +210,25 @@ export class PursuitDirector {
     // before boxing so the holder is excluded from the box.
     const holder = this._updateManeuver(cops, px, py, h, speed, dt);
 
-    // Event: do we sandwich the player this frame?
-    const boxing = this._updateBox(cops, playerCar, px, py, dt);
+    // Cops COMMITTED to a solo maneuver are excluded from the box — otherwise an attacker
+    // getting close (a PIT/overtake/spike has to) trips the box's "pinned" trigger and pulls
+    // the OTHER cops (and itself, on release) into a sandwich mid-attempt. The box only forms
+    // from FREE cops. (With 2 cops where 1 is attacking, that leaves <2 free → no box, exactly
+    // as it should: don't sandwich while you're busy setting up a hit.)
+    const busy = new Set();
+    if (pitAttacker) busy.add(pitAttacker);
+    if (spiker)      busy.add(spiker);
+    if (holder)      busy.add(holder);
 
-    // Box FRONT-RUNNER: pick ONE near cop to take the front, so the box actually STOPS the
+    // Event: do we sandwich the player this frame? (free cops only)
+    const boxing = this._updateBox(cops, playerCar, px, py, dt, busy);
+
+    // Box FRONT-RUNNER: pick ONE near FREE cop to take the front, so the box actually STOPS the
     // player instead of trailing them. Sticky — keep the same cop while it's near, so it
     // commits to getting around rather than thrashing the assignment.
     let boxFront = null;
     if (boxing) {
-      const near = cops.filter(c => this._dist(c, px, py) <= this.boxEngageRange);
+      const near = cops.filter(c => !busy.has(c) && this._dist(c, px, py) <= this.boxEngageRange);
       boxFront = (this._boxFrontCop && near.includes(this._boxFrontCop)) ? this._boxFrontCop
                : near.length ? near.reduce((b, c) => this._along(c, px, py, h) > this._along(b, px, py, h) ? c : b, near[0])
                : null;
@@ -246,10 +256,9 @@ export class PursuitDirector {
           const perp = h + Math.PI / 2;
           const lat  = (cop.sprite.x - px) * Math.cos(perp) + (cop.sprite.y - py) * Math.sin(perp);
           const side = lat >= 0 ? 1 : -1;
-          target = this._clearTarget(px, py, {
-            x: px + Math.cos(h) * this.spikeAhead + Math.cos(perp) * this.spikeSide * side,
-            y: py + Math.sin(h) * this.spikeAhead + Math.sin(perp) * this.spikeSide * side,
-          });
+          // Pull out into the adjacent lane and drive FORWARD past the player (not at a point
+          // across their path, which shoved them sideways).
+          target = this._overtakeTarget(cop, px, py, h, side, this.spikeSide, this.spikeAhead);
           boost = this.spikeBoost;
         } else {
           cop.role = CopState.DEPLOY;
@@ -593,8 +602,8 @@ export class PursuitDirector {
   // Enter when the player is slow OR a cop is pinning them, and >=2 cops are close
   // enough to actually sandwich. Hold for boxHold seconds after the trigger clears so
   // it doesn't flicker; drop immediately once the player has clearly broken away.
-  _updateBox(cops, playerCar, px, py, dt) {
-    const near   = cops.filter(c => this._dist(c, px, py) <= this.boxEngageRange);
+  _updateBox(cops, playerCar, px, py, dt, busy = null) {
+    const near   = cops.filter(c => (!busy || !busy.has(c)) && this._dist(c, px, py) <= this.boxEngageRange);
     const speed  = playerCar.getSpeed();
     const pinned = near.some(c => this._dist(c, px, py) <= this.boxPinDist);
     const trigger = near.length >= 2 && (speed < this.boxTriggerSpeed || pinned);
@@ -692,6 +701,20 @@ export class PursuitDirector {
       if (segmentClear(cop.sprite.x, cop.sprite.y, p.x, p.y, this.rects)) return { x: p.x, y: p.y };
     }
     return null;
+  }
+
+  // A target in the lane `sideDist` to one side of the player, `lead` ahead of the COP's OWN
+  // forward position. An overtaker driving at this pulls OUT into the adjacent lane and drives
+  // FORWARD alongside you (passing) — instead of aiming at a fixed point ahead-of-you, whose
+  // straight line runs through you and shoves you sideways. As the cop advances, the point
+  // advances with it, so it keeps pulling ahead until it's clear.
+  _overtakeTarget(cop, px, py, h, side, sideDist, lead) {
+    const along = (cop.sprite.x - px) * Math.cos(h) + (cop.sprite.y - py) * Math.sin(h);
+    const a = along + lead, perp = h + Math.PI / 2;
+    return this._clearTarget(px, py, {
+      x: px + Math.cos(h) * a + Math.cos(perp) * sideDist * side,
+      y: py + Math.sin(h) * a + Math.sin(perp) * sideDist * side,
+    });
   }
 
   // Pull a target in toward the player until the line player→target clears all
