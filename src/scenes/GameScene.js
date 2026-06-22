@@ -90,6 +90,23 @@ export class GameScene extends Phaser.Scene {
     this.playerCapHalfLen = 15; // circle offset from centre along the car's facing
     this.playerCapR       = 12; // capsule radius (≈ half the car width)
     this.playerMass       = 1.5; // capsule-collision weight vs cops (heavier → shoves them)
+    // Capsule SOLVER quality. Iterating a Gauss–Seidel position solve (with a small slop +
+    // relaxation) does two things at once: it stops a packed cluster from jittering (single-
+    // pass pushes never converge → buzz), and it lets a STACK propagate resistance so a swarm
+    // actually contains you (the front cop "feels" the cops behind it). Friction adds tangential
+    // grip so you can't frictionlessly slide out the seam.
+    this.capIters    = 4;    // position-solve iterations per frame (1 = old behaviour)
+    this.capSlop     = 0.5;  // px of penetration left uncorrected (kills micro-jitter)
+    this.capRelax    = 0.8;  // fraction of remaining penetration corrected per iteration
+    this.capFriction = 0.25; // 0..1 tangential grip applied at car↔car contacts
+    // Scripted RAM impact (frontal only): a fast head-on from a cop dumps the player's speed on
+    // top of the inelastic exchange AND bogs the engine briefly, so you can't instantly power
+    // through. Scaled by closing speed × how head-on it is × the unit's ramStrength.
+    this.ramSpeedKill  = 0.6;  // max fraction of remaining speed a full-intensity ram removes
+    this.ramBogTime    = 0.5;  // s of reduced acceleration after a full-intensity ram
+    this.ramBogAccel   = 0.35; // engine power multiplier while bogged (lower = harder to recover)
+    this.ramRefSpeed   = 380;  // closing speed (px/s) that counts as a "full" ram
+    this.ramMinClosing = 120;  // below this closing speed it's a nudge, not a ram
     this.capDebug = this.devMode ? this.add.graphics().setDepth(60) : null;
     if (this.capDebug) this.worldLayer.add(this.capDebug);
 
@@ -1178,12 +1195,20 @@ export class GameScene extends Phaser.Scene {
       a.c = [s.x + fx * d, s.y + fy * d, s.x, s.y, s.x - fx * d, s.y - fy * d]; // front · centre · rear
       a.reach = a.hl + a.R;
     }
-    for (const a of agents) this._capsuleVsWalls(a);
-    for (let i = 0; i < agents.length; i++) {
-      for (let j = i + 1; j < agents.length; j++) {
-        const a = agents[i], b = agents[j];
-        const dx = b.v.sprite.x - a.v.sprite.x, dy = b.v.sprite.y - a.v.sprite.y, rr = a.reach + b.reach;
-        if (dx * dx + dy * dy <= rr * rr) this._capsuleVsCapsule(a, b);        // broad-phase cull
+    // Gauss–Seidel: re-solve walls + car↔car several times so a packed stack settles instead
+    // of jittering, and resistance propagates through it. Velocity-changing work (friction, ram,
+    // roadblock spin) fires only on the FIRST iteration (firstIter) so it can't compound; the
+    // idempotent normal-cancel + positional pushout run every iteration.
+    const iters = Math.max(1, this.capIters | 0);
+    for (let it = 0; it < iters; it++) {
+      const firstIter = it === 0;
+      for (const a of agents) this._capsuleVsWalls(a);
+      for (let i = 0; i < agents.length; i++) {
+        for (let j = i + 1; j < agents.length; j++) {
+          const a = agents[i], b = agents[j];
+          const dx = b.v.sprite.x - a.v.sprite.x, dy = b.v.sprite.y - a.v.sprite.y, rr = a.reach + b.reach;
+          if (dx * dx + dy * dy <= rr * rr) this._capsuleVsCapsule(a, b, firstIter); // broad-phase cull
+        }
       }
     }
     // Roadblock car visuals follow their (just-pushed) body — keep the art on the collider.
@@ -1221,33 +1246,77 @@ export class GameScene extends Phaser.Scene {
           if (m === dl) { nx = -1; ny = 0; pen = dl + R; } else if (m === dr) { nx = 1; ny = 0; pen = dr + R; }
           else if (m === dtp) { nx = 0; ny = -1; pen = dtp + R; } else { nx = 0; ny = 1; pen = dbt + R; }
         }
-        this._capShift(a, nx * pen, ny * pen);
+        const corr = Math.max(0, pen - this.capSlop) * this.capRelax; // slop + relaxation
+        if (corr > 0) this._capShift(a, nx * corr, ny * corr);
         const vn = a.v.vx * nx + a.v.vy * ny;
         if (vn < 0) { a.v.vx -= vn * nx; a.v.vy -= vn * ny; a.v.sprite.body.velocity.set(a.v.vx, a.v.vy); }
       }
     }
   }
 
-  _capsuleVsCapsule(a, b) {
+  _capsuleVsCapsule(a, b, firstIter) {
     const minD = a.R + b.R, inv = 1 / (a.m + b.m);
+    // Positional pushout per overlapping circle-pair (slop + relaxation), tracking the DEEPEST
+    // contact's normal — velocity work (normal-cancel/friction/ram) is applied ONCE on that.
+    let cnx = 0, cny = 0, maxPen = -1;
     for (let i = 0; i < 6; i += 2) for (let j = 0; j < 6; j += 2) {
       const dx = b.c[j] - a.c[i], dy = b.c[j + 1] - a.c[i + 1], d2 = dx * dx + dy * dy;
       if (d2 >= minD * minD || d2 < 1e-6) continue;
       const dd = Math.sqrt(d2), nx = dx / dd, ny = dy / dd, pen = minD - dd; // normal a→b
-      this._capShift(a, -nx * pen * b.m * inv, -ny * pen * b.m * inv);
-      this._capShift(b,  nx * pen * a.m * inv,  ny * pen * a.m * inv);
-      const rvn = (b.v.vx - a.v.vx) * nx + (b.v.vy - a.v.vy) * ny;            // cancel only if approaching
-      if (rvn < 0) {
-        a.v.vx += rvn * nx * b.m * inv; a.v.vy += rvn * ny * b.m * inv;
-        b.v.vx -= rvn * nx * a.m * inv; b.v.vy -= rvn * ny * a.m * inv;
-        a.v.sprite.body.velocity.set(a.v.vx, a.v.vy);
-        b.v.sprite.body.velocity.set(b.v.vx, b.v.vy);
+      const corr = Math.max(0, pen - this.capSlop) * this.capRelax;
+      if (corr > 0) {
+        this._capShift(a, -nx * corr * b.m * inv, -ny * corr * b.m * inv);
+        this._capShift(b,  nx * corr * a.m * inv,  ny * corr * a.m * inv);
       }
-      // The player ramming a roadblock car off-centre torques it (scripted spin — moved here
-      // from the old Arcade collision callback). Throttled inside _onRoadblockHit.
-      if (a.player && b.rbCar) this._onRoadblockHit(b.rbCar.body);
-      else if (b.player && a.rbCar) this._onRoadblockHit(a.rbCar.body);
+      if (pen > maxPen) { maxPen = pen; cnx = nx; cny = ny; }
     }
+    if (maxPen < 0) return;                                   // no contact this pass
+    // Normal velocity solve (perfectly inelastic, momentum-conserving) — idempotent, every iter.
+    const rvn = (b.v.vx - a.v.vx) * cnx + (b.v.vy - a.v.vy) * cny;
+    if (rvn < 0) {
+      a.v.vx += rvn * cnx * b.m * inv; a.v.vy += rvn * cny * b.m * inv;
+      b.v.vx -= rvn * cnx * a.m * inv; b.v.vy -= rvn * cny * a.m * inv;
+      a.v.sprite.body.velocity.set(a.v.vx, a.v.vy);
+      b.v.sprite.body.velocity.set(b.v.vx, b.v.vy);
+    }
+    if (!firstIter) return;                                   // friction/ram/spin: once per frame
+    // Tangential friction → the swarm grips, you can't frictionlessly slide out the seam.
+    if (this.capFriction > 0) {
+      const rvx = b.v.vx - a.v.vx, rvy = b.v.vy - a.v.vy;
+      const rn = rvx * cnx + rvy * cny, tvx = rvx - rn * cnx, tvy = rvy - rn * cny;
+      a.v.vx += tvx * this.capFriction * b.m * inv; a.v.vy += tvy * this.capFriction * b.m * inv;
+      b.v.vx -= tvx * this.capFriction * a.m * inv; b.v.vy -= tvy * this.capFriction * a.m * inv;
+      a.v.sprite.body.velocity.set(a.v.vx, a.v.vy);
+      b.v.sprite.body.velocity.set(b.v.vx, b.v.vy);
+    }
+    // Scripted impacts (once per pair). Roadblock spin on the player ramming a block car; ram
+    // bog when the player takes a frontal cop hit. (cnx,cny) is the a→b normal.
+    if (a.player && b.rbCar) this._onRoadblockHit(b.rbCar.body);
+    else if (b.player && a.rbCar) this._onRoadblockHit(a.rbCar.body);
+    else if (a.player && !b.rbCar) this._applyRamImpact(b.v, cnx, cny);       // b is a cop
+    else if (b.player && !a.rbCar) this._applyRamImpact(a.v, -cnx, -cny);     // a is a cop
+  }
+
+  // A FRONTAL high-closing-speed cop hit dumps extra player speed and bogs the engine briefly,
+  // so a head-on actually costs you momentum you have to rebuild (interceptor = strong, heavy =
+  // near-stop). (nx,ny) points from the player toward the cop. Uses PRE-collision velocities so
+  // the magnitude reflects the real impact, not the already-resolved speeds.
+  _applyRamImpact(cop, nx, ny) {
+    const rs = cop.ramStrength || 0;
+    if (rs <= 0) return;
+    const pvx = this._carLastVx ?? this.car.vx, pvy = this._carLastVy ?? this.car.vy;
+    const cvx = cop._lastVx ?? cop.vx, cvy = cop._lastVy ?? cop.vy;
+    const closing = (pvx - cvx) * nx + (pvy - cvy) * ny;     // approach speed along the normal
+    if (closing < this.ramMinClosing) return;                // a nudge, not a ram
+    // How head-on is it? 1 = the cop is dead ahead of where the player is driving, 0 = side-swipe.
+    const fwd = Math.cos(this.car.facing) * nx + Math.sin(this.car.facing) * ny;
+    const frontal = Phaser.Math.Clamp(fwd, 0, 1);
+    const intensity = rs * frontal * Phaser.Math.Clamp(closing / this.ramRefSpeed, 0, 1);
+    if (intensity <= 0) return;
+    const keep = Math.max(0, 1 - this.ramSpeedKill * intensity);
+    this.car.vx *= keep; this.car.vy *= keep;
+    this.car.sprite.body.velocity.set(this.car.vx, this.car.vy);
+    this.car._ramBog = Math.max(this.car._ramBog || 0, this.ramBogTime * intensity);
   }
 
   // A small health bar floating above every active cop, so you can watch it deplete as
@@ -1305,6 +1374,20 @@ export class GameScene extends Phaser.Scene {
     rbf.add(this, "rbLifetime", 5, 90, 5).name("Lifetime (s)");
     rbf.add(this, "rbSpinFactor", 0, 0.002, 0.0001).name("Spin on off-centre hit");
     rbf.close();
+
+    // Swarm feel: capsule solver quality (anti-jitter + containment) and frontal-ram impact.
+    const sw = gui.addFolder("Swarm / Ram physics");
+    sw.add(this, "capIters", 1, 8, 1).name("Solver iterations");
+    sw.add(this, "capSlop", 0, 3, 0.1).name("Penetration slop (px)");
+    sw.add(this, "capRelax", 0.2, 1, 0.05).name("Position relax");
+    sw.add(this, "capFriction", 0, 1, 0.05).name("Contact friction (grip)");
+    sw.add(this, "playerMass", 0.5, 4, 0.1).name("Player mass");
+    sw.add(this, "ramSpeedKill", 0, 1, 0.05).name("Ram speed-kill (max)");
+    sw.add(this, "ramBogTime", 0, 1.5, 0.05).name("Ram engine-bog (s)");
+    sw.add(this, "ramBogAccel", 0, 1, 0.05).name("Bog power mult");
+    sw.add(this, "ramRefSpeed", 100, 700, 10).name("Full-ram closing speed");
+    sw.add(this, "ramMinClosing", 0, 400, 10).name("Min closing for ram");
+    sw.close();
 
     // Respawn-ahead retry (interceptor head-on loop). Binds straight to the live scene.
     const rs = gui.addFolder("Respawn-ahead (interceptor)");
@@ -1491,6 +1574,8 @@ this.boxTriggerSpeed = ${d.boxTriggerSpeed}; this.boxReleaseSpeed = ${d.boxRelea
     const t = (this._unitTuning = {
       capR: look.capR ?? 11,
       capHalfLen: look.capHalfLen ?? 14,
+      mass: def.mass ?? 1,
+      ramStrength: def.ramStrength ?? 0,
       maxSpeed: h.maxSpeed,
       acceleration: h.acceleration,
       gripLow: h.gripLow,
@@ -1521,6 +1606,8 @@ this.boxTriggerSpeed = ${d.boxTriggerSpeed}; this.boxReleaseSpeed = ${d.boxRelea
     const cap = gui.addFolder("Capsule (collider)");
     cap.add(t, "capR", 4, 30, 0.5).name("Radius (½ width)").onChange(apply);
     cap.add(t, "capHalfLen", 4, 40, 0.5).name("Spine ½-length").onChange(apply);
+    cap.add(t, "mass", 0.5, 4, 0.1).name("Mass (shove/contain)").onChange(apply);
+    cap.add(t, "ramStrength", 0, 1.5, 0.05).name("Frontal-ram strength").onChange(apply);
 
     const drive = gui.addFolder("Handling");
     drive.add(t, "maxSpeed", 100, 1200, 10).name("Max Speed").onChange(apply);
@@ -1602,7 +1689,7 @@ this.boxTriggerSpeed = ${d.boxTriggerSpeed}; this.boxReleaseSpeed = ${d.boxRelea
       .add({ copy: () => this._copyUnitDef(type) }, "copy")
       .name("Copy UnitDef → Console");
 
-    this._persistPanel(gui, `gd_unitTune_${type}_v3`); // bumped: cop capsule +15% sizes rebaked
+    this._persistPanel(gui, `gd_unitTune_${type}_v4`); // bumped: added mass + ramStrength
     this._applyUnitTuning(type); // sync def + live cops to the (possibly restored) values
 
     gui.domElement.style.position = "fixed";
@@ -1618,6 +1705,8 @@ this.boxTriggerSpeed = ${d.boxTriggerSpeed}; this.boxReleaseSpeed = ${d.boxRelea
       def = UNITS[type];
     (def.appearance ||= {}).capR = t.capR;
     def.appearance.capHalfLen = t.capHalfLen;
+    def.mass = t.mass;
+    def.ramStrength = t.ramStrength;
     Object.assign(def.handling, {
       maxSpeed: t.maxSpeed,
       acceleration: t.acceleration,
@@ -1646,6 +1735,9 @@ this.boxTriggerSpeed = ${d.boxTriggerSpeed}; this.boxReleaseSpeed = ${d.boxRelea
       if (cop.unitType !== type) continue;
       cop.capR = t.capR;
       cop.capHalfLen = t.capHalfLen;
+      cop.mass = t.mass;
+      cop.ramStrength = t.ramStrength;
+      if (cop.sprite.body) cop.sprite.body.mass = t.mass;
       cop.baseMaxSpeed = t.maxSpeed;
       cop.maxSpeed = t.maxSpeed;
       cop.acceleration = t.acceleration;
@@ -1680,6 +1772,7 @@ this.boxTriggerSpeed = ${d.boxTriggerSpeed}; this.boxReleaseSpeed = ${d.boxRelea
     const t = this._unitTuning;
     console.log(`// --- UNITS.${type} (paste into src/ai/units.js) ---
     // appearance capsule: capR: ${t.capR}, capHalfLen: ${t.capHalfLen}
+    // mass: ${t.mass}, ramStrength: ${t.ramStrength}
     handling: {
       maxSpeed: ${t.maxSpeed}, acceleration: ${t.acceleration},
       gripLow: ${t.gripLow}, gripHigh: ${t.gripHigh}, gripSpeedRef: ${t.gripSpeedRef},
@@ -2793,7 +2886,17 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
           brake: this.shiftKey.isDown,
         };
 
+    // Ram bog: after a frontal cop ram the engine briefly loses power so you can't instantly
+    // power back through. Scale acceleration down for this update only, then restore (so the
+    // tuning panel's value is untouched), and bleed the timer.
+    let _bogAccel = null;
+    if ((this.car._ramBog || 0) > 0) {
+      _bogAccel = this.car.acceleration;
+      this.car.acceleration *= this.ramBogAccel;
+      this.car._ramBog = Math.max(0, this.car._ramBog - delta / 1000);
+    }
     this.car.update(delta, controls);
+    if (_bogAccel != null) this.car.acceleration = _bogAccel;
     this._carLastVx = this.car.vx;
     this._carLastVy = this.car.vy; // pre-collision cache (see _updateCopDamage)
 

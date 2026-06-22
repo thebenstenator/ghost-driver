@@ -55,6 +55,7 @@ export const UNITS = {
     role:       'pursue',
     health:     150,
     mass:       1.0,
+    ramStrength: 0.3,                // a frontal patrol hit is noticeable but survivable
     priority:   0,
     ability:    null,
   },
@@ -87,6 +88,7 @@ export const UNITS = {
     role:       'intercept',
     health:     180,                 // survives most rams; a full mutual head-on can drop it
     mass:       1.0,
+    ramStrength: 0.7,                // a frontal interceptor hit slows you HARD
     priority:   2,                   // threat unit — retired last
     ability:    'intercept',
   },
@@ -114,7 +116,8 @@ export const UNITS = {
     placement:  'ahead-of-travel',
     role:       'block',
     health:     220,                 // tanky — multiple committed rams to put down
-    mass:       1.6,                 // soaks ram damage (/mass) AND physically shoves the player
+    mass:       2.4,                 // heavy enough that a head-on mass exchange alone ~stops you
+    ramStrength: 1.0,                // a frontal heavy hit is a near-complete stop
     priority:   3,                   // top threat — retired last
     ability:    'block',
   },

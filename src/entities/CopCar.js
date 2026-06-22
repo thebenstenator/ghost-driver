@@ -50,6 +50,9 @@ export class CopCar extends Vehicle {
     // walls + other cars — Arcade's box can't cover a rotated car). Per-type, tunable.
     this.capR       = look.capR       ?? 11;
     this.capHalfLen = look.capHalfLen ?? 14;
+    // Scripted frontal-ram impact strength (0 = physics only). GameScene._applyRamImpact scales
+    // the player's speed-kill + engine bog by this — interceptor strong, heavy near-stop.
+    this.ramStrength = def.ramStrength ?? 0;
 
     this.ai = new CopAI(navGrid, rects, def.ai);
     this.aiTarget = { x, y }; // current steering target, for debug draw
