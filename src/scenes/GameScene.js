@@ -87,8 +87,8 @@ export class GameScene extends Phaser.Scene {
     // Player CAPSULE collider (custom): Arcade's body can't rotate, so the car is modelled
     // as 3 circles along its spine and pushed out of walls by hand (rounded → slides along
     // corners). The Arcade square above stays as a centre backstop. (Cars are the next step.)
-    this.playerCapHalfLen = 16; // circle offset from centre along the car's facing
-    this.playerCapR       = 20; // capsule radius (≈ half the car width)
+    this.playerCapHalfLen = 14; // circle offset from centre along the car's facing
+    this.playerCapR       = 17; // capsule radius (≈ half the car width)
     this.capDebug = this.devMode ? this.add.graphics().setDepth(60) : null;
     if (this.capDebug) this.worldLayer.add(this.capDebug);
 
@@ -2304,6 +2304,11 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
         "copyStats",
       )
       .name("Copy Stats → Console");
+
+    // Capsule collider (the green dev circles) — live size, watch the overlay update.
+    const cap = gui.addFolder("Capsule collider");
+    cap.add(this, "playerCapR", 8, 40, 1).name("Radius (width)");
+    cap.add(this, "playerCapHalfLen", 0, 40, 1).name("Spine half-length");
 
     // Persist across refresh (binds directly to the car, so load sets car fields).
     this._persistPanel(gui, "gd_carTuning");
