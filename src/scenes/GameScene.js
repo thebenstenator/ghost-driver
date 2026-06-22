@@ -87,8 +87,8 @@ export class GameScene extends Phaser.Scene {
     // Player CAPSULE collider (custom): Arcade's body can't rotate, so the car is modelled
     // as 3 circles along its spine and pushed out of walls by hand (rounded → slides along
     // corners). The Arcade square above stays as a centre backstop. (Cars are the next step.)
-    this.playerCapHalfLen = 17; // circle offset from centre along the car's facing
-    this.playerCapR       = 14; // capsule radius (≈ half the car width)
+    this.playerCapHalfLen = 15; // circle offset from centre along the car's facing
+    this.playerCapR       = 12; // capsule radius (≈ half the car width)
     this.playerMass       = 1.5; // capsule-collision weight vs cops (heavier → shoves them)
     this.capDebug = this.devMode ? this.add.graphics().setDepth(60) : null;
     if (this.capDebug) this.worldLayer.add(this.capDebug);
@@ -1581,7 +1581,7 @@ this.boxTriggerSpeed = ${d.boxTriggerSpeed}; this.boxReleaseSpeed = ${d.boxRelea
       .add({ copy: () => this._copyUnitDef(type) }, "copy")
       .name("Copy UnitDef → Console");
 
-    this._persistPanel(gui, `gd_unitTune_${type}_v2`);
+    this._persistPanel(gui, `gd_unitTune_${type}_v3`); // bumped: cop capsule +15% sizes rebaked
     this._applyUnitTuning(type); // sync def + live cops to the (possibly restored) values
 
     gui.domElement.style.position = "fixed";
@@ -2365,7 +2365,7 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
     cap.add(this, "playerCapHalfLen", 0, 40, 1).name("Spine half-length");
 
     // Persist across refresh (binds directly to the car, so load sets car fields).
-    this._persistPanel(gui, "gd_carTuning");
+    this._persistPanel(gui, "gd_carTuning_v2"); // bumped: player capsule -10% sizes rebaked
 
     gui.domElement.style.position = "fixed";
     gui.domElement.style.top = "8px";

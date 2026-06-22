@@ -33,7 +33,7 @@
 export const UNITS = {
   patrol: {
     name: 'Patrol',
-    appearance: { texture: 'cop_patrol', displayWidth: 22, displayHeight: 50, bodySize: 20, capR: 10, capHalfLen: 14 },
+    appearance: { texture: 'cop_patrol', displayWidth: 25, displayHeight: 58, bodySize: 23, capR: 11, capHalfLen: 16 },
     handling: {
       // Top-speed dial — real top (~450 after drag) sits just under the player's, so
       // you can edge away on a straight. acceleration matched to that cap.
@@ -71,7 +71,7 @@ export const UNITS = {
   interceptor: {
     name: 'Interceptor',
     // The source art points FRONT-DOWN, so spin it 180° (textureRotation: π) to face travel.
-    appearance: { texture: 'cop_interceptor', displayWidth: 22, displayHeight: 52, bodySize: 20, textureRotation: Math.PI, capR: 10, capHalfLen: 15 },
+    appearance: { texture: 'cop_interceptor', displayWidth: 25, displayHeight: 60, bodySize: 23, textureRotation: Math.PI, capR: 11, capHalfLen: 17 },
     handling: {
       maxSpeed:       560,   // faster than patrol (495) so it can get ahead / close a head-on
       acceleration:   430,   // more aggressive pickup
@@ -99,7 +99,7 @@ export const UNITS = {
   // head-on (reuses placement/respawn-ahead); SLICE 2 adds the park-across-the-road block.
   heavy: {
     name: 'Heavy',
-    appearance: { texture: 'cop_heavy', displayWidth: 28, displayHeight: 58, bodySize: 24, capR: 13, capHalfLen: 16 }, // bigger SUV footprint
+    appearance: { texture: 'cop_heavy', displayWidth: 32, displayHeight: 67, bodySize: 27, capR: 14, capHalfLen: 18 }, // bigger SUV footprint
     handling: {
       maxSpeed:       430,   // slower than patrol — it can't chase you down, it BLOCKS you
       acceleration:   300,   // sluggish pickup (lots of metal to move)

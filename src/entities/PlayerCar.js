@@ -7,9 +7,9 @@ export class PlayerCar extends Vehicle {
   constructor(scene, x, y) {
     super(scene, x, y, {
       texture: 'player_car',
-      displayWidth: 37,    // new prowler art is sleeker (0.51 aspect) — keep length, narrower
-      displayHeight: 73,
-      bodySize: 34,        // square backstop ≈ the (narrower) car width; capsule does the real work
+      displayWidth: 33,    // new prowler art is sleeker (0.51 aspect) — keep length, narrower
+      displayHeight: 66,
+      bodySize: 30,        // square backstop ≈ the (narrower) car width; capsule does the real work
       depth: 10,
     });
   }
