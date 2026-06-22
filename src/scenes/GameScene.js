@@ -198,6 +198,7 @@ export class GameScene extends Phaser.Scene {
     this.rbSpinFactor  = 0.0004; // hit offset × your speed → spin impulse (÷ car mass)
     this.rbSpinDamp    = 0.93;   // per-frame spin decay (so a spun car settles)
     this.rbSpinMax     = 9;      // rad/s cap on a car's spin
+    this.pitTestLevel  = 5;      // sandbox-only stand-in for the pursuit level (drives PIT power)
     this.searchSpeed = 250; // cop speed cap while searching (clean corners)
     this.searchDepth = 2; // STARTING search radius (blocks out from last-known)
     this.searchMaxDepth = 10; // search grows out to this many blocks as ground is checked
@@ -944,7 +945,8 @@ export class GameScene extends Phaser.Scene {
       r === CopState.BOX_FRONT ||
       r === CopState.BOX_REAR ||
       r === CopState.BLOCK ||
-      r === CopState.OVERTAKE
+      r === CopState.OVERTAKE ||
+      r === CopState.PIT
     );
   }
 
@@ -1468,11 +1470,42 @@ export class GameScene extends Phaser.Scene {
     rb.add(d, "blockMaxTime", 1, 15, 0.5).name("Hold a block (s)");
     rb.add(d, "blockCooldown", 0, 12, 0.5).name("Cooldown between (s)");
 
+    const pit = gui.addFolder("PIT maneuver");
+    pit.add(this, "pitTestLevel", 1, 5, 1).name("Sandbox level (power)");
+    pit.add(d, "pitMinLevel", 1, 5, 1).name("Available from level");
+    pit.add(d, "pitCooldown", 1, 30, 0.5).name("Pack cadence (s)");
+    pit.add(d, "pitUnitCooldown", 1, 30, 0.5).name("Same-cop cooldown (s)");
+    pit.add(d, "pitRange", 80, 600, 10).name("Attempt within (px)");
+    pit.add(d, "pitMinSpeed", 0, 400, 10).name("Min speed (both) (px/s)");
+    pit.add(d, "pitMaxTime", 0.5, 6, 0.5).name("Give up after (s)");
+    pit.add(d, "pitBoost", 0, 300, 10).name("Commit speed boost (px/s)");
+    const pg = pit.addFolder("Detection (rear quarter)");
+    pg.add(d, "pitContactDist", 20, 100, 2).name("Swipe registers within (px)");
+    pg.add(d, "pitCoDirMin", 0, 1, 0.05).name("Min co-directional");
+    pg.add(d, "pitRearMax", -40, 60, 2).name("Max ahead-of-centre (px)");
+    pg.add(d, "pitSideMin", 0, 60, 2).name("Side band min (px)");
+    pg.add(d, "pitSideMax", 20, 120, 2).name("Side band max (px)");
+    pg.add(d, "pitClosingMin", 0, 200, 5).name("Min turning-in (px/s)");
+    pg.close();
+    const ps = pit.addFolder("Spin severity");
+    ps.add(d, "pitRefSpeed", 100, 700, 10).name("Full-power speed (px/s)");
+    ps.add(d, "pitPowerFloor", 0, 1, 0.05).name("Min-level intensity floor");
+    ps.add(d, "pitDurMin", 0.1, 1.5, 0.05).name("Control loss min (s)");
+    ps.add(d, "pitDurMax", 0.1, 2, 0.05).name("Control loss max (s)");
+    ps.add(d, "pitYawMin", 1, 12, 0.5).name("Yaw min (rad/s)");
+    ps.add(d, "pitYawMax", 1, 16, 0.5).name("Yaw max (rad/s)");
+    ps.add(d, "pitGripMult", 0, 1, 0.05).name("Grip during spin");
+    ps.add(d, "pitSpeedScrub", 0.8, 1, 0.005).name("Speed retain / frame");
+    ps.add(d, "pitLateralKick", 0, 300, 10).name("Tail kick (px/s)");
+    ps.add(d, "pitVictimCooldown", 0, 4, 0.25).name("Re-PIT immunity (s)");
+    ps.close();
+    pit.close();
+
     gui
       .add({ copy: () => this._copyManeuverStats() }, "copy")
       .name("Copy Maneuvers → Console");
 
-    this._persistPanel(gui, "gd_maneuverTune_v4"); // bumped: added heavy roadblock knobs
+    this._persistPanel(gui, "gd_maneuverTune_v5"); // bumped: added PIT maneuver knobs
 
     gui.domElement.style.position = "fixed";
     gui.domElement.style.top = "8px";
@@ -3001,6 +3034,13 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
     // HUNT changes is that they do it at full speed instead of the slow cap.
     const hunting = state === PursuitState.SEARCH && this.pursuit.hunting;
     if (state === PursuitState.ACTIVE) {
+      // PIT availability + severity are LEVEL-derived (heat is the source of truth). In the
+      // sandbox there's no PursuitLevel, so pitTestLevel stands in so the maneuver can be felt
+      // at each tier. pitPower ramps 0→1 from the min level to L5.
+      const lvl = this.pursuitLevel ? this.pursuitLevel.level : this.pitTestLevel;
+      const minL = this.director.pitMinLevel;
+      this.director.pitEnabled = lvl >= minL;
+      this.director.pitPower = Phaser.Math.Clamp((lvl - minL) / Math.max(1, 5 - minL), 0, 1);
       this.director.update(this.cops, this.car, delta / 1000);
     }
 

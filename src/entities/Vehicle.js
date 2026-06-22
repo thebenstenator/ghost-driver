@@ -32,6 +32,8 @@ export class Vehicle {
     this._kickTimer    = 0; // progress through current kick animation
     this._kickTotal    = 0; // total rotation (radians) for current kick
     this._kickApplied  = 0; // how much has been applied so far
+    this._spin         = null; // active PIT spin-out (see spinOut) — overrides control while set
+    this._spinCooldown = 0;    // s before another spin-out can be induced (anti re-PIT)
 
     // --- Default stats (Pilgrim baseline sedan) ---
     this.maxSpeed        = 600;
@@ -88,14 +90,49 @@ export class Vehicle {
     return Math.sqrt(this.vx * this.vx + this.vy * this.vy);
   }
 
+  // Induce a scripted PIT spin-out (universal — player or cop). `dir` (±1) is the spin
+  // direction; opts scale the severity. Returns false if already spinning / on cooldown.
+  // The actual yaw + grip-break is applied at the top of update() while `_spin` is set.
+  spinOut(dir, opts = {}) {
+    if (this._spin || this._spinCooldown > 0) return false;
+    const {
+      duration = 0.5, yawRate = 6, gripMult = 0.25,
+      speedScrub = 0.95, lateralKick = 100, cooldown = 1.0,
+    } = opts;
+    this._spin = { t: duration, dir: dir < 0 ? -1 : 1, yawRate, gripMult, speedScrub, cooldown };
+    // One-time tail kick: shove velocity sideways so the rear visibly slews out at impact.
+    this.vx += -Math.sin(this.facing) * lateralKick * this._spin.dir;
+    this.vy +=  Math.cos(this.facing) * lateralKick * this._spin.dir;
+    this.sprite.body.velocity.set(this.vx, this.vy);
+    return true;
+  }
+
   update(delta, controls) {
     const dt = delta / 1000;
-    const { up, down, left, right, handbrake, brake } = controls;
-    this.isDrifting = handbrake;
 
     // Sync velocity from physics body — collisions may have modified it
     this.vx = this.sprite.body.velocity.x;
     this.vy = this.sprite.body.velocity.y;
+
+    // --- PIT spin-out override ---
+    // While spun, the car ignores driver/AI input: a forced yaw rotates the nose, speed
+    // bleeds, and the grip blend below runs at gripMult× so velocity does NOT snap to the new
+    // facing — the car slides/slews instead of pivoting cleanly. (See spinOut + collisions-and-pit.md §5.)
+    this._spinCooldown = Math.max(0, this._spinCooldown - dt);
+    let spinGripMult = 1;
+    if (this._spin) {
+      const s = this._spin;
+      this.facing += s.dir * s.yawRate * dt;
+      this.vx *= s.speedScrub;
+      this.vy *= s.speedScrub;
+      spinGripMult = s.gripMult;
+      controls = { up: false, down: false, left: false, right: false, handbrake: false, brake: false };
+      s.t -= dt;
+      if (s.t <= 0) { this._spinCooldown = s.cooldown; this._spin = null; }
+    }
+
+    const { up, down, left, right, handbrake, brake } = controls;
+    this.isDrifting = handbrake;
 
     const speed         = this.getSpeed();
     const speedFraction = Phaser.Math.Clamp(speed / this.maxSpeed, 0, 1);
@@ -212,9 +249,10 @@ export class Vehicle {
     }
 
     // --- Grip: blend velocity toward intended travel direction ---
-    const gripBase = handbrake
+    const gripBase = (handbrake
       ? this.gripHandbrake
-      : Phaser.Math.Linear(this.gripLow, this.gripHigh, Math.min(speed / this.gripSpeedRef, 1));
+      : Phaser.Math.Linear(this.gripLow, this.gripHigh, Math.min(speed / this.gripSpeedRef, 1)))
+      * spinGripMult; // grip break during a PIT spin-out → the rear slides out instead of pivoting
     const grip = 1 - Math.pow(1 - gripBase, dt * 60);
 
     if (speed > 5) {
