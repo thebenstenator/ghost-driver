@@ -169,8 +169,6 @@ export class PursuitDirector {
     this.spikeDropCd      = 2.5;   // s between drops (and between runs) for one unit
     this.spikeReload      = 12.0;  // s reload after a unit empties its strip count
     this.spikeStripCount  = 3;     // strips a unit carries before the reload (per-unit default in units.js)
-    this.spikeDropLead    = 0;     // px AHEAD of the cop's projection the strip lands. 0 = right at the cop
-                                   // (now that it's 225px ahead, no extra gap needed); raise for more lead
     this.spikeEaseAhead   = 70;    // px ahead the deployer eases to after dropping (forward-block)
     this.spikeEaseFactor  = 0.7;   // it eases to this fraction of your speed so the pack catches up
     // LEAD: a spike unit that's already ahead (it spawned ahead) drives to stay this far in front,
@@ -178,6 +176,9 @@ export class PursuitDirector {
     this.spikeLeadDist    = 150;   // px ahead of ITSELF a leading spike unit aims (keeps it driving
                                    // forward); the gap it holds ≈ its spawn-ahead distance, pace-matched
     this.spikeLeadMin     = 0;     // along-px above which a spike unit is treated as "ahead" (leads)
+    this.spikeGlobalCooldown = 6;  // s between ANY spike deploy across the WHOLE pack (so strips can't
+                                   // carpet the road — one strip down, then a pack-wide cadence)
+    this._spikeGlobalCd   = 0;     // pack-wide deploy timer
     this._spikeHolder     = null;  // the single cop currently running a spike deploy
 
     // --- Convoy relay (how a blind cop reaches the player) ---
@@ -286,9 +287,10 @@ export class PursuitDirector {
         target = this._clearTarget(px, py, { x: cop.sprite.x + Math.cos(h) * this.spikeLeadDist, y: cop.sprite.y + Math.sin(h) * this.spikeLeadDist });
         speedCap = Math.max(this.blockMinSpeed, speed);
         boost = this.spikeBoost;
-        if ((cop._spikeCd || 0) <= 0 && (cop._spikeStrips == null || cop._spikeStrips > 0)) {
+        if ((cop._spikeCd || 0) <= 0 && this._spikeGlobalCd <= 0 && (cop._spikeStrips == null || cop._spikeStrips > 0)) {
           cop.role = CopState.DEPLOY;
-          this._requestSpikeDrop(cop, px, py, h, this.spikeDropAhead); // strip lands at the deploy distance
+          this._requestSpikeDrop(cop, h); // drops at the cop (which is leading ahead of you)
+          this._spikeGlobalCd = this.spikeGlobalCooldown;
           cop._spikeCd = (cop._spikeStrips <= 0) ? this.spikeReload : this.spikeDropCd;
           if (cop._spikeStrips <= 0) cop._spikeStrips = (cop.unitDef.spikeStrips ?? this.spikeStripCount); // reloaded
         }
@@ -505,6 +507,7 @@ export class PursuitDirector {
   // ease in front, then cool down (or reload when the strip count empties). Returns the holder.
   _updateSpikeRun(cops, px, py, h, speed, dt) {
     for (const c of cops) c._spikeCd = Math.max(0, (c._spikeCd || 0) - dt);
+    this._spikeGlobalCd = Math.max(0, this._spikeGlobalCd - dt);
 
     let s = this._spikeHolder;
     if (s) {
@@ -523,8 +526,13 @@ export class PursuitDirector {
             if (along > run.bestAlong + this.spikeProgressEps) { run.bestAlong = along; run.stallT = 0; }
             else run.stallT += dt;
             if (along > this.spikeDropAhead) {
-              this._requestSpikeDrop(s, px, py, h, along);
-              run.phase = 'DEPLOY'; run.deployT = 0;
+              if (this._spikeGlobalCd <= 0) {                      // pack-wide deploy cadence
+                this._requestSpikeDrop(s, h);
+                this._spikeGlobalCd = this.spikeGlobalCooldown;
+                run.phase = 'DEPLOY'; run.deployT = 0;
+              } else {
+                this._endSpikeRun(s); s = null;                    // ahead but on cooldown → hand to LEAD
+              }
             } else if (run.stallT > this.spikeStallTime) {
               this._endSpikeRun(s); s = null;   // stuck alongside, not gaining → give up
             }
@@ -560,11 +568,13 @@ export class PursuitDirector {
   // Queue a strip drop IN THE PLAYER'S PATH (GameScene builds it + clears the request) and
   // decrement the unit's strip count. The strip lands on the player's centreline at the cop's
   // forward distance (+ a small lead), so a wide-swung deployer still drops it in the lane.
-  _requestSpikeDrop(cop, px, py, h, along) {
+  // Queue a strip drop AT THE COP'S OWN POSITION (it's on a road → never inside a building, and it
+  // reads as the cop laying it under itself), oriented across the player's travel. Since the cop is
+  // ahead of you when it deploys, the strip still lands in your path.
+  _requestSpikeDrop(cop, h) {
     if (cop._spikeStrips == null) cop._spikeStrips = (cop.unitDef.spikeStrips ?? this.spikeStripCount);
     if (cop._spikeStrips <= 0) return;
-    const lead = along + this.spikeDropLead;
-    cop._spikeDrop = { x: px + Math.cos(h) * lead, y: py + Math.sin(h) * lead, heading: h };
+    cop._spikeDrop = { x: cop.sprite.x, y: cop.sprite.y, heading: h };
     cop._spikeStrips--;
   }
 

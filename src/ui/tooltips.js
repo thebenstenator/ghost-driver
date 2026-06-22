@@ -139,7 +139,7 @@ export const TOOLTIPS = {
   spikeSide: "Lateral swing while sprinting (must clear the ~23px envelope or it shoves you). Raise if it leans on you instead of passing.",
   spikeBoost: "Sprint speed boost so it can pull ahead of you. Raise if it can't get clear to deploy.",
   spikeDropAhead: "How far ahead it must get before dropping the strip. Raise so the strip lands further in front (more dodge time).",
-  spikeDropLead: "Extra distance ahead of the cop the strip lands. Raise for a bigger reaction gap.",
+  spikeGlobalCooldown: "Seconds between ANY spike deploy across the whole pack. Raise so strips can't carpet the road — one strip, then a pack-wide wait.",
   spikeStripLen: "Width (px) of a cop-deployed spike strip (≈ car width = dodgeable). Raise to make it harder to dodge.",
   spikeProgressEps: "Forward gain (px) that counts as real progress in the sprint. Higher ignores jitter; lower = stricter.",
   spikeStallTime: "Seconds of NO progress before the sprint gives up. Raise so it persists while slowly winning the overtake.",

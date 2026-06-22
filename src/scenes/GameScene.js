@@ -1733,7 +1733,7 @@ this.interceptAheadDist = ${this.interceptAheadDist}; this.interceptEntrySpeed =
     spike.add(d, "spikeSide", 0, 120, 2).name("Sprint swing-wide (px)");
     spike.add(d, "spikeBoost", 0, 300, 10).name("Sprint speed boost (px/s)");
     spike.add(d, "spikeDropAhead", 0, 400, 5).name("Deploy when ahead-by (px)");
-    spike.add(d, "spikeDropLead", 0, 200, 5).name("Strip lands ahead-of-cop (px)");
+    spike.add(d, "spikeGlobalCooldown", 0, 20, 0.5).name("Global deploy cooldown (s)");
     spike.add(this, "spikeStripLen", 10, 100, 2).name("Strip width (px)");
     spike.add(d, "spikeProgressEps", 0, 40, 1).name("Progress = gain over (px)");
     spike.add(d, "spikeStallTime", 0.3, 5, 0.1).name("Give up if stalled (s)");
@@ -1754,7 +1754,7 @@ this.interceptAheadDist = ${this.interceptAheadDist}; this.interceptEntrySpeed =
       .add({ copy: () => this._copyManeuverStats() }, "copy")
       .name("Copy Maneuvers → Console");
 
-    this._persistPanel(gui, "gd_maneuverTune_v12"); // bumped: PIT push-force rework + removed heavy roadblock
+    this._persistPanel(gui, "gd_maneuverTune_v13"); // bumped: spike global cooldown + drop-at-cop
 
     gui.domElement.style.position = "fixed";
     gui.domElement.style.top = "8px";
