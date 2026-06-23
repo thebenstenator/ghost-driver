@@ -14,14 +14,16 @@ const SIREN_FALLOFF = 1100;    // px at which a siren fades to silent
 const SIREN_PAN_RANGE = 900;   // px lateral offset that maps to full L/R pan
 
 // Real sirens cycle through modes rather than holding one pattern. Each segment sets the
-// sweep RATE (Hz — how fast the pitch rises/falls) and DEPTH (Hz — how far it sweeps):
-// slow+wide = wail, fast+medium = yelp, very-fast+narrow = phaser/priority. Voices are
-// phase-offset across this cycle so the pack desyncs (one car wails while another yelps).
+// sweep RATE (Hz — how fast the pitch rises/falls), DEPTH (Hz — how far it sweeps), and
+// CENTER (Hz — the base pitch). FASTER PACE = HIGHER PITCH: wail is slow + low, yelp is
+// fast + notably higher, phaser is fastest + highest. So the cycle climbs in pitch toward
+// yelp/phaser then drops back to wail. Voices are phase-offset so the pack desyncs (one car
+// wails while another yelps).
 const SIREN_CYCLE = [
-  { dur: 6.0, rate: 0.28, depth: 210 }, // wail   — long slow sweep
-  { dur: 4.0, rate: 3.3,  depth: 175 }, // yelp   — fast sweep
-  { dur: 5.0, rate: 0.32, depth: 210 }, // wail
-  { dur: 2.5, rate: 6.8,  depth: 120 }, // phaser — very fast, tight
+  { dur: 6.0, rate: 0.28, depth: 220, center: 680 },  // wail   — slow, low, wide sweep
+  { dur: 4.0, rate: 3.3,  depth: 240, center: 1120 }, // yelp   — fast + much higher
+  { dur: 5.0, rate: 0.30, depth: 220, center: 700 },  // wail
+  { dur: 2.5, rate: 6.8,  depth: 160, center: 1380 }, // phaser — fastest + highest, tight
 ];
 const SIREN_CYCLE_LEN = SIREN_CYCLE.reduce((s, seg) => s + seg.dur, 0);
 function sirenMode(t) {
@@ -139,11 +141,11 @@ export class GameAudio {
     for (let i = 0; i < SIREN_VOICES; i++) {
       const carrier = ctx.createOscillator();
       carrier.type = "square";
-      const center = 740 + i * 35; // detune voices so they don't phase-lock into one tone
-      carrier.frequency.value = center;
+      const detune = i * 30; // per-voice offset so voices don't phase-lock into one tone
+      carrier.frequency.value = SIREN_CYCLE[0].center + detune;
 
-      // LFO sweeps the carrier between center±depth. Its rate + depth are re-driven
-      // each frame from the mode schedule (wail/yelp/phaser), so this is just a start.
+      // LFO sweeps the carrier around its center. Rate + depth (and the carrier center)
+      // are re-driven each frame from the mode schedule (wail/yelp/phaser).
       const lfo = ctx.createOscillator(); lfo.type = "triangle"; lfo.frequency.value = SIREN_CYCLE[0].rate;
       const lfoGain = ctx.createGain(); lfoGain.gain.value = SIREN_CYCLE[0].depth;
       lfo.connect(lfoGain); lfoGain.connect(carrier.frequency);
@@ -159,7 +161,7 @@ export class GameAudio {
 
       carrier.start(); lfo.start();
       // phase: where this voice sits in the mode cycle, spread evenly so the pack desyncs.
-      this.sirens.push({ g, pan, center, lfo, lfoGain, phase: (i / SIREN_VOICES) * SIREN_CYCLE_LEN });
+      this.sirens.push({ g, pan, carrier, detune, lfo, lfoGain, phase: (i / SIREN_VOICES) * SIREN_CYCLE_LEN });
     }
   }
 
@@ -196,54 +198,53 @@ export class GameAudio {
             0.08,
           );
         // Advance this voice through the wail/yelp/phaser cycle. The 0.3s smoothing makes
-        // mode changes "spin up/down" (the LFO rate ramps) rather than snapping.
+        // mode changes "spin up/down" (rate, depth AND center pitch ramp) rather than snapping.
         const m = sirenMode(now + v.phase);
         v.lfo.frequency.setTargetAtTime(m.rate, now, 0.3);
         v.lfoGain.gain.setTargetAtTime(m.depth, now, 0.3);
+        v.carrier.frequency.setTargetAtTime(m.center + v.detune, now, 0.3);
       }
       v.g.gain.setTargetAtTime(gain, now, 0.1);
     }
   }
 
-  // "Found again" alert — a short, fast, HIGH yelp burst fired when a cop re-spots the
-  // player during the cooldown/search (the oh-crap moment). Same swept-carrier character as
-  // the cruising siren (so it reads as "cop", not a UI beep), but pitched up and swept fast.
-  // One-shot; the 1.2s self-cooldown stops a state flicker from machine-gunning it.
-  playSpotted() {
+  // "Found again" alert — a modulated fire-engine AIR-HORN blast fired when a cop re-spots
+  // the player during the post-ditch cooldown (the oh-crap moment). Two saws a third apart
+  // give the brassy dual-tone "BLAAT"; a vibrato LFO adds the wobble/modulation. `pan` places
+  // it on the spotting cop so it sits IN the mix, not separate. One-shot; 1.2s self-cooldown.
+  playSpotted(pan = 0) {
     if (!this.ctx || this.muted) return;
     const ctx = this.ctx, now = ctx.currentTime;
     if (now < (this._spottedUntil || 0)) return;
     this._spottedUntil = now + 1.2;
-    const dur = 0.6;
+    const dur = 0.62;
 
-    const carrier = ctx.createOscillator();
-    carrier.type = "square";
-    carrier.frequency.setValueAtTime(1080, now);
-    carrier.frequency.linearRampToValueAtTime(1320, now + dur); // center creeps up = rising urgency
+    // Dual-tone air horn: two saws ~a major third apart → the recognizable brassy chord.
+    const o1 = ctx.createOscillator(); o1.type = "sawtooth"; o1.frequency.value = 330;
+    const o2 = ctx.createOscillator(); o2.type = "sawtooth"; o2.frequency.value = 415;
 
-    // Fast sawtooth LFO sweep = the yelp "whoop", higher + faster than the cruising siren.
-    const lfo = ctx.createOscillator();
-    lfo.type = "sawtooth";
-    lfo.frequency.value = 6.5;
-    const lfoGain = ctx.createGain();
-    lfoGain.gain.value = 300; // sweep depth (Hz)
-    lfo.connect(lfoGain); lfoGain.connect(carrier.frequency);
+    // Vibrato modulation — a small fast wobble on both tones so the blast has life.
+    const vib = ctx.createOscillator(); vib.type = "sine"; vib.frequency.value = 5.5;
+    const vibGain = ctx.createGain(); vibGain.gain.value = 10; // Hz depth
+    vib.connect(vibGain); vibGain.connect(o1.frequency); vibGain.connect(o2.frequency);
 
-    const lp = ctx.createBiquadFilter();
-    lp.type = "lowpass"; lp.frequency.value = 3200; // tame the square's edge
-
+    // Lowpass for body (keeps it a horn, not a buzz).
+    const lp = ctx.createBiquadFilter(); lp.type = "lowpass"; lp.frequency.value = 2200; lp.Q.value = 0.7;
     const g = ctx.createGain(); g.gain.value = 0.0001;
-    carrier.connect(lp); lp.connect(g); g.connect(this.master);
+    const pn = ctx.createStereoPanner ? ctx.createStereoPanner() : null;
+    o1.connect(lp); o2.connect(lp); lp.connect(g);
+    if (pn) { pn.pan.value = Math.max(-1, Math.min(1, pan)); g.connect(pn); pn.connect(this.master); }
+    else g.connect(this.master);
 
-    // Punchy attack, hold, short tail.
-    const peak = 0.3;
+    // Punch in, sustain the blast, quick release.
+    const peak = 0.32;
     g.gain.setValueAtTime(0.0001, now);
-    g.gain.linearRampToValueAtTime(peak, now + 0.02);
-    g.gain.setValueAtTime(peak, now + dur - 0.12);
+    g.gain.linearRampToValueAtTime(peak, now + 0.025);
+    g.gain.setValueAtTime(peak, now + dur - 0.1);
     g.gain.exponentialRampToValueAtTime(0.0001, now + dur);
 
-    carrier.start(now); lfo.start(now);
-    carrier.stop(now + dur + 0.02); lfo.stop(now + dur + 0.02);
+    o1.start(now); o2.start(now); vib.start(now);
+    o1.stop(now + dur + 0.02); o2.stop(now + dur + 0.02); vib.stop(now + dur + 0.02);
   }
 
   setMuted(m) {

@@ -3425,7 +3425,16 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
     // Gated on wasBleeding so a brief LOS flicker mid-chase (pre-ditch SEARCH, heat merely held)
     // doesn't fire it every time you round a corner.
     if (state === PursuitState.ACTIVE && this._prevState === PursuitState.SEARCH && wasBleeding) {
-      this.audio.playSpotted();
+      // Pan the alert onto the cop that re-spotted you (nearest one with real LOS) so it
+      // sits in the mix with the sirens rather than playing dead-centre/detached.
+      let spotter = null, sd = Infinity;
+      for (const cop of this.cops) {
+        if (!cop.hasLOS) continue;
+        const d = Phaser.Math.Distance.Between(cop.sprite.x, cop.sprite.y, px, py);
+        if (d < sd) { sd = d; spotter = cop; }
+      }
+      const pan = spotter ? Phaser.Math.Clamp((spotter.sprite.x - px) / 900, -1, 1) : 0;
+      this.audio.playSpotted(pan);
     }
     this._prevState = state;
 
