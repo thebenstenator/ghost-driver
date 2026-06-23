@@ -3706,13 +3706,16 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
           ? cop.maneuverSpeedCap
           : Infinity;
       // Oil slick OVERRIDES the rejoin band: an oiled cop is on PURE physics (no kinematic
-      // "auto-follow" glue) with grip slashed from base, so it actually slides and loses the
-      // line. Otherwise, Tier-1 rejoin blends handling toward near-kinematic the farther it is.
+      // "auto-follow" glue). Grip is set to a low ABSOLUTE "ice" value — NOT a fraction of the
+      // cop's base grip (which is 0.2–0.6, so a fraction stays grippy enough to recover). oil-
+      // GripLost maps 0→0.054 (barely) .. 1→0.004 (fully iced: velocity ignores the nose, so it
+      // slides straight despite steering). Set on BOTH low/high so the speed scrub can't restore
+      // grip. Otherwise, Tier-1 rejoin blends handling toward near-kinematic the farther it is.
       if ((cop._oilT || 0) > 0) {
-        const k = 1 - this.oilGripLost;
+        const oiledGrip = 0.004 + (1 - this.oilGripLost) * 0.05;
         cop.maxSpeed = cop.baseMaxSpeed;
-        cop.gripLow = cop.baseGripLow * k;
-        cop.gripHigh = cop.baseGripHigh * k;
+        cop.gripLow = oiledGrip;
+        cop.gripHigh = oiledGrip;
         cop.turnSpeedLow = cop.baseTurnSpeedLow;
         cop.turnSpeed = cop.baseTurnSpeed;
       } else {
