@@ -106,6 +106,39 @@ narrowEW(4);  // original E-W alley
 narrowNS(10); // extra N-S alley
 narrowEW(9);  // extra E-W alley
 
+// --- Parking garages ---
+// A garage replaces a cell's building with a HOLLOW enclosure: solid walls on three sides
+// plus two short segments flanking a DOOR gap on the road-facing side. The walls block sight
+// + movement exactly like buildings (GameScene adds them to losRects + the wall group), so
+// "cops can't see inside" falls out of the existing LOS system. The hide LOGIC (seen-entering
+// rule, converge-and-wait) lives in GameScene; here we only emit geometry. Stays within the
+// cell envelope, so the nav lattice is unaffected. (v1: door always faces south / the road
+// below the cell. Cells chosen to avoid the boulevard + alley rows/cols.)
+const G_WALL = 20;   // wall thickness
+const G_DOOR = 104;  // entrance gap width
+const GARAGE_CELLS = [
+  { row: 2, col: 7 },
+  { row: 6, col: 4 },
+];
+export const GARAGES = [];
+for (const { row, col } of GARAGE_CELLS) {
+  cell[row * COLS + col] = null; // the garage replaces the normal building here
+  const x = MARGIN + col * GRID_STEP, y = MARGIN + row * GRID_STEP, w = BLOCK, h = BLOCK;
+  const doorX = x + (w - G_DOOR) / 2;
+  const walls = [
+    { x, y, w, h: G_WALL },                                              // north (back)
+    { x, y, w: G_WALL, h },                                              // west
+    { x: x + w - G_WALL, y, w: G_WALL, h },                             // east
+    { x, y: y + h - G_WALL, w: (w - G_DOOR) / 2, h: G_WALL },          // south-left of door
+    { x: doorX + G_DOOR, y: y + h - G_WALL, w: (w - G_DOOR) / 2, h: G_WALL }, // south-right of door
+  ];
+  GARAGES.push({
+    x, y, w, h, walls,
+    interior: { x: x + G_WALL, y: y + G_WALL, w: w - 2 * G_WALL, h: h - 2 * G_WALL },
+    door: { x: doorX, y: y + h - G_WALL, w: G_DOOR, h: G_WALL },
+  });
+}
+
 // --- Perimeter ---
 // The outer ring of buildings sits MARGIN px in from the world walls, leaving a drivable lane
 // all the way around the edge (you can loop the map). The NavGrid includes a matching ring of

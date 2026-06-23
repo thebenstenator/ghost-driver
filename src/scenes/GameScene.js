@@ -23,7 +23,7 @@ import {
   MARGIN,
   GRID_STEP,
 } from "../config.js";
-import { BUILDINGS } from "../world/city.js";
+import { BUILDINGS, GARAGES } from "../world/city.js";
 
 export class GameScene extends Phaser.Scene {
   constructor() {
@@ -671,6 +671,12 @@ export class GameScene extends Phaser.Scene {
     if (!this.car.lightsOff) return this.sightRange;
     const t = Math.min(1, this.car.getSpeed() / this.illumSpeedRef);
     return Phaser.Math.Linear(this.killLightsRange, this.sightRange, t);
+  }
+
+  // The garage whose interior the point is inside, or null.
+  _garageAt(x, y) {
+    for (const g of this.garages) if (g.interior.contains(x, y)) return g;
+    return null;
   }
 
   // Tier-2: relocate cops that have been lost (far + not chasing + off-screen) for a
@@ -2235,6 +2241,32 @@ bleed: { fastFrac: ${b.fastFrac}, fastRate: ${b.fastRate}, slowRate: ${b.slowRat
       this.losRects.push(new Phaser.Geom.Rectangle(x, y, w, h));
     });
 
+    // Parking garages — hollow enclosures with a door. Walls join losRects + the wall group
+    // (so they block sight, collide, and push cars out via the capsule resolver, like any
+    // building); a distinct floor tint + door threshold mark them. The hide logic (seen-
+    // entering rule) runs in the awareness loop against each garage's interior zone.
+    this.garages = GARAGES.map((g) => {
+      this.worldLayer.add(
+        this.add.rectangle(g.x + g.w / 2, g.y + g.h / 2, g.w, g.h, 0x24303f).setDepth(1.6),
+      );
+      for (const r of g.walls) {
+        const cx = r.x + r.w / 2, cy = r.y + r.h / 2;
+        this.worldLayer.add(
+          this.add.rectangle(cx, cy, r.w, r.h, 0x4a5e74).setStrokeStyle(1, 0x6a82a0).setDepth(2),
+        );
+        const body = this.walls.create(cx, cy, "_px");
+        body.setDisplaySize(r.w, r.h).refreshBody();
+        body.setVisible(false);
+        this.losRects.push(new Phaser.Geom.Rectangle(r.x, r.y, r.w, r.h));
+      }
+      // Yellow door threshold for readability.
+      this.worldLayer.add(
+        this.add.rectangle(g.door.x + g.door.w / 2, g.door.y + g.door.h / 2, g.door.w, 4, 0xffd23f).setDepth(1.7),
+      );
+      return { interior: new Phaser.Geom.Rectangle(g.interior.x, g.interior.y, g.interior.w, g.interior.h), blown: false };
+    });
+    this._inGarage = null;
+
     // Road lane dashes on the two center roads (visual only)
     this._drawRoadMarkings();
   }
@@ -2367,6 +2399,19 @@ bleed: { fastFrac: ${b.fastFrac}, fastRate: ${b.fastRate}, slowRate: ${b.slowRat
         fontSize: "14px",
         fontStyle: "bold",
         color: "#7fd8ff",
+      })
+      .setOrigin(0.5, 1)
+      .setScrollFactor(0)
+      .setDepth(100)
+      .setAlpha(0);
+
+    // Parking-garage status — shown only while inside a garage (HIDDEN vs SEEN).
+    this.garageText = this.add
+      .text(width / 2, this.scale.height - 50, "", {
+        fontFamily: "monospace",
+        fontSize: "14px",
+        fontStyle: "bold",
+        color: "#39ff14",
       })
       .setOrigin(0.5, 1)
       .setScrollFactor(0)
@@ -3371,6 +3416,32 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
       if (cop.aware) anyAware = true;
       if (sees) anyLOS = true;
     }
+
+    // --- Parking-garage hide. The walls already block sight; this resolves the
+    // seen-entering rule. On the frame you cross INTO a garage interior, snapshot whether a
+    // cop genuinely had sight (anyLOS) → "blown". Then, while inside:
+    //   • not blown (hidden) → force awareness off: the cooldown runs out and you ditch.
+    //   • blown → keep awareness ON (no real LOS, so no beeline): cops hold ACTIVE and
+    //     converge on the entrance (last-known = the door) and wait — you can't wait them out.
+    const gar = this._garageAt(px, py);
+    if (gar && gar !== this._inGarage) gar.blown = anyLOS; // snapshot sight at the moment of entry
+    this._inGarage = gar;
+    this._garageHidden = false;
+    if (gar) {
+      for (const cop of this.cops) {
+        cop.hasLOS = false; // behind walls — never beeline at a garaged player (even at proximity)
+        cop.awareTimer = gar.blown ? this.awareGrace : Math.max(0, (cop.awareTimer || 0) - dt);
+        cop.aware = cop.awareTimer > 0;
+      }
+      anyLOS = false;
+      anyAware = gar.blown;            // blown: camp; hidden: drop to search → ditch
+      this._garageHidden = !gar.blown;
+    }
+    // Garage HUD cue.
+    if (!gar) this.garageText.setAlpha(0);
+    else if (this._garageHidden)
+      this.garageText.setText("◼ HIDDEN").setColor("#39ff14").setAlpha(1);
+    else this.garageText.setText("◼ SEEN — MOVE").setColor("#ff5555").setAlpha(1);
 
     // Record each cop's breadcrumb trail (for convoy-following) BEFORE the director
     // runs, so a leader's trail is current when a follower picks its target.
