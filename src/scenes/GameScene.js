@@ -133,10 +133,10 @@ export class GameScene extends Phaser.Scene {
     this.oilMaxCharges = 3;     // charges at the start of a run
     this.oilCharges = this.oilMaxCharges;
     this.oilPatchRadius = 26;   // px radius (~1.5× car width across)
-    this.oilLifetime = 12;      // s the patch stays on the road before fading out
+    this.oilLifetime = 30;      // s the patch stays on the road before fading out
     this.oilGripLost = 0.9;     // peak slipperiness (absolute ice grip) the instant a cop hits oil
     this.oilSpeedLost = 0.35;   // fraction of speed scrubbed on first contact (some)
-    this.oilEffectTime = 1.8;   // s the slide takes to DECAY from full strength back to normal
+    this.oilEffectTime = 30;    // s the slide takes to DECAY from full strength back to normal
 
     this.spikes = []; // deployed spike strips (hazard wiring next; visible placeholder for now)
     this.spikeLifetime = 20; // s a dropped strip persists before it despawns
@@ -3038,7 +3038,7 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
     oil.add(this, "oilSpeedLost", 0, 1, 0.05).name("Speed lost on hit (0–1)");
     oil.add(this, "oilEffectTime", 0.2, 30, 0.1).name("Decay time (s)");
 
-    this._persistPanel(gui, "gd_gadgetTune_v3"); // bumped: removed fishtail kick; effect now decays
+    this._persistPanel(gui, "gd_gadgetTune_v4"); // bumped: baked lifetime/decay 30s + throttle cut
 
     // Anchored to the BOTTOM-RIGHT so the panel grows UPWARD when folders expand and stays
     // clear of the bottom-left spawn panel. CRITICAL: clear top/left to "auto" — lil-gui's
@@ -3710,6 +3710,7 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
       // 0.2–0.6 base grip, which would stay grippy enough to recover) and drops the kinematic
       // auto-follow assist → it slides straight despite steering. oilGripLost: 1→0.004 iced,
       // 0→0.054 barely. As oilF decays, grip/handling lerp smoothly back to normal.
+      cop.acceleration = cop.baseAcceleration; // oil is the only thing that touches accel; reset each frame
       const oilF = Math.min(1, (cop._oilT || 0) / Math.max(0.001, this.oilEffectTime));
       if (oilF > 0) {
         const ice = 0.004 + (1 - this.oilGripLost) * 0.05;
@@ -3718,6 +3719,11 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
         cop.maxSpeed = Phaser.Math.Linear(cop.maxSpeed, cop.baseMaxSpeed, oilF);
         cop.turnSpeedLow = Phaser.Math.Linear(cop.turnSpeedLow, cop.baseTurnSpeedLow, oilF);
         cop.turnSpeed = Phaser.Math.Linear(cop.turnSpeed, cop.baseTurnSpeed, oilF);
+        // Critical: cut the throttle too (wheels spin on ice). Without this the cop just
+        // powers its velocity back onto its nose and never actually slides. Floor scales with
+        // oilGripLost so a full slick ≈ no traction. This is what makes them lose the line.
+        const accelFloor = cop.baseAcceleration * (1 - this.oilGripLost);
+        cop.acceleration = Phaser.Math.Linear(cop.baseAcceleration, accelFloor, oilF);
       }
       // Overtake speed boost: a committed overtaker gets extra top-end so it can actually
       // pass the player. Applied AFTER the rejoin band (which rewrites maxSpeed from base),
