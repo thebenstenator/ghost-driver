@@ -3040,9 +3040,11 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
 
     this._persistPanel(gui, "gd_gadgetTune_v1");
 
+    // Second row, far left — the top row (left 8/320/630/950) is full in the testbed, and
+    // left:320 collided with the Unit/Pursuit panels (which render over it).
     gui.domElement.style.position = "fixed";
-    gui.domElement.style.top = "8px";
-    gui.domElement.style.left = "320px";
+    gui.domElement.style.top = "380px";
+    gui.domElement.style.left = "8px";
     gui.domElement.style.zIndex = "9999";
   }
 
