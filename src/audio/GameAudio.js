@@ -38,43 +38,73 @@ export class GameAudio {
   }
 
   // ── Engine ────────────────────────────────────────────────────────────────
+  // Not a pitched tone (that reads as synth-bass/techno) — a NOISE bed chopped into
+  // firing pulses. An LFO amplitude-modulates filtered noise; its rate is the firing
+  // rate, so the engine "revs" (chuffs blur into a roar) instead of playing a melody.
   _buildEngine() {
     const ctx = this.ctx;
+
+    // 2s of looping white noise — the mechanical rush/grit.
+    const buf = ctx.createBuffer(1, ctx.sampleRate * 2, ctx.sampleRate);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+    const noise = ctx.createBufferSource();
+    noise.buffer = buf;
+    noise.loop = true;
+
+    const noiseLP = ctx.createBiquadFilter();
+    noiseLP.type = "lowpass";
+    noiseLP.frequency.value = 600;
+    noiseLP.Q.value = 0.7; // no resonance → no whistle/synth character
+
+    // Amplitude modulation = cylinder firing. Sawtooth LFO gives each chuff a sharp
+    // attack; am.gain swings around 0.5 by ±lfoGain at the firing rate.
+    const am = ctx.createGain();
+    am.gain.value = 0.5;
+    const lfo = ctx.createOscillator();
+    lfo.type = "sawtooth";
+    lfo.frequency.value = 24;
+    const lfoGain = ctx.createGain();
+    lfoGain.gain.value = 0.5;
+    lfo.connect(lfoGain);
+    lfoGain.connect(am.gain);
+
+    // Quiet low body for weight — tracks the firing rate (not a separate bassline),
+    // heavily lowpassed so it's felt, not heard as a note.
+    const body = ctx.createOscillator();
+    body.type = "triangle";
+    body.frequency.value = 48;
+    const bodyG = ctx.createGain();
+    bodyG.gain.value = 0.12;
+    const bodyLP = ctx.createBiquadFilter();
+    bodyLP.type = "lowpass";
+    bodyLP.frequency.value = 200;
+
     const g = ctx.createGain();
     g.gain.value = 0.0001; // silent until updated (and until context resumes)
-    const lp = ctx.createBiquadFilter();
-    lp.type = "lowpass";
-    lp.frequency.value = 500;
-    lp.Q.value = 6; // a little resonance → throatier
-    g.connect(lp);
-    lp.connect(this.master);
 
-    // Two slightly-detuned saws for thickness + a sine sub for body.
-    const o1 = ctx.createOscillator(); o1.type = "sawtooth"; o1.detune.value = -6;
-    const o2 = ctx.createOscillator(); o2.type = "sawtooth"; o2.detune.value = 8;
-    const sub = ctx.createOscillator(); sub.type = "sine";
-    const subG = ctx.createGain(); subG.gain.value = 0.6;
-    o1.connect(g); o2.connect(g); sub.connect(subG); subG.connect(g);
-    o1.start(); o2.start(); sub.start();
+    noise.connect(noiseLP); noiseLP.connect(am); am.connect(g);
+    body.connect(bodyLP); bodyLP.connect(bodyG); bodyG.connect(g);
+    g.connect(this.master);
 
-    this.engine = { g, lp, o1, o2, sub };
+    noise.start(); lfo.start(); body.start();
+    this.engine = { g, noise, noiseLP, am, lfo, lfoGain, body };
   }
 
-  // speed/maxSpeed → pitch + brightness; throttle adds load. Smoothed to avoid clicks.
+  // speed/maxSpeed → firing rate (rev) + brightness; throttle adds load. Smoothed.
   updateEngine(speed, maxSpeed, throttle) {
     if (!this.ctx) return;
     const now = this.ctx.currentTime;
     const frac = Math.max(0, Math.min(1, speed / (maxSpeed || 1)));
-    const idle = 50, top = 172;
-    const fund = idle + Math.pow(frac, 0.85) * (top - idle);
-    const { g, lp, o1, o2, sub } = this.engine;
-    // setTargetAtTime ramps smoothly (no zipper noise) toward the target.
-    o1.frequency.setTargetAtTime(fund, now, 0.04);
-    o2.frequency.setTargetAtTime(fund * 1.008, now, 0.04);
-    sub.frequency.setTargetAtTime(fund * 0.5, now, 0.04);
-    lp.frequency.setTargetAtTime(350 + frac * 3800 + (throttle ? 700 : 0), now, 0.05);
-    const vol = this.muted ? 0.0001 : 0.05 + frac * 0.1 + (throttle ? 0.02 : 0);
-    g.gain.setTargetAtTime(vol, now, 0.06);
+    const fire = 22 + Math.pow(frac, 0.9) * 150; // firing rate (Hz): idle putter → revving roar
+    const { g, noiseLP, lfo, lfoGain, body } = this.engine;
+    lfo.frequency.setTargetAtTime(fire, now, 0.05);
+    body.frequency.setTargetAtTime(fire, now, 0.05);
+    noiseLP.frequency.setTargetAtTime(500 + frac * 3000 + (throttle ? 500 : 0), now, 0.06);
+    // Deep chug at idle; less modulation at speed so the chuffs smooth into a roar.
+    lfoGain.gain.setTargetAtTime(0.55 - frac * 0.3, now, 0.1);
+    const vol = this.muted ? 0.0001 : 0.05 + frac * 0.085 + (throttle ? 0.015 : 0);
+    g.gain.setTargetAtTime(vol, now, 0.08);
   }
 
   // ── Sirens ────────────────────────────────────────────────────────────────
@@ -161,7 +191,7 @@ export class GameAudio {
     if (!this.ctx) return;
     try {
       const stop = (o) => { try { o.stop(); } catch {} };
-      const e = this.engine; if (e) { stop(e.o1); stop(e.o2); stop(e.sub); }
+      const e = this.engine; if (e) { stop(e.noise); stop(e.lfo); stop(e.body); }
       for (const v of this.sirens || []) v.g.gain.value = 0;
       this.master.disconnect();
     } catch {}
