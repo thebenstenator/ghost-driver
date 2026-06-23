@@ -16,6 +16,11 @@ import Phaser from 'phaser';
 
 const GLOW_KEY = 'gd_glow';
 const CONE_KEY = 'gd_cone';
+// Headlight cones render just BELOW the building depth (2) so opaque buildings draw over
+// them — the beam is a wash on the road, not over rooftops. Above background (0)/markings (1).
+const CONE_DEPTH = 1.5;
+// Live-tunable multipliers (shared object from the car panel). Defaults = no change.
+const DEFAULT_TUNING = { head: 1, headLen: 1, headWid: 1, brake: 1, flash: 1 };
 
 // Generate both reusable light textures once per scene-texture-manager:
 //   gd_glow — soft radial blob (tail lamps, cop flashers)
@@ -91,11 +96,13 @@ function componentsFor(kind, v) {
 
 export class CarLights {
   // layer: the world display layer (so the UI camera ignores these like every other world sprite).
-  constructor(scene, vehicle, kind, layer) {
+  // tuning: shared multiplier object from the car panel (brightness/size), live-read each frame.
+  constructor(scene, vehicle, kind, layer, tuning = null) {
     ensureGlowTexture(scene);
     this.scene = scene;
     this.v = vehicle;
     this.kind = kind;
+    this.tuning = tuning || DEFAULT_TUNING;
     this.lights = componentsFor(kind, vehicle);
     const depth = (vehicle.sprite.depth || 10) + 1;
     for (const L of this.lights) {
@@ -103,8 +110,8 @@ export class CarLights {
         .setBlendMode(Phaser.BlendModes.ADD)
         .setTint(L.color)
         .setDisplaySize(L.len, L.wid)
-        // Headlight cones render BELOW the car (a wash on the road); lamps/flashers above it.
-        .setDepth(L.beam ? depth - 2 : (L.type.startsWith('flash') ? depth + 1 : depth));
+        // Cones under the buildings (road wash); lamps/flashers above the car.
+        .setDepth(L.beam ? CONE_DEPTH : (L.type.startsWith('flash') ? depth + 1 : depth));
       // Cone texture's emitter is its left-center → anchor there so it fans forward from (fx,sx).
       if (L.beam) spr.setOrigin(0, 0.5);
       L.spr = spr;
@@ -126,27 +133,32 @@ export class CarLights {
     const redOn  = t < 0.12 || (t > 0.22 && t < 0.34);
     const blueOn = (t > 0.50 && t < 0.62) || (t > 0.72 && t < 0.84);
 
+    const T = this.tuning;
     for (const L of this.lights) {
       const s = L.spr;
       // World position from the local (fx, sx) frame: forward (cf,sf), right (-sf,cf).
       s.setPosition(cx + cf * L.fx - sf * L.sx, cy + sf * L.fx + cf * L.sx);
       if (L.beam) s.setRotation(f); // orient headlight beam along travel
 
-      let alpha = 0, scale = 1;
+      let alpha = 0, sx2 = L.len, sy2 = L.wid;
       if (dead) {
         alpha = 0;
       } else if (L.type === 'head') {
-        alpha = off ? 0 : (L.alpha ?? 0.9);
+        alpha = off ? 0 : (L.alpha ?? 0.9) * T.head;
+        sx2 = L.len * T.headLen; sy2 = L.wid * T.headWid;
       } else if (L.type === 'tail') {
-        alpha = off ? 0 : (braking ? 1.0 : 0.32);
-        scale = braking ? 1.35 : 1.0;
+        alpha = off ? 0 : (braking ? 1.0 : 0.32) * T.brake;
+        const sc = braking ? 1.35 : 1.0;
+        sx2 = L.len * sc; sy2 = L.wid * sc;
       } else if (L.type === 'flashRed') {
-        alpha = redOn ? 1.0 : 0.08; scale = redOn ? 1.15 : 0.9;
+        const on = redOn; alpha = (on ? 1.0 : 0.08) * T.flash;
+        const sc = on ? 1.15 : 0.9; sx2 = L.len * sc; sy2 = L.wid * sc;
       } else if (L.type === 'flashBlue') {
-        alpha = blueOn ? 1.0 : 0.08; scale = blueOn ? 1.15 : 0.9;
+        const on = blueOn; alpha = (on ? 1.0 : 0.08) * T.flash;
+        const sc = on ? 1.15 : 0.9; sx2 = L.len * sc; sy2 = L.wid * sc;
       }
       s.setAlpha(alpha);
-      s.setDisplaySize(L.len * scale, L.wid * scale);
+      s.setDisplaySize(sx2, sy2);
     }
   }
 

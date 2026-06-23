@@ -37,6 +37,11 @@ export class GameAudio {
   constructor(scene, { masterVolume = 0.55 } = {}) {
     this.scene = scene;
     this.muted = false;
+    // Live-tunable mix (bound by the car panel). Set BEFORE the no-audio bail so the
+    // panel can bind to these fields even when WebAudio is unavailable (setters no-op).
+    this.masterVolume = masterVolume;
+    this.engineVol = 1; // multiplier on engine gain
+    this.sirenVol = 1;  // multiplier on siren gain
     const ctx = scene.sound && scene.sound.context;
     // No WebAudio (HTML5/NoAudio fallback) → every method becomes a safe no-op.
     if (!ctx || typeof ctx.createOscillator !== "function") {
@@ -47,7 +52,7 @@ export class GameAudio {
 
     // Master bus: gain → compressor → speakers.
     this.master = ctx.createGain();
-    this.master.gain.value = masterVolume;
+    this.master.gain.value = this.masterVolume;
     const comp = ctx.createDynamicsCompressor();
     this.master.connect(comp);
     comp.connect(ctx.destination);
@@ -123,7 +128,7 @@ export class GameAudio {
     noiseLP.frequency.setTargetAtTime(500 + frac * 3000 + (throttle ? 500 : 0), now, 0.06);
     // Deep chug at idle; less modulation at speed so the chuffs smooth into a roar.
     lfoGain.gain.setTargetAtTime(0.55 - frac * 0.3, now, 0.1);
-    const vol = this.muted ? 0.0001 : 0.05 + frac * 0.085 + (throttle ? 0.015 : 0);
+    const vol = this.muted ? 0.0001 : (0.05 + frac * 0.085 + (throttle ? 0.015 : 0)) * this.engineVol;
     g.gain.setTargetAtTime(vol, now, 0.08);
   }
 
@@ -183,7 +188,7 @@ export class GameAudio {
         const dx = cop.sprite.x - px, dy = cop.sprite.y - py;
         const dist = Math.hypot(dx, dy);
         const atten = Math.max(0, 1 - dist / SIREN_FALLOFF);
-        gain = Math.max(0.0001, 0.11 * atten * atten);
+        gain = Math.max(0.0001, 0.11 * atten * atten * this.sirenVol);
         if (v.pan)
           v.pan.pan.setTargetAtTime(
             Math.max(-1, Math.min(1, dx / SIREN_PAN_RANGE)),
@@ -202,7 +207,12 @@ export class GameAudio {
 
   setMuted(m) {
     this.muted = m;
-    if (this.ctx) this.master.gain.setTargetAtTime(m ? 0.0001 : 0.55, this.ctx.currentTime, 0.05);
+    if (this.ctx) this.master.gain.setTargetAtTime(m ? 0.0001 : this.masterVolume, this.ctx.currentTime, 0.05);
+  }
+
+  setMasterVolume(v) {
+    this.masterVolume = v;
+    if (this.ctx && !this.muted) this.master.gain.setTargetAtTime(v, this.ctx.currentTime, 0.05);
   }
 
   // Context boots suspended (autoplay policy). Phaser unlocks on input too, but resume

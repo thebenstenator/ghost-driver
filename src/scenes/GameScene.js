@@ -85,7 +85,9 @@ export class GameScene extends Phaser.Scene {
     // Player starts at the center road intersection
     this.car = new PlayerCar(this, WORLD_WIDTH / 2, WORLD_HEIGHT / 2);
     this.worldLayer.add(this.car.sprite);
-    this.car.lights = new CarLights(this, this.car, "player", this.worldLayer);
+    // Shared light-tuning multipliers (brightness/size), adjusted live in the car panel.
+    this.lightTuning = { head: 1, headLen: 1, headWid: 1, brake: 1, flash: 1 };
+    this.car.lights = new CarLights(this, this.car, "player", this.worldLayer, this.lightTuning);
     // Procedural audio (synth engine + panned cop sirens). Torn down on scene shutdown
     // so a restart doesn't leak running oscillators.
     this.audio = new GameAudio(this);
@@ -389,7 +391,7 @@ export class GameScene extends Phaser.Scene {
       cop.health = cop.maxHealth;
     }
     this.worldLayer.add(cop.sprite); // world layer → rendered by main cam, not the UI cam
-    cop.lights = new CarLights(this, cop, "cop", this.worldLayer);
+    cop.lights = new CarLights(this, cop, "cop", this.worldLayer, this.lightTuning);
     cop.searchSlot = this.cops.length; // 0,1,2… — its angular sector when searching
     // Floating debug label so each cop's AI state is visible in the world (dev only)
     cop.modeLabel = this.devMode
@@ -2832,8 +2834,25 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
     cap.add(this, "playerCapR", 8, 40, 1).name("Radius (width)");
     cap.add(this, "playerCapHalfLen", 0, 40, 1).name("Spine half-length");
 
+    // Lights & Sound — light knobs multiply the baked values (read live each frame by
+    // CarLights); sound knobs bind to GameAudio (engine/siren vols read live, master +
+    // mute applied via setters on change, which also fire on panel load).
+    const ls = gui.addFolder("Lights & Sound");
+    const lt = this.lightTuning;
+    ls.add(lt, "head", 0, 2, 0.05).name("Headlight brightness");
+    ls.add(lt, "headLen", 0.3, 2.5, 0.05).name("Headlight length");
+    ls.add(lt, "headWid", 0.3, 2.5, 0.05).name("Headlight spread");
+    ls.add(lt, "brake", 0, 2, 0.05).name("Brake/tail brightness");
+    ls.add(lt, "flash", 0, 2, 0.05).name("Cop flasher brightness");
+    const au = this.audio;
+    ls.add(au, "masterVolume", 0, 1, 0.01).name("Master volume")
+      .onChange((v) => au.setMasterVolume(v));
+    ls.add(au, "engineVol", 0, 2, 0.05).name("Engine volume");
+    ls.add(au, "sirenVol", 0, 2, 0.05).name("Siren volume");
+    ls.add(au, "muted").name("Mute (N)").onChange((v) => au.setMuted(v));
+
     // Persist across refresh (binds directly to the car, so load sets car fields).
-    this._persistPanel(gui, "gd_carTuning_v5"); // bumped: player sprite + capsule −10%
+    this._persistPanel(gui, "gd_carTuning_v6"); // bumped: Lights & Sound folder
 
     gui.domElement.style.position = "fixed";
     gui.domElement.style.top = "8px";
