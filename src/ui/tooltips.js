@@ -162,7 +162,7 @@ export const TOOLTIPS = {
   oilMaxCharges: "How many oil slicks you carry per run. (Changing this refills you.) Raise for more drops before you're empty.",
   oilPatchRadius: "Radius (px) of the oil patch (~1.5× car width by default). Raise to make a wider patch that's harder for a cop to thread around.",
   oilLifetime: "Seconds the patch stays on the road before fading out. Raise to leave the hazard down longer.",
-  oilGripLost: "PEAK slipperiness the instant a cop hits oil, as an absolute 'ice' grip (NOT a % of its grip): 1 = fully iced (velocity ignores the nose → slides straight despite steering), 0 ≈ barely slippery. ~0.9 ≈ a real drift. The effect then DECAYS over the decay time.",
+  oilGripLost: "How hard oil LOCKS a cop's travel direction (it can't turn, slides straight on momentum while the body still steers). 1 = fully locked (steering does nothing — slides straight into walls/past you), 0 = no effect. Decays over the decay time. ~0.9 = a strong, barely-recoverable slide.",
   oilSpeedLost: "Fraction of a cop's speed scrubbed the instant it touches oil. 0 = no slow, 1 = dead stop. Raise to make the hit slow them more.",
   oilEffectTime: "Seconds for the slide to DECAY from full strength back to normal grip after a cop leaves the patch. Full effect on contact, fading to nothing by this time. Raise for a longer, slower recovery.",
 

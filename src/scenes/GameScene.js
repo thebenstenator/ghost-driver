@@ -3034,7 +3034,7 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
       .onChange((v) => (this.oilCharges = v)); // refill on tune (and on panel load)
     oil.add(this, "oilPatchRadius", 10, 90, 1).name("Patch radius (px)");
     oil.add(this, "oilLifetime", 2, 30, 1).name("Patch lifetime (s)");
-    oil.add(this, "oilGripLost", 0, 1, 0.05).name("Grip lost (0–1)");
+    oil.add(this, "oilGripLost", 0, 1, 0.05).name("Slide lock (0–1)");
     oil.add(this, "oilSpeedLost", 0, 1, 0.05).name("Speed lost on hit (0–1)");
     oil.add(this, "oilEffectTime", 0.2, 30, 0.1).name("Decay time (s)");
 
@@ -3699,33 +3699,35 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
         : state === PursuitState.ACTIVE && cop.maneuverSpeedCap != null
           ? cop.maneuverSpeedCap
           : Infinity;
-      // Oil slick — a DECAYING slide. oilF = remaining/duration is 1 the instant a cop hits oil
-      // and falls to 0 over oilEffectTime as it drives off. While oiled, BYPASS the Tier-1
-      // rejoin-band kinematic "auto-follow" assist (pure physics, like the version that worked)
-      // and set grip to a low ABSOLUTE ice value that DECAYS from ice back toward base by oilF —
-      // NOT a fraction of the cop's 0.2–0.6 base grip (that stays grippy enough to recover).
-      // oilGripLost: 1→0.004 iced, 0→0.054 barely. At oilF=1 it slides; as it wears off, normal.
-      const oilF = Math.min(1, (cop._oilT || 0) / Math.max(0.001, this.oilEffectTime));
-      if (oilF > 0) {
-        const ice = 0.004 + (1 - this.oilGripLost) * 0.05;
-        cop.maxSpeed = cop.baseMaxSpeed;
-        cop.gripLow = Phaser.Math.Linear(cop.baseGripLow, ice, oilF);
-        cop.gripHigh = Phaser.Math.Linear(cop.baseGripHigh, ice, oilF);
-        cop.turnSpeedLow = cop.baseTurnSpeedLow;
-        cop.turnSpeed = cop.baseTurnSpeed;
-      } else {
-        this._applyRejoinBand(
-          cop,
-          Phaser.Math.Distance.Between(cop.sprite.x, cop.sprite.y, px, py),
-        );
-      }
+      this._applyRejoinBand(
+        cop,
+        Phaser.Math.Distance.Between(cop.sprite.x, cop.sprite.y, px, py),
+      );
       // Overtake speed boost: a committed overtaker gets extra top-end so it can actually
       // pass the player. Applied AFTER the rejoin band (which rewrites maxSpeed from base),
       // and raises the AI's approach cap to match so maxApproachSpeed isn't the bottleneck.
       const boost = state === PursuitState.ACTIVE ? cop.maneuverBoost || 0 : 0;
       cop.maxSpeed += boost;
       cop.ai.maxApproachSpeed = cop.ai.baseApproach + boost;
+
+      // Oil slick — lock the TRAVEL DIRECTION. Capture the heading the cop is moving in BEFORE
+      // integrating; after, force the velocity back onto it (keeping the new speed). The body
+      // still steers (nose turns) but momentum keeps going straight — "turn the wheel, nothing
+      // happens." Strength = oilF (decays as the slick wears off) × oilGripLost (peak lock); at
+      // ~1 it can't change direction at all, sliding straight into walls/past you.
+      const _oilPvx = cop.vx, _oilPvy = cop.vy;
       cop.update(delta, target);
+      const oilLock = Math.min(1, (cop._oilT || 0) / Math.max(0.001, this.oilEffectTime)) * this.oilGripLost;
+      if (oilLock > 0.01) {
+        const preSpd = Math.hypot(_oilPvx, _oilPvy);
+        const postSpd = cop.getSpeed();
+        if (preSpd > 25 && postSpd > 1) {
+          const lvx = (_oilPvx / preSpd) * postSpd, lvy = (_oilPvy / preSpd) * postSpd;
+          cop.vx = Phaser.Math.Linear(cop.vx, lvx, oilLock);
+          cop.vy = Phaser.Math.Linear(cop.vy, lvy, oilLock);
+          cop.sprite.body.setVelocity(cop.vx, cop.vy);
+        }
+      }
       cop._lastVx = cop.vx;
       cop._lastVy = cop.vy; // pre-collision cache (see _updateCopDamage)
     }
