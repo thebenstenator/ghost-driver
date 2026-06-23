@@ -35,14 +35,13 @@ export const CopState = {
 // behind tucks onto the bumper, the rest keep pursuing. The box releases (with a
 // little hysteresis) once the player breaks away.
 //
-// Orthogonal to all of that, the visibility chain (DIRECT/CONVOY/LONE) decides HOW a
-// cop reaches its target: see the player → drive straight at it; blind but can see a
-// teammate who sees the player → follow that teammate's drivable breadcrumb trail;
-// otherwise → solve its own road route.
+// Orthogonal to all of that, the visibility flag (DIRECT/LONE) decides HOW a cop reaches
+// its target: see the player → drive straight at it; otherwise → solve its own road route
+// to the last-known position.
 export class PursuitDirector {
   constructor(navGrid, rects = null) {
     this.nav   = navGrid;
-    this.rects = rects;          // building footprints — for target validation + convoy LOS
+    this.rects = rects;          // building footprints — for target validation (clear-target / LOS)
 
     // --- Box (sandwich) event — v2: CRASH-and-HOLD, no offset swerve ---
     // A boxing cop drives straight at the PLAYER (no perpendicular cut-in point to swing
@@ -181,30 +180,17 @@ export class PursuitDirector {
                                    // carpet the road — one strip down, then a pack-wide cadence)
     this._spikeGlobalCd   = 0;     // pack-wide deploy timer
     this._spikeHolder     = null;  // the single cop currently running a spike deploy
-
-    // --- Convoy relay (how a blind cop reaches the player) ---
-    this.convoyEnabled   = false; // off by default — playtested better without the relay
-                                  // churn; toggle on via Cop Tuning → Convoy
-    this.followGap       = 90;   // px behind the leader a follower aims (no tailgating)
-    this.convoyMaxHops   = 2;    // max relay length; longer chains fall back to own route
-    this.convoyMaxFactor = 1.6;  // if the chain route is > this × straight-line dist, go direct
-    this.convoyHold      = 0.5;  // s a CONVOY/LONE decision sticks before flipping (anti-flicker)
-    this.convoyMinBlind  = 0.8;  // s a cop must be CONTINUOUSLY blind before it'll switch to convoy.
-                                 // A cop that just lost sight keeps pursuing the player's position
-                                 // (continue the chase) rather than instantly being yanked onto a
-                                 // teammate's trail and swerving off — only genuinely-lost cops relay.
   }
 
   // Call once per frame during ACTIVE pursuit. Sets cop.role (for HUD/telemetry),
-  // cop.pursuitMode (DIRECT/CONVOY/LONE) and cop.dirTarget.
+  // cop.pursuitMode (DIRECT/LONE) and cop.dirTarget.
   update(cops, playerCar, dt) {
     const px = playerCar.sprite.x, py = playerCar.sprite.y;
     const h  = this._heading(playerCar);
     const speed = playerCar.getSpeed();
 
-    // How each cop reaches the player (visibility chain) — computed first so a CONVOY
-    // cop can override its target with the leader's trail.
-    this._assignConvoy(cops, px, py, dt);
+    // How each cop reaches the player: DIRECT (sees it) vs LONE (blind → own road route).
+    this._assignVisibility(cops);
 
     // Committed PIT attempt (single attacker, pack-wide cadence). Resolved first so the
     // attacker is excluded from the maneuver/box. Sets playerCar._pitYaw while pressing.
@@ -374,12 +360,6 @@ export class PursuitDirector {
         }
       }
 
-      // CONVOY override: a blind cop relays toward a teammate's drivable trail rather
-      // than pathing on its own. Keeps its box/pursue intent for when it regains sight.
-      if (cop.pursuitMode === 'CONVOY' && cop.convoyLeader) {
-        const ct = this._convoyTarget(cop, cop.convoyLeader);
-        if (ct) target = ct;
-      }
       cop.dirTarget = target;
       cop.maneuverSpeedCap = speedCap;   // consumed by GameScene as the ACTIVE speed cap
       cop.maneuverBoost = boost;         // extra max speed (overtake), applied in GameScene
@@ -624,92 +604,13 @@ export class PursuitDirector {
     return this._boxTimer > 0 && near.length >= 2;
   }
 
-  // --- Visibility chain (DIRECT / CONVOY / LONE) --------------------------------
+  // --- Visibility (DIRECT / LONE) ----------------------------------------------
   // DIRECT — sees the player itself → drive straight at it.
-  // CONVOY — blind, but sees a teammate that has a route to the player → follow it.
-  // LONE   — blind with no visible relay → solve its own road route (fallback).
-  // Shortest-cost relay via a tiny Bellman-Ford (n is ≤ a handful). The CONVOY↔LONE
-  // decision is held for convoyHold seconds so an intermittent cop-to-cop sight line
-  // can't flip it every frame (that flicker made convoy useless).
-  _assignConvoy(cops, px, py, dt) {
-    const n = cops.length;
-    if (n === 0) return;
-
-    // Track how long each cop has been continuously blind — convoy only engages once
-    // a cop has genuinely lost the player, not the instant its sight-ray clips a wall.
-    for (let i = 0; i < n; i++) {
-      const c = cops[i];
-      c._blindT = c.hasLOS ? 0 : (c._blindT || 0) + dt;
-    }
-
-    // Desired mode/leader for each cop this frame.
-    const desired = new Array(n).fill('LONE');
-    const dLeader = new Array(n).fill(null);
-
-    if (this.convoyEnabled && this.rects) {
-      const cost   = new Array(n).fill(Infinity);
-      const hops   = new Array(n).fill(0);
-      const leader = new Array(n).fill(-1); // -1 unset · -2 player · >=0 cop index
-      for (let i = 0; i < n; i++) {
-        if (cops[i].hasLOS) { cost[i] = this._dist(cops[i], px, py); leader[i] = -2; hops[i] = 1; }
-      }
-      for (let pass = 0; pass < n; pass++) {
-        for (let i = 0; i < n; i++) {
-          for (let j = 0; j < n; j++) {
-            if (i === j || cost[j] === Infinity || hops[j] >= this.convoyMaxHops) continue;
-            if (!this._copsSee(cops[i], cops[j])) continue;
-            const c = cost[j] + this._dist(cops[i], cops[j].sprite.x, cops[j].sprite.y);
-            if (c < cost[i]) { cost[i] = c; leader[i] = j; hops[i] = hops[j] + 1; }
-          }
-        }
-      }
-      for (let i = 0; i < n; i++) {
-        if (leader[i] === -2) desired[i] = 'DIRECT';
-        // Only relay once the cop has been blind a beat — otherwise it stays LONE and
-        // keeps pursuing the player's position (the chase continues through the blink).
-        else if (leader[i] >= 0 && cops[i]._blindT >= this.convoyMinBlind &&
-                 cost[i] <= this._dist(cops[i], px, py) * this.convoyMaxFactor) {
-          desired[i] = 'CONVOY'; dLeader[i] = cops[leader[i]];
-        }
-      }
-    } else {
-      for (let i = 0; i < n; i++) desired[i] = cops[i].hasLOS ? 'DIRECT' : 'LONE';
-    }
-
-    // Commit with hysteresis. DIRECT (real sight) switches instantly either way; only
-    // the CONVOY↔LONE flip-flop is damped.
-    for (let i = 0; i < n; i++) {
-      const cop = cops[i], want = desired[i];
-      if (!cop.pursuitMode || want === 'DIRECT' || cop.pursuitMode === 'DIRECT' || want === cop.pursuitMode) {
-        cop.pursuitMode = want;
-        cop.convoyLeader = dLeader[i];
-        cop._modeTimer = this.convoyHold;
-      } else {
-        cop._modeTimer = (cop._modeTimer || 0) - dt;
-        if (cop._modeTimer <= 0) {
-          cop.pursuitMode = want;
-          cop.convoyLeader = dLeader[i];
-          cop._modeTimer = this.convoyHold;
-        }
-        // else: keep the current mode/leader through the hold window
-      }
-    }
-  }
-
-  // Follow a leader's breadcrumb trail: aim at the furthest-along point (toward the
-  // leader, a followGap short of it) this cop can see in a straight line. Every trail
-  // point was physically driven, so the route is always drivable. Null if nothing
-  // visible (caller keeps its own target).
-  _convoyTarget(cop, leader) {
-    const trail = leader._trail;
-    if (!trail || trail.length < 2) return null;
-    const head = trail[trail.length - 1];
-    for (let k = trail.length - 1; k >= 0; k--) {
-      const p = trail[k];
-      if (Phaser.Math.Distance.Between(p.x, p.y, head.x, head.y) < this.followGap) continue;
-      if (segmentClear(cop.sprite.x, cop.sprite.y, p.x, p.y, this.rects)) return { x: p.x, y: p.y };
-    }
-    return null;
+  // LONE   — blind → solve its own road route to the last-known position.
+  // (The old CONVOY relay — blind cops following a teammate's trail — was removed; blind
+  // cops navigate to the shared last-known instead, which playtested cleaner.)
+  _assignVisibility(cops) {
+    for (const cop of cops) cop.pursuitMode = cop.hasLOS ? 'DIRECT' : 'LONE';
   }
 
   // A target in the lane `sideDist` to one side of the player, `lead` ahead of the COP's OWN
@@ -739,10 +640,6 @@ export class PursuitDirector {
 
   // --- small geometry helpers ---------------------------------------------------
   _dist(cop, x, y) { return Phaser.Math.Distance.Between(cop.sprite.x, cop.sprite.y, x, y); }
-
-  _copsSee(a, b) {
-    return !this.rects || segmentClear(a.sprite.x, a.sprite.y, b.sprite.x, b.sprite.y, this.rects);
-  }
 
   // How far ahead(+) / behind(-) a cop is along the player's heading.
   _along(cop, px, py, h) {

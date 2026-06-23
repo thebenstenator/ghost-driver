@@ -271,7 +271,9 @@ export class GameAudio {
     try {
       const stop = (o) => { try { o.stop(); } catch {} };
       const e = this.engine; if (e) { stop(e.noise); stop(e.lfo); stop(e.body); }
-      for (const v of this.sirens || []) v.g.gain.value = 0;
+      // Stop the siren oscillators too — zeroing gain alone leaves them running after the
+      // master is disconnected, leaking a fresh set of oscillators on every scene restart.
+      for (const v of this.sirens || []) { stop(v.carrier); stop(v.lfo); v.g.gain.value = 0; }
       this.master.disconnect();
     } catch {}
     this.ctx = null;

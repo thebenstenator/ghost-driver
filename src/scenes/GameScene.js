@@ -183,10 +183,6 @@ export class GameScene extends Phaser.Scene {
     // current distance, or it's not worth doing (skip and wait)
     this.respawnSpacing = 300; // a relocation spot must clear other cops by this much, so several
     // reinforcements don't all surface on the same road
-    // Breadcrumb trails — each cop records its recent path so blind teammates can
-    // convoy-follow a known-drivable route (see PursuitDirector._convoyTarget).
-    this.trailSpacing = 35; // px of travel between recorded trail points
-    this.trailMax = 36; // points kept per cop (~1260px of trail)
     this.interceptAheadDist = 850; // px down the player's travel that an 'ahead-of-travel'
     // unit (interceptor) spawns, to set up a head-on
     this.interceptEntrySpeed = 260; // px/s an ahead-spawned interceptor enters AT (rolling toward
@@ -364,6 +360,8 @@ export class GameScene extends Phaser.Scene {
       this.heatGfx,
       this.heatLabel,
       this.reinforceText,
+      this.killLightsText,
+      this.garageText,
     ];
     if (this.debugText) hud.push(this.debugText);
     if (this.copCountText) hud.push(this.copCountText);
@@ -612,26 +610,6 @@ export class GameScene extends Phaser.Scene {
     return { x: target.x + sx * STRENGTH, y: target.y + sy * STRENGTH };
   }
 
-  // Append the cop's current position to its breadcrumb trail, sampled by distance
-  // so the list stays short. Blind teammates follow this trail to relay in (convoy).
-  _recordTrail(cop) {
-    if (!cop._trail) cop._trail = [];
-    const t = cop._trail,
-      last = t[t.length - 1];
-    if (
-      !last ||
-      Phaser.Math.Distance.Between(
-        last.x,
-        last.y,
-        cop.sprite.x,
-        cop.sprite.y,
-      ) >= this.trailSpacing
-    ) {
-      t.push({ x: cop.sprite.x, y: cop.sprite.y });
-      if (t.length > this.trailMax) t.shift();
-    }
-  }
-
   // Tier-1 rejoin band: lerp a cop's live handling from its base "in the fight"
   // profile toward a near-kinematic one as it falls behind, so far cops stop washing
   // into walls and rejoin cleanly. Writes the live stat fields each frame (Vehicle
@@ -789,11 +767,7 @@ export class GameScene extends Phaser.Scene {
     cop.vy = 0;
     cop.facing = facing != null ? facing : Math.atan2(py - y, px - x);
     cop.sprite.setRotation(cop.facing + Math.PI / 2);
-    cop._trail = [];
     cop.pursuitMode = "LONE";
-    cop.convoyLeader = null;
-    cop._blindT = 0;
-    cop._modeTimer = 0;
     cop._searchNode = null;
     const a = cop.ai;
     a._unstuck = null;
@@ -2700,11 +2674,11 @@ bleed: { fastFrac: ${b.fastFrac}, fastRate: ${b.fastRate}, slowRate: ${b.slowRat
         this.aiDebug.fillStyle(0xffaa00, 0.8);
         this.aiDebug.fillCircle(cop.aiTarget.x, cop.aiTarget.y, 5);
       }
-      // Live per-cop label: role (when chasing) + convoy mode + control mode + speed
+      // Live per-cop label: role (when chasing) + visibility + control mode + speed
       if (cop.modeLabel && cop.debug) {
         const role =
           state === PursuitState.ACTIVE && cop.role ? cop.role + " " : "";
-        // Only show a convoy tag when it's not the ordinary "I can see you" case.
+        // Only show the visibility tag when it's not the ordinary "I can see you" case (LONE).
         const conv =
           state === PursuitState.ACTIVE &&
           cop.pursuitMode &&
@@ -2994,8 +2968,6 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
       boxEngageRange: this.director.boxEngageRange,
       boxAhead: this.director.boxAhead,
       boxBehind: this.director.boxBehind,
-      convoyEnabled: this.director.convoyEnabled,
-      followGap: this.director.followGap,
     };
 
     const gui = new GUI({ title: "Cop Tuning", width: 300 });
@@ -3127,16 +3099,6 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
       .name("Search give-up (s)")
       .onChange(apply);
 
-    const convoy = gui.addFolder("Convoy (blind cops)");
-    convoy
-      .add(this.copTuning, "convoyEnabled")
-      .name("Convoy following")
-      .onChange(apply);
-    convoy
-      .add(this.copTuning, "followGap", 30, 300, 10)
-      .name("Follow gap behind leader")
-      .onChange(apply);
-
     const rejoin = gui.addFolder("Rejoin (far cops)");
     rejoin
       .add(this.copTuning, "rbStart", 0, 2500, 50)
@@ -3200,9 +3162,8 @@ turnSpeedLow: ${t.turnSpeedLow}, turnSpeed: ${t.turnSpeed}, minSteerFactor: ${t.
 // --- Cop behaviour (CopAI) ---
 maxApproachSpeed: ${t.maxApproachSpeed}, cornerMinSpeed: ${t.cornerMinSpeed}, brakeDecel: ${t.brakeDecel},
 arriveRadius: ${t.arriveRadius}, senseDist: ${t.senseDist}, directRange: ${t.directRange}, chaseRange: ${t.chaseRange}, reactionTime: ${t.reactionTime},
-// --- Formation + convoy (PursuitDirector) ---
+// --- Formation (PursuitDirector) ---
 boxTriggerSpeed: ${t.boxTriggerSpeed}, boxEngageRange: ${t.boxEngageRange}, boxAhead: ${t.boxAhead}, boxBehind: ${t.boxBehind},
-convoyEnabled: ${t.convoyEnabled}, followGap: ${t.followGap},
 // --- Separation + rejoin band + search (GameScene) ---
 sepRadius: ${t.sepRadius}, sepStrength: ${t.sepStrength},
 rbStart: ${t.rbStart}, rbFull: ${t.rbFull}, rbGrip: ${t.rbGrip}, rbTurnMult: ${t.rbTurnMult}, rbSpeedBoost: ${t.rbSpeedBoost},
@@ -3216,7 +3177,7 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
 
     // Persist across refresh. Key bumped to v16: huntLead removed (blind cops now go
     // straight to last-known, no forward projection).
-    this._persistPanel(gui, "gd_copTuning18"); // bumped: bust-meter fill slowed (≈6s min)
+    this._persistPanel(gui, "gd_copTuning19"); // bumped: convoy removed (panel shape changed)
 
     gui.domElement.style.position = "fixed";
     gui.domElement.style.top = "8px";
@@ -3318,8 +3279,6 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
     this.director.boxEngageRange = t.boxEngageRange;
     this.director.boxAhead = t.boxAhead;
     this.director.boxBehind = t.boxBehind;
-    this.director.convoyEnabled = t.convoyEnabled;
-    this.director.followGap = t.followGap;
   }
 
   update(_time, delta) {
@@ -3442,10 +3401,6 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
     else if (this._garageHidden)
       this.garageText.setText("◼ HIDDEN").setColor("#39ff14").setAlpha(1);
     else this.garageText.setText("◼ SEEN — MOVE").setColor("#ff5555").setAlpha(1);
-
-    // Record each cop's breadcrumb trail (for convoy-following) BEFORE the director
-    // runs, so a leader's trail is current when a follower picks its target.
-    for (const cop of this.cops) this._recordTrail(cop);
 
     // --- Pursuit state machine. `aware` (grace) keeps it ACTIVE through flickers;
     // only a real line of sight (`anyLOS`) moves the last-known marker, so a juke
@@ -3589,13 +3544,9 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
       else if (state === PursuitState.SEARCH)
         target = this._cooldownTarget(cop);
       else if (state === PursuitState.RETURNING) target = this.station;
-      // Separation spreads cops apart so they don't pile up — but a CONVOY follower is
-      // deliberately tracking a single drivable line, so nudging its target sideways
-      // would shove it into a wall. Skip separation for convoy cops; clamp always.
-      const convoying =
-        state === PursuitState.ACTIVE && cop.pursuitMode === "CONVOY";
+      // Separation spreads cops apart so they don't pile up; clamp always.
       if (target) {
-        if (!convoying) target = this._separate(cop, target);
+        target = this._separate(cop, target);
         target = this._clampWorld(target);
       }
       // Full speed while chasing OR hunting; capped only for sustained search / withdrawal.
@@ -3806,8 +3757,7 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
             ? cop.role
             : "—";
         const los = cop.hasLOS ? "LOS" : "los✗";
-        // Convoy relay mode (DIRECT/CONVOY/LONE), ACTIVE only — shows who's chasing
-        // directly vs. following a teammate's trail vs. on their own.
+        // Visibility (DIRECT/LONE), ACTIVE only — directly sighting the player vs blind.
         const conv =
           this.pursuit.state === PursuitState.ACTIVE && cop.pursuitMode
             ? cop.pursuitMode
