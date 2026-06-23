@@ -13,6 +13,26 @@ const SIREN_VOICES = 4;        // max simultaneous audible sirens (nearest cops 
 const SIREN_FALLOFF = 1100;    // px at which a siren fades to silent
 const SIREN_PAN_RANGE = 900;   // px lateral offset that maps to full L/R pan
 
+// Real sirens cycle through modes rather than holding one pattern. Each segment sets the
+// sweep RATE (Hz — how fast the pitch rises/falls) and DEPTH (Hz — how far it sweeps):
+// slow+wide = wail, fast+medium = yelp, very-fast+narrow = phaser/priority. Voices are
+// phase-offset across this cycle so the pack desyncs (one car wails while another yelps).
+const SIREN_CYCLE = [
+  { dur: 6.0, rate: 0.28, depth: 210 }, // wail   — long slow sweep
+  { dur: 4.0, rate: 3.3,  depth: 175 }, // yelp   — fast sweep
+  { dur: 5.0, rate: 0.32, depth: 210 }, // wail
+  { dur: 2.5, rate: 6.8,  depth: 120 }, // phaser — very fast, tight
+];
+const SIREN_CYCLE_LEN = SIREN_CYCLE.reduce((s, seg) => s + seg.dur, 0);
+function sirenMode(t) {
+  let x = ((t % SIREN_CYCLE_LEN) + SIREN_CYCLE_LEN) % SIREN_CYCLE_LEN;
+  for (const seg of SIREN_CYCLE) {
+    if (x < seg.dur) return seg;
+    x -= seg.dur;
+  }
+  return SIREN_CYCLE[0];
+}
+
 export class GameAudio {
   constructor(scene, { masterVolume = 0.55 } = {}) {
     this.scene = scene;
@@ -117,9 +137,10 @@ export class GameAudio {
       const center = 740 + i * 35; // detune voices so they don't phase-lock into one tone
       carrier.frequency.value = center;
 
-      // LFO sweeps the carrier between center±depth → the rising/falling "wail".
-      const lfo = ctx.createOscillator(); lfo.type = "triangle"; lfo.frequency.value = 0.45 + i * 0.03;
-      const lfoGain = ctx.createGain(); lfoGain.gain.value = 190; // sweep depth (Hz)
+      // LFO sweeps the carrier between center±depth. Its rate + depth are re-driven
+      // each frame from the mode schedule (wail/yelp/phaser), so this is just a start.
+      const lfo = ctx.createOscillator(); lfo.type = "triangle"; lfo.frequency.value = SIREN_CYCLE[0].rate;
+      const lfoGain = ctx.createGain(); lfoGain.gain.value = SIREN_CYCLE[0].depth;
       lfo.connect(lfoGain); lfoGain.connect(carrier.frequency);
 
       // Tame the square's harshness a touch.
@@ -132,7 +153,8 @@ export class GameAudio {
       else g.connect(this.master);
 
       carrier.start(); lfo.start();
-      this.sirens.push({ g, pan, center });
+      // phase: where this voice sits in the mode cycle, spread evenly so the pack desyncs.
+      this.sirens.push({ g, pan, center, lfo, lfoGain, phase: (i / SIREN_VOICES) * SIREN_CYCLE_LEN });
     }
   }
 
@@ -168,6 +190,11 @@ export class GameAudio {
             now,
             0.08,
           );
+        // Advance this voice through the wail/yelp/phaser cycle. The 0.3s smoothing makes
+        // mode changes "spin up/down" (the LFO rate ramps) rather than snapping.
+        const m = sirenMode(now + v.phase);
+        v.lfo.frequency.setTargetAtTime(m.rate, now, 0.3);
+        v.lfoGain.gain.setTargetAtTime(m.depth, now, 0.3);
       }
       v.g.gain.setTargetAtTime(gain, now, 0.1);
     }
