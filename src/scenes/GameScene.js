@@ -125,6 +125,19 @@ export class GameScene extends Phaser.Scene {
     this.director = new PursuitDirector(this.navGrid, this.losRects);
     this.cops = [];
     this.wrecks = []; // disabled cops, kept as inert obstacles until they despawn
+
+    // --- Gadget: Oil Slick (player) — drop a splotchy patch behind you; a cop that drives
+    // over it loses grip (slides) + some speed for a duration. Charges per run (no economy
+    // yet). All levers live in the Gadgets dev panel. ---
+    this.oilSlicks = [];        // active patches: { x, y, r, t, blobs }
+    this.oilMaxCharges = 3;     // charges at the start of a run
+    this.oilCharges = this.oilMaxCharges;
+    this.oilPatchRadius = 26;   // px radius (~1.5× car width across)
+    this.oilLifetime = 12;      // s the patch stays on the road before fading out
+    this.oilGripLost = 0.85;    // fraction of a cop's grip removed while oiled (a lot = slides)
+    this.oilSpeedLost = 0.35;   // fraction of speed scrubbed on first contact (some)
+    this.oilEffectTime = 1.6;   // s the grip-loss lingers after the cop last touched oil
+
     this.spikes = []; // deployed spike strips (hazard wiring next; visible placeholder for now)
     this.spikeLifetime = 20; // s a dropped strip persists before it despawns
     this.spikeStripLen = 28; // px across — a cop-deployed strip is ~car-width (DODGEABLE). Roadblock
@@ -321,6 +334,10 @@ export class GameScene extends Phaser.Scene {
     this.spikeGfx = this.add.graphics().setDepth(7);
     this.worldLayer.add(this.spikeGfx);
 
+    // Oil slicks — drawn under the cars (a stain on the road); see _updateOilSlicks.
+    this.oilGfx = this.add.graphics().setDepth(6);
+    this.worldLayer.add(this.oilGfx);
+
     this._setupHud();
 
     // Camera follows with slight lag for a sense of speed
@@ -331,6 +348,7 @@ export class GameScene extends Phaser.Scene {
     if (this.devMode) {
       this._setupDebugOverlay();
       this._setupTunePanel();
+      this._setupGadgetPanel();
       if (this.sandbox) {
         this._setupTestbedPanel(); // spawn/clear chosen unit types
         this._setupUnitTunePanel(this._testbed.unitType); // tune the selected type's def
@@ -362,6 +380,7 @@ export class GameScene extends Phaser.Scene {
       this.reinforceText,
       this.killLightsText,
       this.garageText,
+      this.oilText,
     ];
     if (this.debugText) hud.push(this.debugText);
     if (this.copCountText) hud.push(this.copCountText);
@@ -372,6 +391,7 @@ export class GameScene extends Phaser.Scene {
     // otherwise they stack up duplicates on every R / menu cycle.
     this.events.once("shutdown", () => {
       if (this.gui) this.gui.destroy();
+      if (this.gadgetGui) this.gadgetGui.destroy();
       if (this.copGui) this.copGui.destroy();
       if (this.pursuitGui) this.pursuitGui.destroy();
       if (this.testbedGui) this.testbedGui.destroy();
@@ -1380,6 +1400,67 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
+  // Gadget: drop an oil slick BEHIND the player (one charge). The patch is a cluster of dark
+  // blobs (a splotchy mess) ~1.5× the car width across; cops that drive over it slide.
+  _deployOilSlick() {
+    if (this.busted || this.paused) return;
+    if (this.oilCharges <= 0) return;
+    this.oilCharges--;
+    const f = this.car.facing;
+    const off = 32; // px behind the car centre so it lands at the rear, not under you
+    const x = this.car.sprite.x - Math.cos(f) * off;
+    const y = this.car.sprite.y - Math.sin(f) * off;
+    const r = this.oilPatchRadius;
+    // Splotch: several overlapping circles jittered within the patch (visual only → Math.random).
+    const blobs = [];
+    const n = 6 + Math.floor(Math.random() * 3);
+    for (let i = 0; i < n; i++) {
+      blobs.push({
+        dx: (Math.random() * 2 - 1) * r * 0.55,
+        dy: (Math.random() * 2 - 1) * r * 0.55,
+        r: r * (0.35 + Math.random() * 0.45),
+      });
+    }
+    this.oilSlicks.push({ x, y, r, t: 0, blobs });
+  }
+
+  // Age + redraw the slicks, and apply their effect to cops: a one-shot speed scrub on the
+  // frame a cop first touches oil, then a lingering grip-loss timer (cop._oilT) that the cop
+  // update loop reads to slash grip each frame (it slides). Player is immune (its own oil).
+  _updateOilSlicks(dt) {
+    const g = this.oilGfx;
+    g.clear();
+    for (let i = this.oilSlicks.length - 1; i >= 0; i--) {
+      const s = this.oilSlicks[i];
+      s.t += dt;
+      if (s.t > this.oilLifetime) { this.oilSlicks.splice(i, 1); continue; }
+      const fade = Phaser.Math.Clamp((this.oilLifetime - s.t) / 1.5, 0, 1); // fade the last 1.5s
+      g.fillStyle(0x050507, 0.8 * fade);
+      for (const b of s.blobs) g.fillCircle(s.x + b.dx, s.y + b.dy, b.r);
+      // a faint oily sheen on top
+      g.fillStyle(0x2a2a3a, 0.25 * fade);
+      for (const b of s.blobs) g.fillCircle(s.x + b.dx - b.r * 0.2, s.y + b.dy - b.r * 0.2, b.r * 0.4);
+    }
+
+    for (const cop of this.cops) {
+      cop._oilT = Math.max(0, (cop._oilT || 0) - dt);
+      let inOil = false;
+      for (const s of this.oilSlicks) {
+        const dx = cop.sprite.x - s.x, dy = cop.sprite.y - s.y;
+        if (dx * dx + dy * dy <= s.r * s.r) { inOil = true; break; }
+      }
+      if (inOil) {
+        if (!cop._inOil) { // rising edge: one-shot speed scrub on contact
+          const keep = 1 - this.oilSpeedLost;
+          cop.vx *= keep; cop.vy *= keep;
+          if (cop.sprite.body) cop.sprite.body.setVelocity(cop.vx, cop.vy);
+        }
+        cop._oilT = this.oilEffectTime; // refresh the lingering grip-loss while on the patch
+      }
+      cop._inOil = inOil;
+    }
+  }
+
   // Custom CAPSULE collision for the player, cops AND roadblock cars — Arcade's box can't
   // cover a rotated car, so each is modelled as 3 circles along its spine and pushed out of
   // walls + apart from each other by hand. Rounded → slides along walls/corners. Additive to
@@ -2319,6 +2400,9 @@ bleed: { fastFrac: ${b.fastFrac}, fastRate: ${b.fastRate}, slowRate: ${b.slowRat
     this.input.keyboard.on("keydown-L", () => {
       this.car.lightsOff = !this.car.lightsOff;
     });
+
+    // Gadget — Oil Slick (O): drop a patch behind you (one charge per press).
+    this.input.keyboard.on("keydown-O", () => this._deployOilSlick());
   }
 
   _setupDebugOverlay() {
@@ -2391,6 +2475,18 @@ bleed: { fastFrac: ${b.fastFrac}, fastRate: ${b.fastRate}, slowRate: ${b.slowRat
       .setScrollFactor(0)
       .setDepth(100)
       .setAlpha(0);
+
+    // Gadget charges (bottom-left) — Oil Slick count.
+    this.oilText = this.add
+      .text(16, this.scale.height - 16, "", {
+        fontFamily: "monospace",
+        fontSize: "15px",
+        fontStyle: "bold",
+        color: "#d8c27a",
+      })
+      .setOrigin(0, 1)
+      .setScrollFactor(0)
+      .setDepth(100);
 
     // Heat / pursuit-level meter (Pursuit Mode only) — a thin bar under the status
     // showing progress toward the next level. Drawn each frame by _drawHeatBar.
@@ -2924,6 +3020,32 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
     });
   }
 
+  // Gadgets dev panel — live levers for the player's gadgets. Binds straight to the scene
+  // fields the gameplay reads each frame.
+  _setupGadgetPanel() {
+    const gui = new GUI({ title: "Gadgets", width: 280 });
+    this.gadgetGui = gui;
+    gui.close();
+
+    const oil = gui.addFolder("Oil Slick (O)");
+    oil
+      .add(this, "oilMaxCharges", 1, 10, 1)
+      .name("Charges")
+      .onChange((v) => (this.oilCharges = v)); // refill on tune (and on panel load)
+    oil.add(this, "oilPatchRadius", 10, 90, 1).name("Patch radius (px)");
+    oil.add(this, "oilLifetime", 2, 30, 1).name("Patch lifetime (s)");
+    oil.add(this, "oilGripLost", 0, 1, 0.05).name("Grip lost (0–1)");
+    oil.add(this, "oilSpeedLost", 0, 1, 0.05).name("Speed lost on hit (0–1)");
+    oil.add(this, "oilEffectTime", 0.2, 5, 0.1).name("Effect duration (s)");
+
+    this._persistPanel(gui, "gd_gadgetTune_v1");
+
+    gui.domElement.style.position = "fixed";
+    gui.domElement.style.top = "8px";
+    gui.domElement.style.left = "320px";
+    gui.domElement.style.zIndex = "9999";
+  }
+
   _setupCopTunePanel() {
     if (!this.cops.length) return;
     const c = this.cops[0],
@@ -3299,6 +3421,7 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
     this._updateWrecks(delta / 1000);
     this._updateRoadblocks(this.car.sprite.x, this.car.sprite.y, delta / 1000);
     this._updateSpikes(this.car.sprite.x, this.car.sprite.y, delta / 1000);
+    this._updateOilSlicks(delta / 1000);
 
     // While spectating a cop (camera not on the player), freeze the car so the
     // observer can't accidentally drive or re-trigger anything.
@@ -3340,6 +3463,15 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
 
     // Kill Lights stealth indicator (bottom-centre) follows the lights-off state.
     this.killLightsText.setAlpha(this.car.lightsOff ? 1 : 0);
+
+    // Gadget charges (bottom-left): filled/empty pips for the Oil Slick.
+    this.oilText
+      .setText(
+        "OIL " +
+          "◉".repeat(this.oilCharges) +
+          "○".repeat(Math.max(0, this.oilMaxCharges - this.oilCharges)),
+      )
+      .setColor(this.oilCharges > 0 ? "#d8c27a" : "#6a6450");
 
     // --- Perception: a cop is AWARE of the player if it has a clear sight line
     // within range, OR the player is within close proximity (omnidirectional —
@@ -3571,6 +3703,14 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
       const boost = state === PursuitState.ACTIVE ? cop.maneuverBoost || 0 : 0;
       cop.maxSpeed += boost;
       cop.ai.maxApproachSpeed = cop.ai.baseApproach + boost;
+      // Oil slick: while a cop is still affected, slash its grip THIS frame (it slides). The
+      // rejoin band already wrote live grip from base above, so this per-frame cut sticks until
+      // next frame. Speed loss is applied as a one-shot scrub on contact in _updateOilSlicks.
+      if ((cop._oilT || 0) > 0) {
+        const k = 1 - this.oilGripLost;
+        cop.gripLow *= k;
+        cop.gripHigh *= k;
+      }
       cop.update(delta, target);
       cop._lastVx = cop.vx;
       cop._lastVy = cop.vy; // pre-collision cache (see _updateCopDamage)
