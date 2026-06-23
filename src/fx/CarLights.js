@@ -15,24 +15,55 @@ import Phaser from 'phaser';
 // A disabled cop (vehicle.disabled) goes fully dark.
 
 const GLOW_KEY = 'gd_glow';
+const CONE_KEY = 'gd_cone';
 
-// One soft radial glow, generated once per scene-texture-manager.
+// Generate both reusable light textures once per scene-texture-manager:
+//   gd_glow — soft radial blob (tail lamps, cop flashers)
+//   gd_cone — a headlight cone: emitter at the LEFT edge, fanning right, bright at the
+//             emitter and fading to transparent with distance (the falloff) + soft edges.
 export function ensureGlowTexture(scene) {
-  if (scene.textures.exists(GLOW_KEY)) return;
-  const size = 64, r = size / 2;
-  const canvas = scene.textures.createCanvas(GLOW_KEY, size, size);
-  const ctx = canvas.getContext();
-  const g = ctx.createRadialGradient(r, r, 0, r, r, r);
-  g.addColorStop(0.0, 'rgba(255,255,255,1)');
-  g.addColorStop(0.4, 'rgba(255,255,255,0.55)');
-  g.addColorStop(1.0, 'rgba(255,255,255,0)');
-  ctx.fillStyle = g;
-  ctx.fillRect(0, 0, size, size);
-  canvas.refresh();
+  if (!scene.textures.exists(GLOW_KEY)) {
+    const size = 64, r = size / 2;
+    const canvas = scene.textures.createCanvas(GLOW_KEY, size, size);
+    const ctx = canvas.getContext();
+    const g = ctx.createRadialGradient(r, r, 0, r, r, r);
+    g.addColorStop(0.0, 'rgba(255,255,255,1)');
+    g.addColorStop(0.4, 'rgba(255,255,255,0.55)');
+    g.addColorStop(1.0, 'rgba(255,255,255,0)');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, size, size);
+    canvas.refresh();
+  }
+
+  if (!scene.textures.exists(CONE_KEY)) {
+    const W = 180, H = 130;
+    const canvas = scene.textures.createCanvas(CONE_KEY, W, H);
+    const ctx = canvas.getContext();
+    const ex = 8, ey = H / 2; // emitter point (left-center) — the headlight itself
+    // Radial gradient from the emitter gives the distance falloff (dim farther away).
+    const g = ctx.createRadialGradient(ex, ey, 0, ex, ey, W - ex);
+    g.addColorStop(0.0, 'rgba(255,255,255,0.55)');
+    g.addColorStop(0.35, 'rgba(255,255,255,0.22)');
+    g.addColorStop(1.0, 'rgba(255,255,255,0)');
+    // Blur (where supported) feathers the cone's edges so it's a soft wash, not a wedge.
+    if ('filter' in ctx) ctx.filter = 'blur(9px)';
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.moveTo(ex, ey);     // apex at the emitter
+    ctx.lineTo(W, 8);       // fan out to the far edge…
+    ctx.lineTo(W, H - 8);   // …wide spread
+    ctx.closePath();
+    ctx.fill();
+    if ('filter' in ctx) ctx.filter = 'none';
+    canvas.refresh();
+  }
 }
 
 // Light component templates per car kind. len/wid are on-screen px; circular lights set
-// len == wid. `beam` lights rotate with the car (oriented glow); others stay round.
+// len == wid. `beam` lights use the cone texture (emitter at the local fx,sx point, fanning
+// forward), so `len` = cone length and `wid` = cone far-end spread; others stay round.
+// `alpha` overrides the per-type default. Headlights are cool, wide and faint (the cone's
+// own gradient supplies the falloff); brake lamps are small and bright-on-brake.
 function componentsFor(kind, v) {
   const halfLen = (v.sprite.displayHeight || 60) / 2;
   const halfWid = (v.sprite.displayWidth || 32) / 2;
@@ -41,20 +72,20 @@ function componentsFor(kind, v) {
       // Emergency bar — two bloomy blobs at the roof, double-blinking out of phase.
       { type: 'flashRed',  fx: halfLen * 0.05, sx: -6, len: 34, wid: 34, color: 0xff1530 },
       { type: 'flashBlue', fx: halfLen * 0.05, sx:  6, len: 34, wid: 34, color: 0x1f63ff },
-      // Cool-white headlights.
-      { type: 'head', fx: halfLen * 0.95 + 6, sx: -halfWid * 0.55, len: 44, wid: 20, color: 0xeaf4ff, beam: true },
-      { type: 'head', fx: halfLen * 0.95 + 6, sx:  halfWid * 0.55, len: 44, wid: 20, color: 0xeaf4ff, beam: true },
-      // Red tail lamps.
-      { type: 'tail', fx: -halfLen * 0.9, sx: -halfWid * 0.55, len: 15, wid: 15, color: 0xff2a2a },
-      { type: 'tail', fx: -halfLen * 0.9, sx:  halfWid * 0.55, len: 15, wid: 15, color: 0xff2a2a },
+      // Cool, wide, faint headlight cones with distance falloff.
+      { type: 'head', fx: halfLen * 0.6, sx: -7, len: 100, wid: 84, color: 0xcfe0ff, alpha: 0.4, beam: true },
+      { type: 'head', fx: halfLen * 0.6, sx:  7, len: 100, wid: 84, color: 0xcfe0ff, alpha: 0.4, beam: true },
+      // Red tail lamps (−30% size).
+      { type: 'tail', fx: -halfLen * 0.9, sx: -halfWid * 0.55, len: 10.5, wid: 10.5, color: 0xff2a2a },
+      { type: 'tail', fx: -halfLen * 0.9, sx:  halfWid * 0.55, len: 10.5, wid: 10.5, color: 0xff2a2a },
     ];
   }
   // player
   return [
-    { type: 'head', fx: halfLen * 0.95 + 6, sx: -halfWid * 0.5, len: 48, wid: 22, color: 0xfff3d0, beam: true },
-    { type: 'head', fx: halfLen * 0.95 + 6, sx:  halfWid * 0.5, len: 48, wid: 22, color: 0xfff3d0, beam: true },
-    { type: 'tail', fx: -halfLen * 0.9, sx: -halfWid * 0.55, len: 16, wid: 16, color: 0xff2010 },
-    { type: 'tail', fx: -halfLen * 0.9, sx:  halfWid * 0.55, len: 16, wid: 16, color: 0xff2010 },
+    { type: 'head', fx: halfLen * 0.6, sx: -7, len: 115, wid: 95, color: 0xcfe0ff, alpha: 0.42, beam: true },
+    { type: 'head', fx: halfLen * 0.6, sx:  7, len: 115, wid: 95, color: 0xcfe0ff, alpha: 0.42, beam: true },
+    { type: 'tail', fx: -halfLen * 0.9, sx: -halfWid * 0.55, len: 11.2, wid: 11.2, color: 0xff2010 },
+    { type: 'tail', fx: -halfLen * 0.9, sx:  halfWid * 0.55, len: 11.2, wid: 11.2, color: 0xff2010 },
   ];
 }
 
@@ -68,11 +99,14 @@ export class CarLights {
     this.lights = componentsFor(kind, vehicle);
     const depth = (vehicle.sprite.depth || 10) + 1;
     for (const L of this.lights) {
-      const spr = scene.add.image(vehicle.sprite.x, vehicle.sprite.y, GLOW_KEY)
+      const spr = scene.add.image(vehicle.sprite.x, vehicle.sprite.y, L.beam ? CONE_KEY : GLOW_KEY)
         .setBlendMode(Phaser.BlendModes.ADD)
         .setTint(L.color)
         .setDisplaySize(L.len, L.wid)
-        .setDepth(L.type.startsWith('flash') ? depth + 1 : depth);
+        // Headlight cones render BELOW the car (a wash on the road); lamps/flashers above it.
+        .setDepth(L.beam ? depth - 2 : (L.type.startsWith('flash') ? depth + 1 : depth));
+      // Cone texture's emitter is its left-center → anchor there so it fans forward from (fx,sx).
+      if (L.beam) spr.setOrigin(0, 0.5);
       L.spr = spr;
       if (layer) layer.add(spr);
     }
@@ -102,7 +136,7 @@ export class CarLights {
       if (dead) {
         alpha = 0;
       } else if (L.type === 'head') {
-        alpha = off ? 0 : 0.9;
+        alpha = off ? 0 : (L.alpha ?? 0.9);
       } else if (L.type === 'tail') {
         alpha = off ? 0 : (braking ? 1.0 : 0.32);
         scale = braking ? 1.35 : 1.0;
