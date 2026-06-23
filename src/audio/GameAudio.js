@@ -205,35 +205,45 @@ export class GameAudio {
     }
   }
 
-  // "Found again" alert — a fast, high, rising 4-blip sting fired when a cop re-spots the
-  // player during the cooldown/search (the oh-crap moment). One-shot scheduled voice; the
-  // 1.2s self-cooldown stops a state flicker from machine-gunning it.
+  // "Found again" alert — a short, fast, HIGH yelp burst fired when a cop re-spots the
+  // player during the cooldown/search (the oh-crap moment). Same swept-carrier character as
+  // the cruising siren (so it reads as "cop", not a UI beep), but pitched up and swept fast.
+  // One-shot; the 1.2s self-cooldown stops a state flicker from machine-gunning it.
   playSpotted() {
     if (!this.ctx || this.muted) return;
     const ctx = this.ctx, now = ctx.currentTime;
     if (now < (this._spottedUntil || 0)) return;
     this._spottedUntil = now + 1.2;
+    const dur = 0.6;
 
-    const osc = ctx.createOscillator();
-    osc.type = "square";
-    const bp = ctx.createBiquadFilter();
-    bp.type = "bandpass"; bp.frequency.value = 2000; bp.Q.value = 0.9;
+    const carrier = ctx.createOscillator();
+    carrier.type = "square";
+    carrier.frequency.setValueAtTime(1080, now);
+    carrier.frequency.linearRampToValueAtTime(1320, now + dur); // center creeps up = rising urgency
+
+    // Fast sawtooth LFO sweep = the yelp "whoop", higher + faster than the cruising siren.
+    const lfo = ctx.createOscillator();
+    lfo.type = "sawtooth";
+    lfo.frequency.value = 6.5;
+    const lfoGain = ctx.createGain();
+    lfoGain.gain.value = 300; // sweep depth (Hz)
+    lfo.connect(lfoGain); lfoGain.connect(carrier.frequency);
+
+    const lp = ctx.createBiquadFilter();
+    lp.type = "lowpass"; lp.frequency.value = 3200; // tame the square's edge
+
     const g = ctx.createGain(); g.gain.value = 0.0001;
-    osc.connect(bp); bp.connect(g); g.connect(this.master);
+    carrier.connect(lp); lp.connect(g); g.connect(this.master);
 
-    const freqs = [1500, 1780, 2080, 2450]; // rising urgency
-    const onDur = 0.05, gap = 0.04;          // fast: ~90ms per blip
-    const peak = 0.28;
-    let t = now;
-    for (let i = 0; i < freqs.length; i++) {
-      osc.frequency.setValueAtTime(freqs[i], t);
-      g.gain.setValueAtTime(0.0001, t);
-      g.gain.linearRampToValueAtTime(peak, t + 0.006); // snappy attack
-      g.gain.exponentialRampToValueAtTime(0.0001, t + onDur); // quick decay
-      t += onDur + gap;
-    }
-    osc.start(now);
-    osc.stop(t + 0.05);
+    // Punchy attack, hold, short tail.
+    const peak = 0.3;
+    g.gain.setValueAtTime(0.0001, now);
+    g.gain.linearRampToValueAtTime(peak, now + 0.02);
+    g.gain.setValueAtTime(peak, now + dur - 0.12);
+    g.gain.exponentialRampToValueAtTime(0.0001, now + dur);
+
+    carrier.start(now); lfo.start(now);
+    carrier.stop(now + dur + 0.02); lfo.stop(now + dur + 0.02);
   }
 
   setMuted(m) {
