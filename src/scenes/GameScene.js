@@ -3383,6 +3383,9 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
     // chase — no ditch/search/return — keeping a unit always exercising its behavior
     // while you tune it. lastKnown still only moves on a REAL sighting, so blind-nav is
     // unchanged. (Cops still navigate to last-known when they personally lose sight.)
+    // Capture the cooling state BEFORE the update — a re-spot resets `ditched` to false
+    // inside update(), so this is the only place to know heat WAS bleeding (full ditch).
+    const wasBleeding = this.pursuit.ditched;
     const state = this.pursuit.update(
       this.sandbox || anyAware,
       anyLOS,
@@ -3417,10 +3420,11 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
       );
       for (const cop of this.cops) cop._searchNode = lkNode;
     }
-    // Re-spotted: a cop regained sight DURING the cooldown/search and snapped the pursuit
-    // back to ACTIVE — the "oh crap, found again" moment. Fire the alert sting. (Only the
-    // SEARCH→ACTIVE edge; a fresh IDLE→ACTIVE chase start doesn't count.)
-    if (state === PursuitState.ACTIVE && this._prevState === PursuitState.SEARCH) {
+    // Re-spotted after a real ditch: a cop regained sight while the heat was COOLING (ditched/
+    // bleeding) and snapped the pursuit back to ACTIVE — the "oh crap, found again" moment.
+    // Gated on wasBleeding so a brief LOS flicker mid-chase (pre-ditch SEARCH, heat merely held)
+    // doesn't fire it every time you round a corner.
+    if (state === PursuitState.ACTIVE && this._prevState === PursuitState.SEARCH && wasBleeding) {
       this.audio.playSpotted();
     }
     this._prevState = state;
