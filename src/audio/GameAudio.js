@@ -1,0 +1,170 @@
+// Procedural game audio — no sound files. Borrows Phaser's WebAudio AudioContext
+// (this.sound.context) and synthesizes everything from oscillators + noise + filters.
+//
+//   • Engine — detuned sawtooths + a sine sub through a lowpass; pitch/cutoff/volume
+//     track the player's speed and throttle. One persistent voice, updated per frame.
+//   • Sirens — a pool of two-tone "wail" voices (an LFO sweeping a square carrier),
+//     panned + attenuated by each cop's position relative to the player. The nearest
+//     few chasing cops get a voice; the rest are silent.
+//
+// Everything runs through a master gain + compressor (glue / clip safety). The context
+// starts suspended until a user gesture, so we resume on the first input.
+const SIREN_VOICES = 4;        // max simultaneous audible sirens (nearest cops win)
+const SIREN_FALLOFF = 1100;    // px at which a siren fades to silent
+const SIREN_PAN_RANGE = 900;   // px lateral offset that maps to full L/R pan
+
+export class GameAudio {
+  constructor(scene, { masterVolume = 0.55 } = {}) {
+    this.scene = scene;
+    this.muted = false;
+    const ctx = scene.sound && scene.sound.context;
+    // No WebAudio (HTML5/NoAudio fallback) → every method becomes a safe no-op.
+    if (!ctx || typeof ctx.createOscillator !== "function") {
+      this.ctx = null;
+      return;
+    }
+    this.ctx = ctx;
+
+    // Master bus: gain → compressor → speakers.
+    this.master = ctx.createGain();
+    this.master.gain.value = masterVolume;
+    const comp = ctx.createDynamicsCompressor();
+    this.master.connect(comp);
+    comp.connect(ctx.destination);
+
+    this._buildEngine();
+    this._buildSirens();
+    this._resumeOnGesture();
+  }
+
+  // ── Engine ────────────────────────────────────────────────────────────────
+  _buildEngine() {
+    const ctx = this.ctx;
+    const g = ctx.createGain();
+    g.gain.value = 0.0001; // silent until updated (and until context resumes)
+    const lp = ctx.createBiquadFilter();
+    lp.type = "lowpass";
+    lp.frequency.value = 500;
+    lp.Q.value = 6; // a little resonance → throatier
+    g.connect(lp);
+    lp.connect(this.master);
+
+    // Two slightly-detuned saws for thickness + a sine sub for body.
+    const o1 = ctx.createOscillator(); o1.type = "sawtooth"; o1.detune.value = -6;
+    const o2 = ctx.createOscillator(); o2.type = "sawtooth"; o2.detune.value = 8;
+    const sub = ctx.createOscillator(); sub.type = "sine";
+    const subG = ctx.createGain(); subG.gain.value = 0.6;
+    o1.connect(g); o2.connect(g); sub.connect(subG); subG.connect(g);
+    o1.start(); o2.start(); sub.start();
+
+    this.engine = { g, lp, o1, o2, sub };
+  }
+
+  // speed/maxSpeed → pitch + brightness; throttle adds load. Smoothed to avoid clicks.
+  updateEngine(speed, maxSpeed, throttle) {
+    if (!this.ctx) return;
+    const now = this.ctx.currentTime;
+    const frac = Math.max(0, Math.min(1, speed / (maxSpeed || 1)));
+    const idle = 50, top = 172;
+    const fund = idle + Math.pow(frac, 0.85) * (top - idle);
+    const { g, lp, o1, o2, sub } = this.engine;
+    // setTargetAtTime ramps smoothly (no zipper noise) toward the target.
+    o1.frequency.setTargetAtTime(fund, now, 0.04);
+    o2.frequency.setTargetAtTime(fund * 1.008, now, 0.04);
+    sub.frequency.setTargetAtTime(fund * 0.5, now, 0.04);
+    lp.frequency.setTargetAtTime(350 + frac * 3800 + (throttle ? 700 : 0), now, 0.05);
+    const vol = this.muted ? 0.0001 : 0.05 + frac * 0.1 + (throttle ? 0.02 : 0);
+    g.gain.setTargetAtTime(vol, now, 0.06);
+  }
+
+  // ── Sirens ────────────────────────────────────────────────────────────────
+  _buildSirens() {
+    const ctx = this.ctx;
+    this.sirens = [];
+    for (let i = 0; i < SIREN_VOICES; i++) {
+      const carrier = ctx.createOscillator();
+      carrier.type = "square";
+      const center = 740 + i * 35; // detune voices so they don't phase-lock into one tone
+      carrier.frequency.value = center;
+
+      // LFO sweeps the carrier between center±depth → the rising/falling "wail".
+      const lfo = ctx.createOscillator(); lfo.type = "triangle"; lfo.frequency.value = 0.45 + i * 0.03;
+      const lfoGain = ctx.createGain(); lfoGain.gain.value = 190; // sweep depth (Hz)
+      lfo.connect(lfoGain); lfoGain.connect(carrier.frequency);
+
+      // Tame the square's harshness a touch.
+      const lp = ctx.createBiquadFilter(); lp.type = "lowpass"; lp.frequency.value = 2600;
+      const g = ctx.createGain(); g.gain.value = 0.0001;
+      const pan = ctx.createStereoPanner ? ctx.createStereoPanner() : null;
+
+      carrier.connect(lp); lp.connect(g);
+      if (pan) { g.connect(pan); pan.connect(this.master); }
+      else g.connect(this.master);
+
+      carrier.start(); lfo.start();
+      this.sirens.push({ g, pan, center });
+    }
+  }
+
+  // active: pursuit is making noise (ACTIVE/SEARCH). Assign the nearest chasing cops to
+  // the voice pool; pan + attenuate each by its offset from the player; silence the rest.
+  updateSirens(player, cops, active) {
+    if (!this.ctx) return;
+    const now = this.ctx.currentTime;
+    const px = player.x, py = player.y;
+    // Nearest cops first (only the closest SIREN_VOICES are audible).
+    const near = active
+      ? [...cops]
+          .filter((c) => !c.disabled)
+          .sort(
+            (a, b) =>
+              (a.sprite.x - px) ** 2 + (a.sprite.y - py) ** 2 -
+              ((b.sprite.x - px) ** 2 + (b.sprite.y - py) ** 2),
+          )
+          .slice(0, SIREN_VOICES)
+      : [];
+    for (let i = 0; i < this.sirens.length; i++) {
+      const v = this.sirens[i];
+      const cop = near[i];
+      let gain = 0.0001;
+      if (cop && !this.muted) {
+        const dx = cop.sprite.x - px, dy = cop.sprite.y - py;
+        const dist = Math.hypot(dx, dy);
+        const atten = Math.max(0, 1 - dist / SIREN_FALLOFF);
+        gain = Math.max(0.0001, 0.11 * atten * atten);
+        if (v.pan)
+          v.pan.pan.setTargetAtTime(
+            Math.max(-1, Math.min(1, dx / SIREN_PAN_RANGE)),
+            now,
+            0.08,
+          );
+      }
+      v.g.gain.setTargetAtTime(gain, now, 0.1);
+    }
+  }
+
+  setMuted(m) {
+    this.muted = m;
+    if (this.ctx) this.master.gain.setTargetAtTime(m ? 0.0001 : 0.55, this.ctx.currentTime, 0.05);
+  }
+
+  // Context boots suspended (autoplay policy). Phaser unlocks on input too, but resume
+  // ourselves on the first gesture to be safe.
+  _resumeOnGesture() {
+    if (!this.ctx) return;
+    const resume = () => { if (this.ctx.state === "suspended") this.ctx.resume(); };
+    this.scene.input.once("pointerdown", resume);
+    this.scene.input.keyboard.once("keydown", resume);
+  }
+
+  destroy() {
+    if (!this.ctx) return;
+    try {
+      const stop = (o) => { try { o.stop(); } catch {} };
+      const e = this.engine; if (e) { stop(e.o1); stop(e.o2); stop(e.sub); }
+      for (const v of this.sirens || []) v.g.gain.value = 0;
+      this.master.disconnect();
+    } catch {}
+    this.ctx = null;
+  }
+}

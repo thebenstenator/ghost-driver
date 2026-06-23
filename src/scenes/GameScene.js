@@ -12,6 +12,7 @@ import { Pursuit, PursuitState } from "../systems/Pursuit.js";
 import { PursuitLevel } from "../systems/PursuitLevel.js";
 import { BustMeter } from "../systems/BustMeter.js";
 import { CarLights } from "../fx/CarLights.js";
+import { GameAudio } from "../audio/GameAudio.js";
 import {
   WORLD_WIDTH,
   WORLD_HEIGHT,
@@ -85,6 +86,10 @@ export class GameScene extends Phaser.Scene {
     this.car = new PlayerCar(this, WORLD_WIDTH / 2, WORLD_HEIGHT / 2);
     this.worldLayer.add(this.car.sprite);
     this.car.lights = new CarLights(this, this.car, "player", this.worldLayer);
+    // Procedural audio (synth engine + panned cop sirens). Torn down on scene shutdown
+    // so a restart doesn't leak running oscillators.
+    this.audio = new GameAudio(this);
+    this.events.once("shutdown", () => this.audio && this.audio.destroy());
 
     this.physics.add.collider(this.car.sprite, this.walls);
     // Player CAPSULE collider (custom): Arcade's body can't rotate, so the car is modelled
@@ -2279,6 +2284,11 @@ bleed: { fastFrac: ${b.fastFrac}, fastRate: ${b.fastRate}, slowRate: ${b.slowRat
           : this.cops[this.camFocusIndex - 1].sprite;
       this.cameras.main.startFollow(sprite, true, 0.1, 0.1);
     });
+
+    // Mute toggle (N) — M is already the menu key.
+    this.input.keyboard.on("keydown-N", () => {
+      if (this.audio) this.audio.setMuted(!this.audio.muted);
+    });
   }
 
   _setupDebugOverlay() {
@@ -3211,7 +3221,14 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
   update(_time, delta) {
     // Frozen after a bust (R restarts) or while paused (P resumes) — both keys
     // are handled by their keydown listeners, so just hold here.
-    if (this.busted || this.paused) return;
+    if (this.busted || this.paused) {
+      // Idle the engine + cut sirens so audio doesn't drone on a frozen scene.
+      if (this.audio) {
+        this.audio.updateEngine(0, this.car.maxSpeed, false);
+        this.audio.updateSirens(this.car.sprite, this.cops, false);
+      }
+      return;
+    }
 
     // Cop ram-damage / disabling, and ageing out wrecks. Run FIRST, before anyone's
     // velocity is touched this frame, so a hit's onset reads the true approach speed.
@@ -3254,6 +3271,9 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
     if (_bogAccel != null) this.car.acceleration = _bogAccel;
     this._carLastVx = this.car.vx;
     this._carLastVy = this.car.vy; // pre-collision cache (see _updateCopDamage)
+
+    // Engine synth tracks the player's speed + throttle.
+    this.audio.updateEngine(this.car.getSpeed(), this.car.maxSpeed, controls.up);
 
     // --- Perception: a cop is AWARE of the player if it has a clear sight line
     // within range, OR the player is within close proximity (omnidirectional —
@@ -3461,6 +3481,14 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
     this.car.lights.update();
     for (const cop of this.cops) cop.lights.update();
     for (const w of this.wrecks) if (w.lights) w.lights.update();
+
+    // Cop sirens wail while the pursuit has eyes out (ACTIVE) or is searching; the pool
+    // tracks the nearest cops, panned by their offset from the player.
+    this.audio.updateSirens(
+      this.car.sprite,
+      this.cops,
+      state === PursuitState.ACTIVE || state === PursuitState.SEARCH,
+    );
 
     // Tier-2 rejoin: a cop that's been far + not chasing + off-screen for a while is
     // relocated off-screen near the player instead of grinding all the way back.
