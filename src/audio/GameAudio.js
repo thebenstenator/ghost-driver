@@ -20,10 +20,10 @@ const SIREN_PAN_RANGE = 900;   // px lateral offset that maps to full L/R pan
 // yelp/phaser then drops back to wail. Voices are phase-offset so the pack desyncs (one car
 // wails while another yelps).
 const SIREN_CYCLE = [
-  { dur: 6.0, rate: 0.28, depth: 220, center: 680 },  // wail   — slow, low, wide sweep
-  { dur: 4.0, rate: 3.3,  depth: 240, center: 1120 }, // yelp   — fast + much higher
-  { dur: 5.0, rate: 0.30, depth: 220, center: 700 },  // wail
-  { dur: 2.5, rate: 6.8,  depth: 160, center: 1380 }, // phaser — fastest + highest, tight
+  { dur: 6.0, rate: 0.28, depth: 320, center: 780 },  // wail   — slow; same ~460 floor, sweeps up near yelp (~1100)
+  { dur: 4.0, rate: 3.3,  depth: 240, center: 1120 }, // yelp   — fast + higher
+  { dur: 5.0, rate: 0.30, depth: 320, center: 780 },  // wail
+  { dur: 2.5, rate: 6.8,  depth: 160, center: 1120 }, // phaser — fastest, pitch matched to yelp
 ];
 const SIREN_CYCLE_LEN = SIREN_CYCLE.reduce((s, seg) => s + seg.dur, 0);
 function sirenMode(t) {
