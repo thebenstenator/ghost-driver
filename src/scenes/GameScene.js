@@ -3451,7 +3451,11 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
 
     // Tier-2 rejoin: a cop that's been far + not chasing + off-screen for a while is
     // relocated off-screen near the player instead of grinding all the way back.
-    if (state === PursuitState.ACTIVE) this._respawnLostCops(px, py, dt);
+    // Gated on a REAL current sighting (anyLOS), not just ACTIVE: ACTIVE persists
+    // through the 0.6s awareGrace and intermittent re-sightings, so without this a
+    // lost cop could teleport onto your escape route while you're shaking the pack
+    // and nobody can actually see you. No eyes on the player ⇒ no relocation.
+    if (state === PursuitState.ACTIVE && anyLOS) this._respawnLostCops(px, py, dt);
 
     // Once every cop has reached the station, the area is fully clear. A cop wedged in
     // a tight alley on the way home (the K-turn can't always escape) would otherwise
