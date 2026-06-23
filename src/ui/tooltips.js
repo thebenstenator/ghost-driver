@@ -62,6 +62,7 @@ export const TOOLTIPS = {
   // ── Roadblocks ──────────────────────────────────────────────────────────────
   roadblockDist: "Distance ahead (px) a roadblock is placed. Raise to place blocks further ahead.",
   roadblockInterval: "Seconds between auto-spawned roadblocks in pursuit. Lower for more frequent blocks.",
+  maxActiveRoadblocks: "Max number of auto-spawned roadblocks allowed at once. Raise to allow double-stacking; 1 prevents two blocks overlapping at nearby intersections.",
   rbCarMass: "A roadblock car's shove weight. Raise to make it harder to push through.",
   rbHeavyMass: "A roadblock heavy's shove weight. Raise to make it harder to push through.",
   rbCarDrag: "Drag on a shoved roadblock car. Raise so shoved cars settle (stop sliding) faster.",
@@ -140,6 +141,8 @@ export const TOOLTIPS = {
   spikeBoost: "Sprint speed boost so it can pull ahead of you. Raise if it can't get clear to deploy.",
   spikeDropAhead: "How far ahead it must get before dropping the strip. Raise so the strip lands further in front (more dodge time).",
   spikeGlobalCooldown: "Seconds between ANY spike deploy across the whole pack. Raise so strips can't carpet the road — one strip, then a pack-wide wait.",
+  spikeCloseFactor: "Speed cap while closing in (fraction of your speed). Lower so the spike unit hangs back longer before brake-checking; raise to close in faster.",
+  spikeCloseBuffer: "Extra distance beyond blockAhead at which the unit switches from closing in to brake-checking. Raise to start the brake-check from further ahead.",
   spikeStripLen: "Width (px) of a cop-deployed spike strip (≈ car width = dodgeable). Raise to make it harder to dodge.",
   spikeProgressEps: "Forward gain (px) that counts as real progress in the sprint. Higher ignores jitter; lower = stricter.",
   spikeStallTime: "Seconds of NO progress before the sprint gives up. Raise so it persists while slowly winning the overtake.",

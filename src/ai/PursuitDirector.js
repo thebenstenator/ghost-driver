@@ -173,10 +173,11 @@ export class PursuitDirector {
     this.spikeEaseFactor  = 0.7;   // it eases to this fraction of your speed so the pack catches up
     // LEAD: a spike unit that's already ahead (it spawned ahead) drives to stay this far in front,
     // matching your pace, until its drop cooldown clears — then it deploys at the deploy distance.
-    this.spikeLeadDist    = 150;   // px ahead of ITSELF a leading spike unit aims (keeps it driving
-                                   // forward); the gap it holds ≈ its spawn-ahead distance, pace-matched
-    this.spikeLeadMin     = 0;     // along-px above which a spike unit is treated as "ahead" (leads)
-    this.spikeGlobalCooldown = 6;  // s between ANY spike deploy across the WHOLE pack (so strips can't
+    this.spikeLeadDist    = 150;   // px ahead of ITSELF a closing spike unit aims (keeps it driving forward)
+    this.spikeCloseFactor = 0.78;  // while still well ahead it drives at this × your speed so you CLOSE the gap
+    this.spikeCloseBuffer = 60;    // px past blockAhead at which it switches from closing-in to brake-checking
+    this.spikeLeadMin     = 0;     // along-px above which a spike unit is treated as "ahead" (engages)
+    this.spikeGlobalCooldown = 20; // s between ANY spike deploy across the WHOLE pack (so strips can't
                                    // carpet the road — one strip down, then a pack-wide cadence)
     this._spikeGlobalCd   = 0;     // pack-wide deploy timer
     this._spikeHolder     = null;  // the single cop currently running a spike deploy
@@ -276,23 +277,32 @@ export class PursuitDirector {
         }
       } else if (cop.unitDef && cop.unitDef.ability === 'spike' &&
                  this._along(cop, px, py, h) > this.spikeLeadMin) {
-        // Spike unit that's AHEAD (it spawned ahead): LEAD — hold station in front, same
-        // direction, matching your pace — until its drop cooldown (_spikeCd, set long on spawn)
-        // expires, then DEPLOY a strip at the deploy distance ahead of you. The cooldown is your
-        // window to ditch before it can spike you.
-        cop.role = CopState.LEAD;
-        // Aim a fixed distance ahead of the COP (always forward → never U-turns back toward you),
-        // capped at your pace so it holds the gap, with the boost so a 560-top spike can keep up
-        // with a faster player instead of slowly being reeled in.
-        target = this._clearTarget(px, py, { x: cop.sprite.x + Math.cos(h) * this.spikeLeadDist, y: cop.sprite.y + Math.sin(h) * this.spikeLeadDist });
-        speedCap = Math.max(this.blockMinSpeed, speed);
-        boost = this.spikeBoost;
-        if ((cop._spikeCd || 0) <= 0 && this._spikeGlobalCd <= 0 && (cop._spikeStrips == null || cop._spikeStrips > 0)) {
-          cop.role = CopState.DEPLOY;
-          this._requestSpikeDrop(cop, h); // drops at the cop (which is leading ahead of you)
-          this._spikeGlobalCd = this.spikeGlobalCooldown;
-          cop._spikeCd = (cop._spikeStrips <= 0) ? this.spikeReload : this.spikeDropCd;
-          if (cop._spikeStrips <= 0) cop._spikeStrips = (cop.unitDef.spikeStrips ?? this.spikeStripCount); // reloaded
+        // Spike unit that's AHEAD (it spawned ahead). Rather than passively hold a big lead, it
+        // CLOSES IN and gets in your way: brake-checks at blockAhead, and drops a strip whenever
+        // its deploy is off the (long) global cooldown. (When it can't deploy it isn't idle — it's
+        // an active brake-check; and once behind it's free to PIT, see the PIT exclusion.)
+        const along = this._along(cop, px, py, h);
+        const canDeploy = (cop._spikeCd || 0) <= 0 && this._spikeGlobalCd <= 0 &&
+                          (cop._spikeStrips == null || cop._spikeStrips > 0);
+        boost = this.spikeBoost; // ceiling so it can keep pace / close on a fast player
+        if (along > this.blockAhead + this.spikeCloseBuffer) {
+          // Well ahead → close the gap: drive FORWARD (aim ahead of the cop, no U-turn) but slow
+          // below your pace so you catch up to brake-check range.
+          cop.role = CopState.LEAD;
+          target = this._clearTarget(px, py, { x: cop.sprite.x + Math.cos(h) * this.spikeLeadDist, y: cop.sprite.y + Math.sin(h) * this.spikeLeadDist });
+          speedCap = Math.max(this.blockMinSpeed, speed * this.spikeCloseFactor);
+        } else {
+          // In range → brake-check (get in your way). Drop a strip if the cooldown's ready.
+          cop.role = CopState.BLOCK;
+          target = this._clearTarget(px, py, { x: px + Math.cos(h) * this.blockAhead, y: py + Math.sin(h) * this.blockAhead });
+          speedCap = Math.max(this.blockMinSpeed, speed * this.blockSpeedFactor);
+          if (canDeploy) {
+            cop.role = CopState.DEPLOY;
+            this._requestSpikeDrop(cop, h);
+            this._spikeGlobalCd = this.spikeGlobalCooldown;
+            cop._spikeCd = (cop._spikeStrips <= 0) ? this.spikeReload : this.spikeDropCd;
+            if (cop._spikeStrips <= 0) cop._spikeStrips = (cop.unitDef.spikeStrips ?? this.spikeStripCount); // reloaded
+          }
         }
       } else if (cop === holder && cop._maneuver) {
         // Committed maneuver wins over box/pursue. It only chooses WHERE (a drivable
@@ -459,7 +469,9 @@ export class PursuitDirector {
       let best = null, bestD = Infinity;
       for (const c of cops) {
         if (c === this._maneuverHolder || c === this._spikeHolder || (c._pitCd || 0) > 0 || !c.hasLOS) continue;
-        if (c.unitDef && c.unitDef.ability === 'spike') continue; // spike units don't PIT
+        // Spike units only skip PIT while a deploy is actually available — once on the global
+        // cooldown they're free to use other abilities (PIT / brake-check) instead of idling.
+        if (c.unitDef && c.unitDef.ability === 'spike' && this._spikeGlobalCd <= 0) continue;
         if (c.getSpeed() < this.pitMinSpeed) continue;
         const d = this._dist(c, px, py);
         if (d > this.pitRange) continue;

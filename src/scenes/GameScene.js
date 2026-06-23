@@ -223,6 +223,8 @@ export class GameScene extends Phaser.Scene {
     // L5 max), so blocks intensify as the chase escalates.
     this.roadblockMinLevel = 3;   // lowest pursuit level that auto-spawns roadblocks
     this.roadblockInterval = 22;  // s between auto-spawned roadblocks
+    this.maxActiveRoadblocks = 1; // don't auto-spawn another while this many are already up (a block
+    // lives ~rbLifetime, longer than the interval, so without this two would coexist on screen)
     this.roadblockMinSpeed = 120; // only place ahead while you're actually moving this fast
     this._roadblockTimer   = 8;   // s until the next auto-spawn (small initial delay)
     // Scripted spin (Arcade has no angular physics): an OFF-CENTRE hit torques the car so it
@@ -987,10 +989,17 @@ export class GameScene extends Phaser.Scene {
   _placeAheadSpike(cop, px, py) {
     const car = this.car;
     const dir = car.getSpeed() > 40 ? Math.atan2(car.vy, car.vx) : car.facing;
-    const tx = px + Math.cos(dir) * this.spikeSpawnAhead,
-      ty = py + Math.sin(dir) * this.spikeSpawnAhead;
-    const p = this.navGrid.pos(this.navGrid.nearestNodeAhead(tx, ty, px, py, dir));
-    this._placeCop(cop, p.x, p.y, px, py, dir); // face the way the player is going
+    // Prefer the first OFF-CAMERA node ahead (walk outward) so it doesn't pop in on a wide FOV; it
+    // then closes in via its brake-check behaviour. Falls back to spikeSpawnAhead if none is off-screen.
+    let spot = null;
+    for (let d = this.spikeSpawnAhead; d <= this.spikeSpawnAhead + 900; d += 150) {
+      const p = this.navGrid.pos(
+        this.navGrid.nearestNodeAhead(px + Math.cos(dir) * d, py + Math.sin(dir) * d, px, py, dir),
+      );
+      if (!spot) spot = p;
+      if (this._offCamera(p.x, p.y, 0)) { spot = p; break; }
+    }
+    this._placeCop(cop, spot.x, spot.y, px, py, dir); // face the way the player is going
     const s = this.spikeEntrySpeed;
     cop.vx = Math.cos(dir) * s;
     cop.vy = Math.sin(dir) * s;
@@ -1603,6 +1612,7 @@ export class GameScene extends Phaser.Scene {
     rbf.add(this, "rbDamageMult", 0, 5, 0.1).name("Ram-through damage ×");
     rbf.add(this, "rbSpikeChance", 0, 1, 0.05).name("Spike-strip chance (diff 3+)");
     rbf.add(this, "roadblockInterval", 5, 60, 1).name("Auto-spawn every (s)");
+    rbf.add(this, "maxActiveRoadblocks", 1, 4, 1).name("Max active at once");
     rbf.close();
 
     // Swarm feel: capsule solver quality (anti-jitter + containment) and frontal-ram impact.
@@ -1738,7 +1748,9 @@ this.interceptAheadDist = ${this.interceptAheadDist}; this.interceptEntrySpeed =
     spike.add(d, "spikeSide", 0, 120, 2).name("Sprint swing-wide (px)");
     spike.add(d, "spikeBoost", 0, 300, 10).name("Sprint speed boost (px/s)");
     spike.add(d, "spikeDropAhead", 0, 400, 5).name("Deploy when ahead-by (px)");
-    spike.add(d, "spikeGlobalCooldown", 0, 20, 0.5).name("Global deploy cooldown (s)");
+    spike.add(d, "spikeGlobalCooldown", 0, 40, 0.5).name("Global deploy cooldown (s)");
+    spike.add(d, "spikeCloseFactor", 0.3, 1, 0.02).name("Close-in speed × yours");
+    spike.add(d, "spikeCloseBuffer", 0, 200, 5).name("Brake-check switch (px)");
     spike.add(this, "spikeStripLen", 10, 100, 2).name("Strip width (px)");
     spike.add(d, "spikeProgressEps", 0, 40, 1).name("Progress = gain over (px)");
     spike.add(d, "spikeStallTime", 0.3, 5, 0.1).name("Give up if stalled (s)");
@@ -1759,7 +1771,7 @@ this.interceptAheadDist = ${this.interceptAheadDist}; this.interceptEntrySpeed =
       .add({ copy: () => this._copyManeuverStats() }, "copy")
       .name("Copy Maneuvers → Console");
 
-    this._persistPanel(gui, "gd_maneuverTune_v13"); // bumped: spike global cooldown + drop-at-cop
+    this._persistPanel(gui, "gd_maneuverTune_v14"); // bumped: spikeCloseFactor, spikeCloseBuffer + maxActiveRoadblocks
 
     gui.domElement.style.position = "fixed";
     gui.domElement.style.top = "8px";
@@ -3352,9 +3364,15 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
       ) {
         this._roadblockTimer -= delta / 1000;
         if (this._roadblockTimer <= 0) {
-          if (this.car.getSpeed() > this.roadblockMinSpeed)
+          if (
+            this.car.getSpeed() > this.roadblockMinSpeed &&
+            this.roadblocks.length < this.maxActiveRoadblocks
+          ) {
             this._spawnRoadblockAhead(this._roadblockDifficulty());
-          this._roadblockTimer = this.roadblockInterval;
+            this._roadblockTimer = this.roadblockInterval;
+          } else {
+            this._roadblockTimer = 3; // a block's still up / you're slow → re-check soon, don't stack
+          }
         }
       }
     }
