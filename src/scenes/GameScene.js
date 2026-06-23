@@ -3699,31 +3699,25 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
         : state === PursuitState.ACTIVE && cop.maneuverSpeedCap != null
           ? cop.maneuverSpeedCap
           : Infinity;
-      // Tier-1 rejoin (normal/kinematic handling) runs first; oil then blends it toward ICE.
-      this._applyRejoinBand(
-        cop,
-        Phaser.Math.Distance.Between(cop.sprite.x, cop.sprite.y, px, py),
-      );
       // Oil slick — a DECAYING slide. oilF = remaining/duration is 1 the instant a cop hits oil
-      // and falls to 0 over oilEffectTime as it drives off (the slick "wears off"). At full
-      // strength it blends grip toward a low ABSOLUTE ice value (NOT a fraction of the cop's
-      // 0.2–0.6 base grip, which would stay grippy enough to recover) and drops the kinematic
-      // auto-follow assist → it slides straight despite steering. oilGripLost: 1→0.004 iced,
-      // 0→0.054 barely. As oilF decays, grip/handling lerp smoothly back to normal.
-      cop.acceleration = cop.baseAcceleration; // oil is the only thing that touches accel; reset each frame
+      // and falls to 0 over oilEffectTime as it drives off. While oiled, BYPASS the Tier-1
+      // rejoin-band kinematic "auto-follow" assist (pure physics, like the version that worked)
+      // and set grip to a low ABSOLUTE ice value that DECAYS from ice back toward base by oilF —
+      // NOT a fraction of the cop's 0.2–0.6 base grip (that stays grippy enough to recover).
+      // oilGripLost: 1→0.004 iced, 0→0.054 barely. At oilF=1 it slides; as it wears off, normal.
       const oilF = Math.min(1, (cop._oilT || 0) / Math.max(0.001, this.oilEffectTime));
       if (oilF > 0) {
         const ice = 0.004 + (1 - this.oilGripLost) * 0.05;
-        cop.gripLow = Phaser.Math.Linear(cop.gripLow, ice, oilF);
-        cop.gripHigh = Phaser.Math.Linear(cop.gripHigh, ice, oilF);
-        cop.maxSpeed = Phaser.Math.Linear(cop.maxSpeed, cop.baseMaxSpeed, oilF);
-        cop.turnSpeedLow = Phaser.Math.Linear(cop.turnSpeedLow, cop.baseTurnSpeedLow, oilF);
-        cop.turnSpeed = Phaser.Math.Linear(cop.turnSpeed, cop.baseTurnSpeed, oilF);
-        // Critical: cut the throttle too (wheels spin on ice). Without this the cop just
-        // powers its velocity back onto its nose and never actually slides. Floor scales with
-        // oilGripLost so a full slick ≈ no traction. This is what makes them lose the line.
-        const accelFloor = cop.baseAcceleration * (1 - this.oilGripLost);
-        cop.acceleration = Phaser.Math.Linear(cop.baseAcceleration, accelFloor, oilF);
+        cop.maxSpeed = cop.baseMaxSpeed;
+        cop.gripLow = Phaser.Math.Linear(cop.baseGripLow, ice, oilF);
+        cop.gripHigh = Phaser.Math.Linear(cop.baseGripHigh, ice, oilF);
+        cop.turnSpeedLow = cop.baseTurnSpeedLow;
+        cop.turnSpeed = cop.baseTurnSpeed;
+      } else {
+        this._applyRejoinBand(
+          cop,
+          Phaser.Math.Distance.Between(cop.sprite.x, cop.sprite.y, px, py),
+        );
       }
       // Overtake speed boost: a committed overtaker gets extra top-end so it can actually
       // pass the player. Applied AFTER the rejoin band (which rewrites maxSpeed from base),

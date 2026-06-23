@@ -66,7 +66,6 @@ export class CopCar extends Vehicle {
     this.baseGripHigh     = this.gripHigh;
     this.baseTurnSpeedLow = this.turnSpeedLow;
     this.baseTurnSpeed    = this.turnSpeed;
-    this.baseAcceleration = this.acceleration; // restored each frame; oil cuts it (wheels spin on ice)
   }
 
   // target: an object with .x / .y in world space (the player, or a last-known
