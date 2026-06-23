@@ -3042,15 +3042,20 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
     oil.add(this, "oilGripLost", 0, 1, 0.05).name("Grip lost (0–1)");
     oil.add(this, "oilSpeedLost", 0, 1, 0.05).name("Speed lost on hit (0–1)");
     oil.add(this, "oilYawKick", 0, 1.2, 0.05).name("Fishtail kick (rad)");
-    oil.add(this, "oilEffectTime", 0.2, 5, 0.1).name("Effect duration (s)");
+    oil.add(this, "oilEffectTime", 0.2, 30, 0.1).name("Effect duration (s)");
 
     this._persistPanel(gui, "gd_gadgetTune_v2"); // bumped: + oilYawKick
 
-    // Anchored to the BOTTOM-left so the panel grows UPWARD when folders expand (stays on
-    // screen instead of running off the bottom). No top-row collision with the other panels.
+    // Anchored to the BOTTOM-RIGHT so the panel grows UPWARD when folders expand and stays
+    // clear of the bottom-left spawn panel. CRITICAL: clear top/left to "auto" — lil-gui's
+    // autoPlace default is top:0, and leaving it set while also setting `bottom` stretches the
+    // element to full viewport height (the "gray bar down the whole side" bug). bottom:48 keeps
+    // the title clickable above the screen edge.
     gui.domElement.style.position = "fixed";
-    gui.domElement.style.bottom = "8px";
-    gui.domElement.style.left = "8px";
+    gui.domElement.style.top = "auto";
+    gui.domElement.style.left = "auto";
+    gui.domElement.style.bottom = "48px";
+    gui.domElement.style.right = "8px";
     gui.domElement.style.zIndex = "9999";
   }
 
