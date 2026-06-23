@@ -105,6 +105,7 @@ export class Vehicle {
     this.vy = this.sprite.body.velocity.y;
 
     const { up, down, left, right, handbrake, brake } = controls;
+    this.controls = controls; // last-applied input, read by CarLights for brake-lamp state
     this.isDrifting = handbrake;
 
     const speed         = this.getSpeed();

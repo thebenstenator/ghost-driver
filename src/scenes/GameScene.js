@@ -11,6 +11,7 @@ import { PursuitDirector, CopState } from "../ai/PursuitDirector.js";
 import { Pursuit, PursuitState } from "../systems/Pursuit.js";
 import { PursuitLevel } from "../systems/PursuitLevel.js";
 import { BustMeter } from "../systems/BustMeter.js";
+import { CarLights } from "../fx/CarLights.js";
 import {
   WORLD_WIDTH,
   WORLD_HEIGHT,
@@ -83,6 +84,7 @@ export class GameScene extends Phaser.Scene {
     // Player starts at the center road intersection
     this.car = new PlayerCar(this, WORLD_WIDTH / 2, WORLD_HEIGHT / 2);
     this.worldLayer.add(this.car.sprite);
+    this.car.lights = new CarLights(this, this.car, "player", this.worldLayer);
 
     this.physics.add.collider(this.car.sprite, this.walls);
     // Player CAPSULE collider (custom): Arcade's body can't rotate, so the car is modelled
@@ -382,6 +384,7 @@ export class GameScene extends Phaser.Scene {
       cop.health = cop.maxHealth;
     }
     this.worldLayer.add(cop.sprite); // world layer → rendered by main cam, not the UI cam
+    cop.lights = new CarLights(this, cop, "cop", this.worldLayer);
     cop.searchSlot = this.cops.length; // 0,1,2… — its angular sector when searching
     // Floating debug label so each cop's AI state is visible in the world (dev only)
     cop.modeLabel = this.devMode
@@ -896,6 +899,7 @@ export class GameScene extends Phaser.Scene {
     if (!far) return;
     this.cops = this.cops.filter((c) => c !== far);
     if (far.modeLabel) far.modeLabel.destroy();
+    if (far.lights) far.lights.destroy();
     far.sprite.destroy();
     if (this.copLog)
       console.log(
@@ -1014,6 +1018,7 @@ export class GameScene extends Phaser.Scene {
     for (const cop of [...this.cops, ...this.wrecks]) {
       this.tweens.killTweensOf(cop.sprite);
       if (cop.modeLabel) cop.modeLabel.destroy();
+      if (cop.lights) cop.lights.destroy();
       cop.sprite.destroy();
     }
     this.cops = [];
@@ -1175,6 +1180,7 @@ export class GameScene extends Phaser.Scene {
       if (w._wreckT > this.wreckDespawn) {
         this.tweens.killTweensOf(w.sprite);
         if (w.modeLabel) w.modeLabel.destroy();
+        if (w.lights) w.lights.destroy();
         w.sprite.destroy();
         expired = true;
       }
@@ -3448,6 +3454,13 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
     // integrated this frame, push every agent's 3-circle spine out of walls and apart
     // from each other (Arcade's AABB can't cover a rotated car). ADDITIVE to Arcade.
     this._resolveCapsules();
+
+    // Car lights: pin every car's additive glow sprites to its final post-collision
+    // position/facing (headlights, brake lamps, cop flashers). Wrecks keep their lights
+    // object so they go dark via the disabled check inside update().
+    this.car.lights.update();
+    for (const cop of this.cops) cop.lights.update();
+    for (const w of this.wrecks) if (w.lights) w.lights.update();
 
     // Tier-2 rejoin: a cop that's been far + not chasing + off-screen for a while is
     // relocated off-screen near the player instead of grinding all the way back.
