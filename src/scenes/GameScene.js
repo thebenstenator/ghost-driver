@@ -144,6 +144,12 @@ export class GameScene extends Phaser.Scene {
     // close, so rounding a building could never break sight.
     // Beyond this, spotting needs a clear line (sightRange).
     this.awareGrace = 0.6; // s — stay aware this long after last perceiving (memory)
+    // Kill Lights (stealth): with the player's lights off the cop sight RADIUS collapses to
+    // killLightsRange when crawling, and blends BACK toward sightRange as the player speeds up
+    // (illumSpeedRef = speed at which a dark car is as visible as a lit one). Proximity (70px)
+    // is untouched — you can't vanish on a cop's bumper. See _detectRange().
+    this.killLightsRange = 340; // px — clear-LOS spotting range for a slow, lights-off player
+    this.illumSpeedRef = 300;   // px/s — at/above this speed lights-off gives no stealth benefit
     this.sepRadius = 80; // separation: how close before cops repel
     this.sepStrength = 150; // separation: aim push strength
     // Tier-1 rejoin band: a cop that falls behind blends its HANDLING toward a near-
@@ -654,6 +660,17 @@ export class GameScene extends Phaser.Scene {
       y < v.y - margin ||
       y > v.bottom + margin
     );
+  }
+
+  // Effective clear-LOS spotting range. Lights on → full sightRange. Lights off → the cop
+  // sight radius collapses toward killLightsRange when the player is slow, and blends BACK
+  // up to sightRange as speed approaches illumSpeedRef (a dark car flooring it is still seen).
+  // Soft by design: a cop already within the shrunk radius keeps its sight; you gain only at
+  // the margins — so killing lights speeds the ditch, it doesn't break a point-blank stare.
+  _detectRange() {
+    if (!this.car.lightsOff) return this.sightRange;
+    const t = Math.min(1, this.car.getSpeed() / this.illumSpeedRef);
+    return Phaser.Math.Linear(this.killLightsRange, this.sightRange, t);
   }
 
   // Tier-2: relocate cops that have been lost (far + not chasing + off-screen) for a
@@ -2291,6 +2308,11 @@ bleed: { fastFrac: ${b.fastFrac}, fastRate: ${b.fastRate}, slowRate: ${b.slowRat
     this.input.keyboard.on("keydown-N", () => {
       if (this.audio) this.audio.setMuted(!this.audio.muted);
     });
+
+    // Kill Lights (L) — toggle the player's lights off for stealth (shrinks cop detection).
+    this.input.keyboard.on("keydown-L", () => {
+      this.car.lightsOff = !this.car.lightsOff;
+    });
   }
 
   _setupDebugOverlay() {
@@ -2337,6 +2359,19 @@ bleed: { fastFrac: ${b.fastFrac}, fastRate: ${b.fastRate}, slowRate: ${b.slowRat
       .setOrigin(0.5, 0)
       .setScrollFactor(0)
       .setDepth(100);
+
+    // Kill Lights (L) stealth indicator — bottom-centre, only shown while lights are off.
+    this.killLightsText = this.add
+      .text(width / 2, this.scale.height - 28, "◐ LIGHTS OFF", {
+        fontFamily: "monospace",
+        fontSize: "14px",
+        fontStyle: "bold",
+        color: "#7fd8ff",
+      })
+      .setOrigin(0.5, 1)
+      .setScrollFactor(0)
+      .setDepth(100)
+      .setAlpha(0);
 
     // Heat / pursuit-level meter (Pursuit Mode only) — a thin bar under the status
     // showing progress toward the next level. Drawn each frame by _drawHeatBar.
@@ -2851,8 +2886,13 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
     ls.add(au, "sirenVol", 0, 2, 0.05).name("Siren volume");
     ls.add(au, "muted").name("Mute (N)").onChange((v) => au.setMuted(v));
 
+    // Stealth — Kill Lights (L) detection tuning.
+    const st = gui.addFolder("Stealth (Kill Lights)");
+    st.add(this, "killLightsRange", 100, 900, 10).name("Lights-off range (px)");
+    st.add(this, "illumSpeedRef", 100, 600, 10).name("Re-lit at speed (px/s)");
+
     // Persist across refresh (binds directly to the car, so load sets car fields).
-    this._persistPanel(gui, "gd_carTuning_v7"); // bumped: baked headlight/siren defaults (multipliers back to neutral)
+    this._persistPanel(gui, "gd_carTuning_v8"); // bumped: Stealth (Kill Lights) folder
 
     gui.domElement.style.position = "fixed";
     gui.domElement.style.top = "8px";
@@ -3294,6 +3334,9 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
     // Engine synth tracks the player's speed + throttle.
     this.audio.updateEngine(this.car.getSpeed(), this.car.maxSpeed, controls.up);
 
+    // Kill Lights stealth indicator (bottom-centre) follows the lights-off state.
+    this.killLightsText.setAlpha(this.car.lightsOff ? 1 : 0);
+
     // --- Perception: a cop is AWARE of the player if it has a clear sight line
     // within range, OR the player is within close proximity (omnidirectional —
     // you can't lose someone beside you). Awareness persists for awareGrace after
@@ -3305,6 +3348,9 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
     let anyAware = false,
       anyLOS = false;
     let nearestCopDist = Infinity;
+    // Effective clear-LOS spotting range this frame — shrinks when the player kills the
+    // lights and crawls (Kill Lights stealth); full sightRange otherwise. Computed once.
+    const effSight = this._detectRange();
     for (const cop of this.cops) {
       const d = Phaser.Math.Distance.Between(
         cop.sprite.x,
@@ -3315,7 +3361,7 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
       if (d < nearestCopDist) nearestCopDist = d;
       const sees =
         d <= this.proximityRange ||
-        (d <= this.sightRange &&
+        (d <= effSight &&
           segmentClear(cop.sprite.x, cop.sprite.y, px, py, this.losRects));
       cop.awareTimer = sees
         ? this.awareGrace

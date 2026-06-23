@@ -158,6 +158,10 @@ export const TOOLTIPS = {
   spikeEntrySpeed: "Speed it's already rolling at on spawn. Raise so it enters faster.",
   spikeRespawnDropCd: "Seconds after spawning before it can deploy (your window to ditch). Raise to give more warning.",
 
+  // ── Stealth (Kill Lights) ───────────────────────────────────────────────────
+  killLightsRange: "Clear-LOS spotting range (px) for a SLOW, lights-off player. Lower = cops lose a blacked-out crawling car from closer in (easier ditch).",
+  illumSpeedRef: "Speed (px/s) at which lights-off gives NO stealth — a dark car this fast is seen as if lit. Lower so you must crawl to benefit; raise to stay stealthy at speed.",
+
   // ── Respawn-ahead / dispatch ────────────────────────────────────────────────
   respawnDist: "Distance you must out-run a non-chasing cop before it's 'lost' and relocated. Raise to relocate less eagerly.",
   respawnTime: "Seconds a cop must stay lost + off-screen before relocating. Raise to relocate less eagerly.",
