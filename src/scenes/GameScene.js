@@ -3417,6 +3417,12 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
       );
       for (const cop of this.cops) cop._searchNode = lkNode;
     }
+    // Re-spotted: a cop regained sight DURING the cooldown/search and snapped the pursuit
+    // back to ACTIVE — the "oh crap, found again" moment. Fire the alert sting. (Only the
+    // SEARCH→ACTIVE edge; a fresh IDLE→ACTIVE chase start doesn't count.)
+    if (state === PursuitState.ACTIVE && this._prevState === PursuitState.SEARCH) {
+      this.audio.playSpotted();
+    }
     this._prevState = state;
 
     // Pursuit Mode: advance heat/level and dispatch/retire reinforcements. Runs before

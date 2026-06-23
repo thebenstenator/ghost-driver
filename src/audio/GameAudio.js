@@ -205,6 +205,37 @@ export class GameAudio {
     }
   }
 
+  // "Found again" alert — a fast, high, rising 4-blip sting fired when a cop re-spots the
+  // player during the cooldown/search (the oh-crap moment). One-shot scheduled voice; the
+  // 1.2s self-cooldown stops a state flicker from machine-gunning it.
+  playSpotted() {
+    if (!this.ctx || this.muted) return;
+    const ctx = this.ctx, now = ctx.currentTime;
+    if (now < (this._spottedUntil || 0)) return;
+    this._spottedUntil = now + 1.2;
+
+    const osc = ctx.createOscillator();
+    osc.type = "square";
+    const bp = ctx.createBiquadFilter();
+    bp.type = "bandpass"; bp.frequency.value = 2000; bp.Q.value = 0.9;
+    const g = ctx.createGain(); g.gain.value = 0.0001;
+    osc.connect(bp); bp.connect(g); g.connect(this.master);
+
+    const freqs = [1500, 1780, 2080, 2450]; // rising urgency
+    const onDur = 0.05, gap = 0.04;          // fast: ~90ms per blip
+    const peak = 0.28;
+    let t = now;
+    for (let i = 0; i < freqs.length; i++) {
+      osc.frequency.setValueAtTime(freqs[i], t);
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.linearRampToValueAtTime(peak, t + 0.006); // snappy attack
+      g.gain.exponentialRampToValueAtTime(0.0001, t + onDur); // quick decay
+      t += onDur + gap;
+    }
+    osc.start(now);
+    osc.stop(t + 0.05);
+  }
+
   setMuted(m) {
     this.muted = m;
     if (this.ctx) this.master.gain.setTargetAtTime(m ? 0.0001 : this.masterVolume, this.ctx.currentTime, 0.05);
