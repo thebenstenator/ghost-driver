@@ -134,10 +134,9 @@ export class GameScene extends Phaser.Scene {
     this.oilCharges = this.oilMaxCharges;
     this.oilPatchRadius = 26;   // px radius (~1.5× car width across)
     this.oilLifetime = 12;      // s the patch stays on the road before fading out
-    this.oilGripLost = 0.9;     // fraction of a cop's grip removed while oiled (a lot = slides)
+    this.oilGripLost = 0.9;     // peak slipperiness (absolute ice grip) the instant a cop hits oil
     this.oilSpeedLost = 0.35;   // fraction of speed scrubbed on first contact (some)
-    this.oilEffectTime = 1.8;   // s the grip-loss lingers after the cop last touched oil
-    this.oilYawKick = 0.35;     // rad the rear is unsettled on contact (scaled by speed) → fishtail
+    this.oilEffectTime = 1.8;   // s the slide takes to DECAY from full strength back to normal
 
     this.spikes = []; // deployed spike strips (hazard wiring next; visible placeholder for now)
     this.spikeLifetime = 20; // s a dropped strip persists before it despawns
@@ -1451,16 +1450,12 @@ export class GameScene extends Phaser.Scene {
         if (dx * dx + dy * dy <= s.r * s.r) { inOil = true; break; }
       }
       if (inOil) {
-        if (!cop._inOil) { // rising edge: one-shot speed scrub + a yaw kick (rear breaks loose)
+        if (!cop._inOil) { // rising edge: one-shot speed scrub on contact
           const keep = 1 - this.oilSpeedLost;
           cop.vx *= keep; cop.vy *= keep;
           if (cop.sprite.body) cop.sprite.body.setVelocity(cop.vx, cop.vy);
-          // Unsettle the nose so it fishtails — scaled by speed (a crawling cop barely twitches).
-          // Low grip (applied in the cop loop) then keeps velocity off the nose → the slide.
-          const kick = this.oilYawKick * Math.min(1, cop.getSpeed() / 200);
-          cop.facing += (Math.random() < 0.5 ? -1 : 1) * kick;
         }
-        cop._oilT = this.oilEffectTime; // refresh the lingering grip-loss while on the patch
+        cop._oilT = this.oilEffectTime; // refresh to full while on the patch; decays after leaving
       }
       cop._inOil = inOil;
     }
@@ -3041,10 +3036,9 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
     oil.add(this, "oilLifetime", 2, 30, 1).name("Patch lifetime (s)");
     oil.add(this, "oilGripLost", 0, 1, 0.05).name("Grip lost (0–1)");
     oil.add(this, "oilSpeedLost", 0, 1, 0.05).name("Speed lost on hit (0–1)");
-    oil.add(this, "oilYawKick", 0, 1.2, 0.05).name("Fishtail kick (rad)");
-    oil.add(this, "oilEffectTime", 0.2, 30, 0.1).name("Effect duration (s)");
+    oil.add(this, "oilEffectTime", 0.2, 30, 0.1).name("Decay time (s)");
 
-    this._persistPanel(gui, "gd_gadgetTune_v2"); // bumped: + oilYawKick
+    this._persistPanel(gui, "gd_gadgetTune_v3"); // bumped: removed fishtail kick; effect now decays
 
     // Anchored to the BOTTOM-RIGHT so the panel grows UPWARD when folders expand and stays
     // clear of the bottom-left spawn panel. CRITICAL: clear top/left to "auto" — lil-gui's
@@ -3705,24 +3699,25 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
         : state === PursuitState.ACTIVE && cop.maneuverSpeedCap != null
           ? cop.maneuverSpeedCap
           : Infinity;
-      // Oil slick OVERRIDES the rejoin band: an oiled cop is on PURE physics (no kinematic
-      // "auto-follow" glue). Grip is set to a low ABSOLUTE "ice" value — NOT a fraction of the
-      // cop's base grip (which is 0.2–0.6, so a fraction stays grippy enough to recover). oil-
-      // GripLost maps 0→0.054 (barely) .. 1→0.004 (fully iced: velocity ignores the nose, so it
-      // slides straight despite steering). Set on BOTH low/high so the speed scrub can't restore
-      // grip. Otherwise, Tier-1 rejoin blends handling toward near-kinematic the farther it is.
-      if ((cop._oilT || 0) > 0) {
-        const oiledGrip = 0.004 + (1 - this.oilGripLost) * 0.05;
-        cop.maxSpeed = cop.baseMaxSpeed;
-        cop.gripLow = oiledGrip;
-        cop.gripHigh = oiledGrip;
-        cop.turnSpeedLow = cop.baseTurnSpeedLow;
-        cop.turnSpeed = cop.baseTurnSpeed;
-      } else {
-        this._applyRejoinBand(
-          cop,
-          Phaser.Math.Distance.Between(cop.sprite.x, cop.sprite.y, px, py),
-        );
+      // Tier-1 rejoin (normal/kinematic handling) runs first; oil then blends it toward ICE.
+      this._applyRejoinBand(
+        cop,
+        Phaser.Math.Distance.Between(cop.sprite.x, cop.sprite.y, px, py),
+      );
+      // Oil slick — a DECAYING slide. oilF = remaining/duration is 1 the instant a cop hits oil
+      // and falls to 0 over oilEffectTime as it drives off (the slick "wears off"). At full
+      // strength it blends grip toward a low ABSOLUTE ice value (NOT a fraction of the cop's
+      // 0.2–0.6 base grip, which would stay grippy enough to recover) and drops the kinematic
+      // auto-follow assist → it slides straight despite steering. oilGripLost: 1→0.004 iced,
+      // 0→0.054 barely. As oilF decays, grip/handling lerp smoothly back to normal.
+      const oilF = Math.min(1, (cop._oilT || 0) / Math.max(0.001, this.oilEffectTime));
+      if (oilF > 0) {
+        const ice = 0.004 + (1 - this.oilGripLost) * 0.05;
+        cop.gripLow = Phaser.Math.Linear(cop.gripLow, ice, oilF);
+        cop.gripHigh = Phaser.Math.Linear(cop.gripHigh, ice, oilF);
+        cop.maxSpeed = Phaser.Math.Linear(cop.maxSpeed, cop.baseMaxSpeed, oilF);
+        cop.turnSpeedLow = Phaser.Math.Linear(cop.turnSpeedLow, cop.baseTurnSpeedLow, oilF);
+        cop.turnSpeed = Phaser.Math.Linear(cop.turnSpeed, cop.baseTurnSpeed, oilF);
       }
       // Overtake speed boost: a committed overtaker gets extra top-end so it can actually
       // pass the player. Applied AFTER the rejoin band (which rewrites maxSpeed from base),

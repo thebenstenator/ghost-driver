@@ -162,10 +162,9 @@ export const TOOLTIPS = {
   oilMaxCharges: "How many oil slicks you carry per run. (Changing this refills you.) Raise for more drops before you're empty.",
   oilPatchRadius: "Radius (px) of the oil patch (~1.5× car width by default). Raise to make a wider patch that's harder for a cop to thread around.",
   oilLifetime: "Seconds the patch stays on the road before fading out. Raise to leave the hazard down longer.",
-  oilGripLost: "How slippery oil makes a cop, as an absolute 'ice' grip (NOT a % of its grip): 1 = fully iced (velocity ignores the nose → slides straight despite steering), 0 ≈ barely slippery. ~0.9 ≈ a real drift. Raise for a stronger slide.",
+  oilGripLost: "PEAK slipperiness the instant a cop hits oil, as an absolute 'ice' grip (NOT a % of its grip): 1 = fully iced (velocity ignores the nose → slides straight despite steering), 0 ≈ barely slippery. ~0.9 ≈ a real drift. The effect then DECAYS over the decay time.",
   oilSpeedLost: "Fraction of a cop's speed scrubbed the instant it touches oil. 0 = no slow, 1 = dead stop. Raise to make the hit slow them more.",
-  oilYawKick: "Radians the cop's nose is kicked sideways on contact (scaled by speed) to break the rear loose. With low grip this starts a fishtail; 0 = no kick (pure grip-loss understeer).",
-  oilEffectTime: "Seconds the grip-loss lingers after a cop last touches the patch. Raise so one slick keeps a cop sliding for longer.",
+  oilEffectTime: "Seconds for the slide to DECAY from full strength back to normal grip after a cop leaves the patch. Full effect on contact, fading to nothing by this time. Raise for a longer, slower recovery.",
 
   // ── Stealth (Kill Lights) ───────────────────────────────────────────────────
   killLightsRange: "Clear-LOS spotting range (px) for a SLOW, lights-off player. Lower = cops lose a blacked-out crawling car from closer in (easier ditch).",
