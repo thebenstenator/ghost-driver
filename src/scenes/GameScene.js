@@ -2852,7 +2852,7 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
     ls.add(au, "muted").name("Mute (N)").onChange((v) => au.setMuted(v));
 
     // Persist across refresh (binds directly to the car, so load sets car fields).
-    this._persistPanel(gui, "gd_carTuning_v6"); // bumped: Lights & Sound folder
+    this._persistPanel(gui, "gd_carTuning_v7"); // bumped: baked headlight/siren defaults (multipliers back to neutral)
 
     gui.domElement.style.position = "fixed";
     gui.domElement.style.top = "8px";

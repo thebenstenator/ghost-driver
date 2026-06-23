@@ -77,18 +77,18 @@ function componentsFor(kind, v) {
       // Emergency bar — two bloomy blobs at the roof, double-blinking out of phase.
       { type: 'flashRed',  fx: halfLen * 0.05, sx: -6, len: 34, wid: 34, color: 0xff1530 },
       { type: 'flashBlue', fx: halfLen * 0.05, sx:  6, len: 34, wid: 34, color: 0x1f63ff },
-      // Cool, wide, faint headlight cones with distance falloff.
-      { type: 'head', fx: halfLen * 0.6, sx: -7, len: 100, wid: 84, color: 0xcfe0ff, alpha: 0.4, beam: true },
-      { type: 'head', fx: halfLen * 0.6, sx:  7, len: 100, wid: 84, color: 0xcfe0ff, alpha: 0.4, beam: true },
+      // Cool, wide headlight cones with distance falloff (baked: bright 1.75, len 1.5, spread 1.25).
+      { type: 'head', fx: halfLen * 0.6, sx: -7, len: 150, wid: 105, color: 0xcfe0ff, alpha: 0.7, beam: true },
+      { type: 'head', fx: halfLen * 0.6, sx:  7, len: 150, wid: 105, color: 0xcfe0ff, alpha: 0.7, beam: true },
       // Red tail lamps (−30% size).
       { type: 'tail', fx: -halfLen * 0.9, sx: -halfWid * 0.55, len: 10.5, wid: 10.5, color: 0xff2a2a },
       { type: 'tail', fx: -halfLen * 0.9, sx:  halfWid * 0.55, len: 10.5, wid: 10.5, color: 0xff2a2a },
     ];
   }
-  // player
+  // player (baked: bright 1.75, len 1.5, spread 1.25)
   return [
-    { type: 'head', fx: halfLen * 0.6, sx: -7, len: 115, wid: 95, color: 0xcfe0ff, alpha: 0.42, beam: true },
-    { type: 'head', fx: halfLen * 0.6, sx:  7, len: 115, wid: 95, color: 0xcfe0ff, alpha: 0.42, beam: true },
+    { type: 'head', fx: halfLen * 0.6, sx: -7, len: 172, wid: 119, color: 0xcfe0ff, alpha: 0.74, beam: true },
+    { type: 'head', fx: halfLen * 0.6, sx:  7, len: 172, wid: 119, color: 0xcfe0ff, alpha: 0.74, beam: true },
     { type: 'tail', fx: -halfLen * 0.9, sx: -halfWid * 0.55, len: 11.2, wid: 11.2, color: 0xff2010 },
     { type: 'tail', fx: -halfLen * 0.9, sx:  halfWid * 0.55, len: 11.2, wid: 11.2, color: 0xff2010 },
   ];

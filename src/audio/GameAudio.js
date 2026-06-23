@@ -188,7 +188,7 @@ export class GameAudio {
         const dx = cop.sprite.x - px, dy = cop.sprite.y - py;
         const dist = Math.hypot(dx, dy);
         const atten = Math.max(0, 1 - dist / SIREN_FALLOFF);
-        gain = Math.max(0.0001, 0.11 * atten * atten * this.sirenVol);
+        gain = Math.max(0.0001, 0.077 * atten * atten * this.sirenVol); // 0.077 = baked siren mix 0.7
         if (v.pan)
           v.pan.pan.setTargetAtTime(
             Math.max(-1, Math.min(1, dx / SIREN_PAN_RANGE)),
