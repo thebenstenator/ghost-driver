@@ -33,6 +33,13 @@ export class CopAI {
                                  // clear line — so a far cop corners at intersections instead
                                  // of tracking you straight across a corner into a building.
     this.arriveRadius     = 70;  // px to count a path node as reached
+    this.huntContinueRange = 350;// px — a CLOSE cop (within this) that loses sight of a now-FROZEN
+                                 // last-known aims its racing line straight at that point (around
+                                 // the corner) instead of detouring to the intersection-centre node
+                                 // — worst on wide roads, where the centre is far off your line.
+                                 // DISTANT cops, or any MOVING target (multi-cop shared last-known
+                                 // tracking the live player), keep the safe node pathing — never
+                                 // beeline at a moving guess around a corner (the wall-grind).
     this.maxApproachSpeed = 610; // speed on a straight (physics caps lower)
     this.baseApproach     = 610; // catch-up rubber-band raises maxApproachSpeed above this when far
     this.cornerMinSpeed   = 240; // speed through a 90°+ corner. The old 395 took 90° turns through
@@ -98,6 +105,14 @@ export class CopAI {
     // (reaction lag) while chasing in clear sight.
     this._aimHist.push({ x: target.x, y: target.y });
     if (this._aimHist.length > 64) this._aimHist.shift();
+
+    // Per-frame target motion: a frozen last-known is ~0 px/frame; a live position (player in
+    // sight, or a teammate's relayed live sighting) moves meaningfully. Gates the close-cop
+    // racing line below so it only fires on a SETTLED point — never a moving guess.
+    const targetMoved = this._lastTarget
+      ? Phaser.Math.Distance.Between(target.x, target.y, this._lastTarget.x, this._lastTarget.y)
+      : 999;
+    this._lastTarget = { x: target.x, y: target.y };
 
     // --- Wall-wedge extraction (OVERRIDES normal driving) ---
     // Run a K-turn that actually re-orients the car off the obstacle: reverse while
@@ -193,8 +208,18 @@ export class CopAI {
         const n = this.nav.pos(this._path[i]);
         if (!this.rects || segmentClear(cx, cy, n.x, n.y, this.rects)) endIdx = i; else break;
       }
-      const end  = this.nav.pos(this._path[endIdx]);
-      const aRef = this.nav.pos(this._path[Math.max(0, endIdx - 1)]);
+      let end  = this.nav.pos(this._path[endIdx]);
+      let aRef = this.nav.pos(this._path[Math.max(0, endIdx - 1)]);
+
+      // CLOSE-COP RACING LINE: a close cop that lost sight of a FROZEN last-known aims straight at
+      // that point (around the corner) rather than the intersection-centre node — fixes the
+      // wide-road detour to the centre. Gated tight (close + frozen + clear line) so distant cops
+      // and moving targets keep the safe node pathing above and never wall-grind.
+      if (dist <= this.huntContinueRange && targetMoved < 0.5 &&
+          (!this.rects || segmentClear(cx, cy, target.x, target.y, this.rects))) {
+        end  = { x: target.x, y: target.y };
+        aRef = { x: cx, y: cy }; // approach from the cop's side (no node detour)
+      }
 
       // RACING LINE — leave the cop ALONG ITS CURRENT HEADING (tangent → smooth, no jerk), approach
       // `end` from the `aRef` side (hugs the corner, not the centre), and aim at the FURTHEST point
