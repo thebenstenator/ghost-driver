@@ -53,6 +53,12 @@ export class CopAI {
                                  // hard redirect, e.g. when you round a corner). Below this,
                                  // ordinary chase corrections aren't slowed.
     this.turnBrakeSpeed   = 160; // px/s — speed cap at a 90°+ turn (tight enough to stay on road)
+    this.losCommitTime    = 0.25;// s the line to the target must stay CONTINUOUSLY clear before a
+                                 // cop re-commits to a beeline. Bridges momentary LOS breaks at a
+                                 // corner so the aim doesn't flip-flop between the target and a path
+                                 // node and back (the corner "jerk"). Entering navigation is still
+                                 // immediate — this only DELAYS re-beelining, so it never beelines
+                                 // through a wall (clearToTarget still gates it).
 
     // Per-unit-type overrides (from the UnitDef's `ai` block). Curated tunable keys
     // only — applied here so they win over the defaults but never touch the internal
@@ -64,6 +70,7 @@ export class CopAI {
     this._goalNode = -1;
     this._wpIndex  = 0;
     this._aimHist  = []; // recent target positions, for reaction lag
+    this._navCommit = 0; // s remaining before a beeline may re-commit (LOS-flicker hysteresis)
 
     // --- Unstuck maneuver (wall-wedge extraction) ---
     this.unstuckBackTime = 0.5; // s reversing while turning
@@ -135,7 +142,14 @@ export class CopAI {
     // (the wall-grind). So a blind cop ALWAYS navigates the road graph, which corners
     // at intersections and brakes for them. Point-blank (directRange) still rams
     // regardless, for contact.
-    const beeline = dist <= this.directRange || (cop.hasLOS && clearToTarget && dist <= this.chaseRange);
+    const rawBeeline = dist <= this.directRange || (cop.hasLOS && clearToTarget && dist <= this.chaseRange);
+    // Hysteresis on re-committing to a beeline so a MOMENTARY LOS break at a corner doesn't flip
+    // the aim between the target and a path node and back (the jerk). Navigation is entered
+    // immediately (line blocked → commit); beeline only resumes once the line has been clear for
+    // losCommitTime continuously. Point-blank (directRange) bypasses it for ram contact.
+    if (!rawBeeline) this._navCommit = this.losCommitTime;
+    else this._navCommit = Math.max(0, this._navCommit - dt);
+    const beeline = dist <= this.directRange || (rawBeeline && this._navCommit <= 0);
     if (!beeline) {
       // --- Navigate the road network, one intersection at a time ---
       const copNode  = this.nav.nearestNode(cx, cy);

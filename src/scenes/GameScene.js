@@ -135,7 +135,7 @@ export class GameScene extends Phaser.Scene {
     this.oilPatchRadius = 26;   // px radius (~1.5× car width across)
     this.oilLifetime = 30;      // s the patch stays on the road before fading out
     this.oilGripLost = 0.9;     // peak slipperiness (absolute ice grip) the instant a cop hits oil
-    this.oilSpeedLost = 0.35;   // fraction of speed scrubbed on first contact (some)
+    this.oilSpeedLost = 0;      // fraction of speed scrubbed on first contact (0 = keep momentum)
     this.oilEffectTime = 30;    // s the slide takes to DECAY from full strength back to normal
 
     this.spikes = []; // deployed spike strips (hazard wiring next; visible placeholder for now)
@@ -3038,7 +3038,7 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
     oil.add(this, "oilSpeedLost", 0, 1, 0.05).name("Speed lost on hit (0–1)");
     oil.add(this, "oilEffectTime", 0.2, 30, 0.1).name("Effect duration (s)");
 
-    this._persistPanel(gui, "gd_gadgetTune_v4"); // bumped: baked lifetime/decay 30s + throttle cut
+    this._persistPanel(gui, "gd_gadgetTune_v5"); // bumped: speed-lost default 0 (keep momentum)
 
     // Anchored to the BOTTOM-RIGHT so the panel grows UPWARD when folders expand and stays
     // clear of the bottom-left spawn panel. CRITICAL: clear top/left to "auto" — lil-gui's
@@ -3720,9 +3720,10 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
       cop.update(delta, target);
       const oilLock = (cop._oilT || 0) > 0 ? this.oilGripLost : 0;
       if (oilLock > 0.01 && Math.hypot(_oilPvx, _oilPvy) > 25) {
-        const coastVx = _oilPvx * 0.99, coastVy = _oilPvy * 0.99; // ballistic + gentle drag
-        cop.vx = Phaser.Math.Linear(cop.vx, coastVx, oilLock);
-        cop.vy = Phaser.Math.Linear(cop.vy, coastVy, oilLock);
+        // Maintain the cop's CURRENT velocity (direction AND speed) — no accel, no brakes, no
+        // drag: it just carries its momentum across the oil at the speed it came in at.
+        cop.vx = Phaser.Math.Linear(cop.vx, _oilPvx, oilLock);
+        cop.vy = Phaser.Math.Linear(cop.vy, _oilPvy, oilLock);
         cop.sprite.body.setVelocity(cop.vx, cop.vy);
       }
       cop._lastVx = cop.vx;
