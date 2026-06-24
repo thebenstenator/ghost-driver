@@ -3078,7 +3078,9 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
       reactionTime: a.reactionTime,
       cornerReach: a.cornerReach,
       cornerBias: a.cornerBias,
+      cornerLookAhead: a.cornerLookAhead,
       huntContinueRange: a.huntContinueRange,
+      stuckSpeedEps: a.stuckSpeedEps,
       sepRadius: this.sepRadius,
       sepStrength: this.sepStrength,
       rbStart: this.rbStart,
@@ -3185,8 +3187,16 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
       .name("Corner outside bias")
       .onChange(apply);
     corner
+      .add(this.copTuning, "cornerLookAhead", 20, 200, 5)
+      .name("Corner carrot look-ahead")
+      .onChange(apply);
+    corner
       .add(this.copTuning, "huntContinueRange", 0, 1200, 25)
       .name("Close-cop racing range")
+      .onChange(apply);
+    corner
+      .add(this.copTuning, "stuckSpeedEps", 0, 60, 1)
+      .name("Stuck speed threshold")
       .onChange(apply);
 
     const pack = gui.addFolder("Pack & Search");
@@ -3321,7 +3331,7 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
 
     // Persist across refresh. Key bumped to v16: huntLead removed (blind cops now go
     // straight to last-known, no forward projection).
-    this._persistPanel(gui, "gd_copTuning20"); // bumped: corner reach/bias + close-cop racing range levers
+    this._persistPanel(gui, "gd_copTuning21"); // bumped: corner carrot look-ahead + stuck-speed levers
 
     gui.domElement.style.position = "fixed";
     gui.domElement.style.top = "8px";
@@ -3403,7 +3413,9 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
       a.reactionTime = t.reactionTime;
       a.cornerReach = t.cornerReach;
       a.cornerBias = t.cornerBias;
+      a.cornerLookAhead = t.cornerLookAhead;
       a.huntContinueRange = t.huntContinueRange;
+      a.stuckSpeedEps = t.stuckSpeedEps;
     }
     this.sepRadius = t.sepRadius;
     this.sepStrength = t.sepStrength;

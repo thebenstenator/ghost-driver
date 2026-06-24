@@ -39,6 +39,10 @@ export class CopAI {
     this.cornerBias       = 42;  // px the cornering curve's control is pushed toward the OUTSIDE of
                                  // the turn (away from the inside building corner) so it rounds wide
                                  // and stops bumping it. Bounded under half a road width.
+    this.cornerLookAhead  = 70;  // px the carrot sits AHEAD of the cop along the cornering curve.
+                                 // SHORT so the cop TRACES the arc — a far carrot just drives a
+                                 // straight line to it and ignores the curve (the bug). Lower =
+                                 // tighter tracking (can wobble at speed); higher = smoother but cuts.
     this.huntContinueRange = 550;// px — a CLOSE cop (within this) that loses sight of a now-FROZEN
                                  // last-known aims its racing line straight at that point (around
                                  // the corner) instead of detouring to the intersection-centre node
@@ -95,6 +99,12 @@ export class CopAI {
     this._unstuck    = null;    // active maneuver: { phase:'BACK'|'FWD', t }
     this._stuckTime  = 0;       // how long we've been wedged (far from target, not moving)
     this._unstuckDir = 1;       // turn direction; alternates each attempt
+    this.stuckSpeedEps = 20;    // px/s — REALISED speed (actual displacement) below which, WHILE
+                                // commanding forward, the cop counts as genuinely blocked. Replaces
+                                // the old raw speed<30, which false-fired on a cop merely cornering
+                                // or oscillating in the OPEN (slow but actually moving — not stuck).
+    this._lastPos       = null; // position last frame, for the realised-speed check
+    this._lastWantedFwd = false;// did it command throttle last frame (so "didn't move" = blocked)?
   }
 
   getControls(cop, target, dt) {
@@ -102,6 +112,13 @@ export class CopAI {
     const cx = cop.sprite.x, cy = cop.sprite.y;
     const speed = cop.getSpeed();
     const dist  = Phaser.Math.Distance.Between(cx, cy, target.x, target.y);
+
+    // Realised speed = how far it ACTUALLY moved since last frame (÷dt) — differs from body
+    // velocity when a collision cancels it. Drives the genuinely-stuck check below.
+    const realised = this._lastPos
+      ? Phaser.Math.Distance.Between(cx, cy, this._lastPos.x, this._lastPos.y) / Math.max(dt, 1e-4)
+      : 999;
+    this._lastPos = { x: cx, y: cy };
 
     let aimX = target.x, aimY = target.y;
     let limit = Math.min(this.maxApproachSpeed, this.speedCap);
@@ -139,14 +156,18 @@ export class CopAI {
       }
       cop.aiTarget = { x: target.x, y: target.y };
       cop.debug = { mode: m.phase === 'BACK' ? 'UNSTK_BK' : 'UNSTK_FW', speed, dist, bend: 0, cornerLimit: 0, angleErr: 0 };
+      this._lastWantedFwd = controls.up; // FWD phase commands throttle; BACK does not
       return controls;
     }
-    // Wedge detection: barely moving while it wants to drive AND it's still far from its
-    // goal. The old gate also fired at close range (`|| blocked`) to dislodge a cop jammed
-    // on a corner near the player — but that's exactly a BOX pin, and K-turning out of it
-    // abandoned the pin (and read as the "unstick steals the box" psychosis). Now a cop
-    // within unstickProx of its target is treated as arrived: it presses, it never reverses.
-    if (speed < 30 && dist > this.unstuckProx) this._stuckTime += dt; else this._stuckTime = 0;
+    // Wedge detection: genuinely STUCK = it COMMANDED forward last frame but barely moved (realised
+    // speed below stuckSpeedEps) AND it's still far from its target. "Commanded forward but didn't
+    // move" catches a cop jammed on anything at any speed and — unlike the old raw speed<30 — does
+    // NOT false-fire on a cop merely cornering/oscillating in the OPEN (slow but actually moving).
+    // dist>unstuckProx keeps a cop PINNING the player against a wall (a box) from "recovering" out
+    // of the pin — that's a deliberate press, not a wedge.
+    if (this._lastWantedFwd && realised < this.stuckSpeedEps && dist > this.unstuckProx)
+      this._stuckTime += dt;
+    else this._stuckTime = 0;
     if (this._stuckTime > 0.35) {
       this._unstuckDir = -this._unstuckDir; // alternate so a retry tries the other way
       this._unstuck = { phase: 'BACK', t: this.unstuckBackTime };
@@ -241,18 +262,25 @@ export class CopAI {
         dest = ctrl;
       }
       const hd = speed > 30 ? Math.atan2(cop.vy, cop.vx) : cop.facing;       // travel direction
-      const d1 = Phaser.Math.Clamp(speed * 0.5, 60, 200);                    // departure tangent (∝ speed)
+      // Departure tangent: keep it SHORT (< the carrot look-ahead) so the curve starts bending
+      // within the carrot's reach — a long tangent leaves the curve straight past the turn point
+      // and the cop drives into the building before it bends.
+      const d1 = Phaser.Math.Clamp(speed * 0.25, 30, this.cornerLookAhead);
       const P0 = { x: cx, y: cy };
       const P1 = { x: cx + Math.cos(hd) * d1, y: cy + Math.sin(hd) * d1 };
-      // Aim at the FURTHEST point on the curve with a clear line (string-pull, edge-aware): when the
-      // corner occludes the far part, it aims at a nearer on-road point and rounds in as it advances.
-      let chosen = null;
-      for (const t of [0.9, 0.72, 0.54, 0.36, 0.2]) {
+      // CARROT — walk the curve out from the cop and aim at the point ~cornerLookAhead px ahead. A
+      // SHORT carrot makes the cop TRACE the arc (it steers continuously toward a near point on the
+      // curve, and as it advances the carrot slides along → it follows the bend). A FAR carrot just
+      // drives a straight line to it and ignores the curve — that was the bug. Stop early if the
+      // curve crosses a wall (edge-aware) and use the last clear point.
+      let carrot = { x: P0.x + Math.cos(hd) * 8, y: P0.y + Math.sin(hd) * 8 }; // tiny-ahead default
+      for (let t = 0.08; t <= 1.0001; t += 0.08) {
         const b = this._cubicBezier(P0, P1, ctrl, dest, t);
-        if (!this.rects || segmentClear(cx, cy, b.x, b.y, this.rects)) { chosen = b; break; }
+        if (this.rects && !segmentClear(cx, cy, b.x, b.y, this.rects)) break; // don't aim past a wall
+        carrot = b;
+        if (Phaser.Math.Distance.Between(cx, cy, b.x, b.y) >= this.cornerLookAhead) break;
       }
-      aimX = chosen ? chosen.x : N.x; // fallback: the current node, to rejoin the road network
-      aimY = chosen ? chosen.y : N.y;
+      aimX = carrot.x; aimY = carrot.y;
 
       // Speed: brake for the corners along the remaining path.
       const pts = this._path.map(n => this.nav.pos(n));
@@ -298,7 +326,11 @@ export class CopAI {
     // the radius tightens enough to stay on the road. Only bites past turnBrakeAngle,
     // so ordinary chase corrections are unaffected. (Beeline has no path corner-braking
     // otherwise — this is what was missing.)
-    const turnMag = Math.abs(angleErr);
+    // Brake for the instantaneous steering error OR the ANTICIPATED path corner ahead (nextTurn).
+    // The carrot smooths the instantaneous angle, so without the nextTurn term the cop wouldn't
+    // slow for the corner and would wash wide into the building — brake for the bend it's about to
+    // take, not just the one it's mid-correction on.
+    const turnMag = Math.max(Math.abs(angleErr), nextTurn);
     if (turnMag > this.turnBrakeAngle) {
       const tf = Phaser.Math.Clamp((turnMag - this.turnBrakeAngle) / (Math.PI / 2 - this.turnBrakeAngle), 0, 1);
       limit = Math.min(limit, Phaser.Math.Linear(this.maxApproachSpeed, this.turnBrakeSpeed, tf));
@@ -311,6 +343,7 @@ export class CopAI {
     else                                         { mode = 'CRUISE'; }
 
     cop.debug = { mode, speed, dist, bend: nextTurn, cornerLimit: limit, angleErr };
+    this._lastWantedFwd = controls.up; // for next frame's stuck check ("commanded forward but…")
     return controls;
   }
 
