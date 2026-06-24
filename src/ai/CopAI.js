@@ -89,9 +89,8 @@ export class CopAI {
     this._aimHist  = []; // recent target positions, for reaction lag
     this._navCommit = 0; // s remaining before a beeline may re-commit (LOS-flicker hysteresis)
 
-    // --- Unstuck maneuver (wall-wedge extraction) ---
-    this.unstuckBackTime = 0.5; // s reversing while turning
-    this.unstuckFwdTime  = 0.4; // s forward while turning (committed) before re-evaluating
+    // --- Unstuck recovery (sensing-based wedge extraction) ---
+    this.unstuckProbe    = 70;  // px — how far the recovery casts clearance rays to find open road
     this.unstuckProx     = 110; // px — DON'T unstick when this close to the target. The cop is
                                 // effectively AT its goal (e.g. pinning the player against a wall
                                 // during a box); backing up to "recover" would abandon the pin.
@@ -146,27 +145,34 @@ export class CopAI {
     // Exits the moment it has moved unstuckProx px from where it jammed (real progress).
     if (this._unstuck) {
       const m = this._unstuck;
-      m.t -= dt;
-      if (Phaser.Math.Distance.Between(cx, cy, m.startX, m.startY) > this.unstuckProx) {
-        this._unstuck = null; // escaped → hand back to normal driving
+      // Progress = real translation. Unstuck once it has MOVED unstuckProx from where it jammed,
+      // OR has been translating freely (realised > stuckSpeedEps) for a sustained beat → hand back.
+      m.freeT = realised > this.stuckSpeedEps ? m.freeT + dt : 0;
+      if (Phaser.Math.Distance.Between(cx, cy, m.startX, m.startY) > this.unstuckProx || m.freeT > 0.25) {
+        this._unstuck = null;
       } else {
-        const err = Phaser.Math.Angle.Wrap(Math.atan2(m.node.y - cy, m.node.x - cx) - cop.facing);
-        if (m.phase === 'FWD') {
-          controls.up = true;
-          if (err > this.steerDeadzone) controls.right = true;
-          else if (err < -this.steerDeadzone) controls.left = true;
-          if (m.t <= 0) {
-            if (realised < this.stuckSpeedEps) { m.phase = 'REV'; m.t = this.unstuckBackTime; } // blocked → back off
-            else m.t = this.unstuckFwdTime;                                                     // moving → keep driving
-          }
-        } else { // REV — back off, COUNTER-steer so the nose swings toward the node for the next push
-          controls.down = true;
-          if (err > this.steerDeadzone) controls.left = true;
-          else if (err < -this.steerDeadzone) controls.right = true;
-          if (m.t <= 0) { m.phase = 'FWD'; m.t = this.unstuckFwdTime; }
+        // SENSE the surroundings: cast clearance rays in a forward arc and drive toward the clear
+        // direction that best heads to the goal — so it NEVER just drives into the wall it's stuck
+        // on. If the whole front is boxed, reverse off, angling toward whichever side is open.
+        const probe = (a) => !this.rects ||
+          segmentClear(cx, cy, cx + Math.cos(a) * this.unstuckProbe, cy + Math.sin(a) * this.unstuckProbe, this.rects);
+        const toGoal = Math.atan2(target.y - cy, target.x - cx);
+        let best = null, bestScore = -2;
+        for (const off of [0, 0.4, -0.4, 0.8, -0.8, 1.2, -1.2]) { // forward arc, ±~69°
+          const a = cop.facing + off;
+          if (probe(a)) { const s = Math.cos(a - toGoal); if (s > bestScore) { bestScore = s; best = a; } }
         }
-        cop.aiTarget = m.node;
-        cop.debug = { mode: m.phase === 'FWD' ? 'UNSTK_FW' : 'UNSTK_BK', speed, dist, bend: 0, cornerLimit: 0, angleErr: err };
+        if (best !== null) {
+          controls.up = true;                                  // clear ahead-ish → drive out toward it
+          const err = Phaser.Math.Angle.Wrap(best - cop.facing);
+          if (err > this.steerDeadzone) controls.right = true; else if (err < -this.steerDeadzone) controls.left = true;
+        } else {
+          controls.down = true;                                // front boxed → reverse off the wall
+          const lc = probe(cop.facing - 1.4), rc = probe(cop.facing + 1.4); // ~±80°
+          if (lc && !rc) controls.left = true; else if (rc && !lc) controls.right = true; // angle toward the open side
+        }
+        cop.aiTarget = { x: cx + Math.cos(best ?? cop.facing) * 80, y: cy + Math.sin(best ?? cop.facing) * 80 };
+        cop.debug = { mode: best !== null ? 'UNSTK_FW' : 'UNSTK_BK', speed, dist, bend: 0, cornerLimit: 0, angleErr: 0 };
         this._lastWantedFwd = controls.up;
         return controls;
       }
@@ -181,12 +187,7 @@ export class CopAI {
       this._stuckTime += dt;
     else this._stuckTime = 0;
     if (this._stuckTime > 0.35) {
-      // Recovery node: a road node a bit TOWARD the goal — driving to it gets the cop back onto
-      // open road heading the right way. nearestNode always returns an on-road lattice node even
-      // if the probe point lands in a building.
-      const tdir = Math.atan2(target.y - cy, target.x - cx);
-      const node = this.nav.pos(this.nav.nearestNode(cx + Math.cos(tdir) * 160, cy + Math.sin(tdir) * 160));
-      this._unstuck = { phase: 'FWD', t: this.unstuckFwdTime, node, startX: cx, startY: cy };
+      this._unstuck = { startX: cx, startY: cy, freeT: 0 }; // record the jam point; recovery senses its way out
       this._stuckTime = 0;
     }
 
