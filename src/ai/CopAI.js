@@ -183,32 +183,41 @@ export class CopAI {
         this._wpIndex++;
         wp = this.nav.pos(this._path[this._wpIndex]);
       }
-      // RACING LINE — don't aim straight AT the node. That routes through intersection CENTRES
-      // (blocky) and, when the next node is occluded by the corner building, the old safety net
-      // snapped the aim back to the centre (the corner "jerk"). Instead build a curve that leaves
-      // the cop ALONG ITS CURRENT HEADING (tangent → smooth, no jerk), and approaches the next
-      // node from the road it's coming up (so it hugs the corner, not the centre). Then aim at the
-      // FURTHEST point on the curve the cop has a clear line to (string-pull, edge-aware): when the
-      // corner occludes the node it aims at a nearer on-road point and rounds in as it advances.
-      const prev = this.nav.pos(this._path[Math.max(0, this._wpIndex - 1)]);
+      // ENDPOINT — string-pull along the path to the FURTHEST node the cop has a clear line to
+      // (walk forward, stop at the first occluded one). Using only on-road NODES (never a live or
+      // last-known position — that's the banned wall-grind) keeps it safe. When the cop reaches a
+      // corner and can finally see past it, the endpoint extends to the next node, so it rounds
+      // the corner toward where you went instead of stopping dead at the intersection node.
+      let endIdx = this._wpIndex;
+      for (let i = this._wpIndex; i < this._path.length; i++) {
+        const n = this.nav.pos(this._path[i]);
+        if (!this.rects || segmentClear(cx, cy, n.x, n.y, this.rects)) endIdx = i; else break;
+      }
+      const end  = this.nav.pos(this._path[endIdx]);
+      const aRef = this.nav.pos(this._path[Math.max(0, endIdx - 1)]);
+
+      // RACING LINE — leave the cop ALONG ITS CURRENT HEADING (tangent → smooth, no jerk), approach
+      // `end` from the `aRef` side (hugs the corner, not the centre), and aim at the FURTHEST point
+      // on the curve with a clear line (string-pull, edge-aware). When the corner occludes the end
+      // it aims at a nearer on-road point and rounds in as it advances.
       const hd = speed > 30 ? Math.atan2(cop.vy, cop.vx) : cop.facing;       // travel direction
       const d1 = Phaser.Math.Clamp(speed * 0.5, 60, 200);                    // departure tangent (∝ speed)
-      const distWp = Phaser.Math.Distance.Between(cx, cy, wp.x, wp.y);
-      const d2 = Phaser.Math.Clamp(distWp * 0.4, 40, 180);                   // approach tangent into the node
-      let avx = prev.x - wp.x, avy = prev.y - wp.y;                          // approach wp FROM the prev node side
+      const dEnd = Phaser.Math.Distance.Between(cx, cy, end.x, end.y);
+      const d2 = Phaser.Math.Clamp(dEnd * 0.4, 40, 180);                     // approach tangent into the end
+      let avx = aRef.x - end.x, avy = aRef.y - end.y;                        // approach `end` from the aRef side
       const al = Math.hypot(avx, avy) || 1;
       const P0 = { x: cx, y: cy };
       const P1 = { x: cx + Math.cos(hd) * d1, y: cy + Math.sin(hd) * d1 };
-      const P2 = { x: wp.x + (avx / al) * d2, y: wp.y + (avy / al) * d2 };
-      const P3 = wp;
+      const P2 = { x: end.x + (avx / al) * d2, y: end.y + (avy / al) * d2 };
+      const P3 = end;
       let chosen = null;
       for (const t of [0.9, 0.72, 0.54, 0.36, 0.2]) {
         const b = this._cubicBezier(P0, P1, P2, P3, t);
         if (!this.rects || segmentClear(cx, cy, b.x, b.y, this.rects)) { chosen = b; break; }
       }
-      // Fallback (curve fully occluded): the node we're rounding, to rejoin the road network.
-      aimX = chosen ? chosen.x : prev.x;
-      aimY = chosen ? chosen.y : prev.y;
+      // Fallback (curve fully occluded): the rounding reference, to rejoin the road network.
+      aimX = chosen ? chosen.x : aRef.x;
+      aimY = chosen ? chosen.y : aRef.y;
 
       // Speed: brake for the corners along the remaining path.
       const pts = this._path.map(n => this.nav.pos(n));
