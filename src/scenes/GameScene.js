@@ -3710,23 +3710,20 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
       cop.maxSpeed += boost;
       cop.ai.maxApproachSpeed = cop.ai.baseApproach + boost;
 
-      // Oil slick — lock the TRAVEL DIRECTION. Capture the heading the cop is moving in BEFORE
-      // integrating; after, force the velocity back onto it (keeping the new speed). The body
-      // still steers (nose turns) but momentum keeps going straight — "turn the wheel, nothing
-      // happens." FULL strength (oilGripLost) the whole time the cop is oiled (no decay), then
-      // it snaps back to normal once the effect timer runs out.
+      // Oil slick — COAST. Capture the cop's velocity BEFORE integrating; after, throw away the
+      // AI's throttle/brake/steer result and keep the BALLISTIC velocity (same direction AND
+      // speed, lightly dragged). It's on ice: no grip, no power, no brakes — it just carries its
+      // momentum until it hits a wall or the effect ends. The body still steers (nose turns),
+      // but travel is locked. Blended by oilLock (= oilGripLost) so <1 leaves a little control;
+      // FULL strength the whole time the cop is oiled (no decay).
       const _oilPvx = cop.vx, _oilPvy = cop.vy;
       cop.update(delta, target);
       const oilLock = (cop._oilT || 0) > 0 ? this.oilGripLost : 0;
-      if (oilLock > 0.01) {
-        const preSpd = Math.hypot(_oilPvx, _oilPvy);
-        const postSpd = cop.getSpeed();
-        if (preSpd > 25 && postSpd > 1) {
-          const lvx = (_oilPvx / preSpd) * postSpd, lvy = (_oilPvy / preSpd) * postSpd;
-          cop.vx = Phaser.Math.Linear(cop.vx, lvx, oilLock);
-          cop.vy = Phaser.Math.Linear(cop.vy, lvy, oilLock);
-          cop.sprite.body.setVelocity(cop.vx, cop.vy);
-        }
+      if (oilLock > 0.01 && Math.hypot(_oilPvx, _oilPvy) > 25) {
+        const coastVx = _oilPvx * 0.99, coastVy = _oilPvy * 0.99; // ballistic + gentle drag
+        cop.vx = Phaser.Math.Linear(cop.vx, coastVx, oilLock);
+        cop.vy = Phaser.Math.Linear(cop.vy, coastVy, oilLock);
+        cop.sprite.body.setVelocity(cop.vx, cop.vy);
       }
       cop._lastVx = cop.vx;
       cop._lastVy = cop.vy; // pre-collision cache (see _updateCopDamage)
