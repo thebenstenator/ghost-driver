@@ -96,9 +96,8 @@ export class CopAI {
                                 // effectively AT its goal (e.g. pinning the player against a wall
                                 // during a box); backing up to "recover" would abandon the pin.
                                 // Wedge recovery is only for being stuck FAR from the goal.
-    this._unstuck    = null;    // active maneuver: { phase:'BACK'|'FWD', t }
+    this._unstuck    = null;    // active recovery: { phase:'FWD'|'REV', t, node, startX, startY }
     this._stuckTime  = 0;       // how long we've been wedged (far from target, not moving)
-    this._unstuckDir = 1;       // turn direction; alternates each attempt
     this.stuckSpeedEps = 20;    // px/s — REALISED speed (actual displacement) below which, WHILE
                                 // commanding forward, the cop counts as genuinely blocked. Replaces
                                 // the old raw speed<30, which false-fired on a cop merely cornering
@@ -137,27 +136,40 @@ export class CopAI {
       : 999;
     this._lastTarget = { x: target.x, y: target.y };
 
-    // --- Wall-wedge extraction (OVERRIDES normal driving) ---
-    // Run a K-turn that actually re-orients the car off the obstacle: reverse while
-    // turning, then forward while turning, alternating the turn direction each
-    // attempt so a retry tries the other way. Without this, the cop just juts
-    // forward/reverse against the same wall (wheel stays pointed at the blocked
-    // target) and never escapes.
+    // --- Wedge extraction (OVERRIDES normal driving) ---
+    // Drive to a concrete RECOVERY NODE (a road node toward the goal) and check real progress —
+    // NOT a blind alternating K-turn. The old K-turn applied a full hard turn while throttling,
+    // which at low speed just SPUN the car on the spot (tiny radius) without translating, so it
+    // never escaped and kept re-triggering. Steering TOWARD the node is gentle when the node is
+    // ahead, so the cop actually drives out. FWD: throttle + steer at the node; if it stops making
+    // headway, REV: reverse + COUNTER-steer to swing the nose off the obstacle, then FWD again.
+    // Exits the moment it has moved unstuckProx px from where it jammed (real progress).
     if (this._unstuck) {
       const m = this._unstuck;
       m.t -= dt;
-      if (this._unstuckDir > 0) controls.right = true; else controls.left = true;
-      if (m.phase === 'BACK') {
-        controls.down = true;                 // reverse + turn
-        if (m.t <= 0) { m.phase = 'FWD'; m.t = this.unstuckFwdTime; }
+      if (Phaser.Math.Distance.Between(cx, cy, m.startX, m.startY) > this.unstuckProx) {
+        this._unstuck = null; // escaped → hand back to normal driving
       } else {
-        controls.up = true;                   // forward + turn (committed)
-        if (m.t <= 0) this._unstuck = null;
+        const err = Phaser.Math.Angle.Wrap(Math.atan2(m.node.y - cy, m.node.x - cx) - cop.facing);
+        if (m.phase === 'FWD') {
+          controls.up = true;
+          if (err > this.steerDeadzone) controls.right = true;
+          else if (err < -this.steerDeadzone) controls.left = true;
+          if (m.t <= 0) {
+            if (realised < this.stuckSpeedEps) { m.phase = 'REV'; m.t = this.unstuckBackTime; } // blocked → back off
+            else m.t = this.unstuckFwdTime;                                                     // moving → keep driving
+          }
+        } else { // REV — back off, COUNTER-steer so the nose swings toward the node for the next push
+          controls.down = true;
+          if (err > this.steerDeadzone) controls.left = true;
+          else if (err < -this.steerDeadzone) controls.right = true;
+          if (m.t <= 0) { m.phase = 'FWD'; m.t = this.unstuckFwdTime; }
+        }
+        cop.aiTarget = m.node;
+        cop.debug = { mode: m.phase === 'FWD' ? 'UNSTK_FW' : 'UNSTK_BK', speed, dist, bend: 0, cornerLimit: 0, angleErr: err };
+        this._lastWantedFwd = controls.up;
+        return controls;
       }
-      cop.aiTarget = { x: target.x, y: target.y };
-      cop.debug = { mode: m.phase === 'BACK' ? 'UNSTK_BK' : 'UNSTK_FW', speed, dist, bend: 0, cornerLimit: 0, angleErr: 0 };
-      this._lastWantedFwd = controls.up; // FWD phase commands throttle; BACK does not
-      return controls;
     }
     // Wedge detection: genuinely STUCK = it COMMANDED forward last frame but barely moved (realised
     // speed below stuckSpeedEps) AND it's still far from its target. "Commanded forward but didn't
@@ -169,8 +181,12 @@ export class CopAI {
       this._stuckTime += dt;
     else this._stuckTime = 0;
     if (this._stuckTime > 0.35) {
-      this._unstuckDir = -this._unstuckDir; // alternate so a retry tries the other way
-      this._unstuck = { phase: 'BACK', t: this.unstuckBackTime };
+      // Recovery node: a road node a bit TOWARD the goal — driving to it gets the cop back onto
+      // open road heading the right way. nearestNode always returns an on-road lattice node even
+      // if the probe point lands in a building.
+      const tdir = Math.atan2(target.y - cy, target.x - cx);
+      const node = this.nav.pos(this.nav.nearestNode(cx + Math.cos(tdir) * 160, cy + Math.sin(tdir) * 160));
+      this._unstuck = { phase: 'FWD', t: this.unstuckFwdTime, node, startX: cx, startY: cy };
       this._stuckTime = 0;
     }
 
