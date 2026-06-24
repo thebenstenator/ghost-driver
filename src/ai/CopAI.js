@@ -36,6 +36,9 @@ export class CopAI {
     this.cornerReach      = 120; // px past the current node the cornering curve aims toward the next
                                  // node — rounds the corner LOCALLY (≈ one road-width) instead of
                                  // slicing toward the next node and cutting the inside building.
+    this.cornerBias       = 42;  // px the cornering curve's control is pushed toward the OUTSIDE of
+                                 // the turn (away from the inside building corner) so it rounds wide
+                                 // and stops bumping it. Bounded under half a road width.
     this.huntContinueRange = 550;// px — a CLOSE cop (within this) that loses sight of a now-FROZEN
                                  // last-known aims its racing line straight at that point (around
                                  // the corner) instead of detouring to the intersection-centre node
@@ -224,7 +227,14 @@ export class CopAI {
       // one road-width keeps the curve inside the intersection.
       const mnx = Mraw.x - N.x, mny = Mraw.y - N.y, mnl = Math.hypot(mnx, mny) || 1;
       const reach = Math.min(mnl, this.cornerReach);
-      let ctrl = N, dest = { x: N.x + (mnx / mnl) * reach, y: N.y + (mny / mnl) * reach };
+      // Bias the curve's CONTROL toward the OUTSIDE of the turn so it rounds wide instead of cutting
+      // the inside building corner (the bumping). Inside-of-turn ≈ how the heading rotates
+      // (outgoing dir − incoming dir); push the control the opposite way, bounded under half a road.
+      const inl = Math.hypot(N.x - cx, N.y - cy) || 1;
+      const insx = mnx / mnl - (N.x - cx) / inl, insy = mny / mnl - (N.y - cy) / inl;
+      const isl = Math.hypot(insx, insy) || 1;
+      let ctrl = { x: N.x - (insx / isl) * this.cornerBias, y: N.y - (insy / isl) * this.cornerBias };
+      let dest = { x: N.x + (mnx / mnl) * reach, y: N.y + (mny / mnl) * reach };
       if (dist <= this.huntContinueRange && targetMoved < 0.5 &&
           (!this.rects || segmentClear(cx, cy, target.x, target.y, this.rects))) {
         ctrl = { x: target.x, y: target.y };
