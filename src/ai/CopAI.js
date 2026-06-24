@@ -65,16 +65,13 @@ export class CopAI {
     this._wpIndex  = 0;
     this._aimHist  = []; // recent target positions, for reaction lag
 
-    // --- Unstuck maneuver (wall-wedge extraction) ---
-    this.unstuckBackTime = 0.5; // s reversing while turning
-    this.unstuckFwdTime  = 0.4; // s forward while turning (committed) before re-evaluating
-    this.unstuckProx     = 110; // px — DON'T unstick when this close to the target. The cop is
-                                // effectively AT its goal (e.g. pinning the player against a wall
-                                // during a box); backing up to "recover" would abandon the pin.
-                                // Wedge recovery is only for being stuck FAR from the goal.
-    this._unstuck    = null;    // active maneuver: { phase:'BACK'|'FWD', t }
+    // --- Unstuck recovery (sense-and-drive wedge extraction) ---
+    this.unstuckProbe   = 70;   // px — clearance-ray length used to find open road around a stuck cop
+    this.unstuckMaxTime = 2.5;  // s — safety cap: abandon a recovery that can't break free, re-evaluate
+    this.unstuckProx    = 110;  // px — box-pin exemption (don't recover when this close to target, it's
+                                // pinning) AND the "escaped" distance (moved this far from the jam = free)
+    this._unstuck    = null;    // active recovery: { startX, startY, age }
     this._stuckTime  = 0;       // how long we've been wedged (far from target, not moving)
-    this._unstuckDir = 1;       // turn direction; alternates each attempt
   }
 
   getControls(cop, target, dt) {
@@ -92,26 +89,38 @@ export class CopAI {
     this._aimHist.push({ x: target.x, y: target.y });
     if (this._aimHist.length > 64) this._aimHist.shift();
 
-    // --- Wall-wedge extraction (OVERRIDES normal driving) ---
-    // Run a K-turn that actually re-orients the car off the obstacle: reverse while
-    // turning, then forward while turning, alternating the turn direction each
-    // attempt so a retry tries the other way. Without this, the cop just juts
-    // forward/reverse against the same wall (wheel stays pointed at the blocked
-    // target) and never escapes.
+    // --- Wedge recovery (OVERRIDES normal driving) ---
+    // SENSE-AND-DRIVE: cast clearance rays in a forward arc and drive toward the clear direction
+    // that best heads to the goal — so the cop steers toward OPEN ROAD, never a blind full turn into
+    // the wall it's stuck on (which just spun it on the spot). If the whole front is boxed, reverse
+    // STRAIGHT off the wall (no steer = guaranteed backward translation), then re-sense. Exits the
+    // instant it has moved unstuckProx from where it jammed (real progress), or on a safety timeout.
     if (this._unstuck) {
       const m = this._unstuck;
-      m.t -= dt;
-      if (this._unstuckDir > 0) controls.right = true; else controls.left = true;
-      if (m.phase === 'BACK') {
-        controls.down = true;                 // reverse + turn
-        if (m.t <= 0) { m.phase = 'FWD'; m.t = this.unstuckFwdTime; }
+      m.age += dt;
+      if (Phaser.Math.Distance.Between(cx, cy, m.startX, m.startY) > this.unstuckProx ||
+          m.age > this.unstuckMaxTime) {
+        this._unstuck = null;
       } else {
-        controls.up = true;                   // forward + turn (committed)
-        if (m.t <= 0) this._unstuck = null;
+        const probe = (a) => !this.rects ||
+          segmentClear(cx, cy, cx + Math.cos(a) * this.unstuckProbe, cy + Math.sin(a) * this.unstuckProbe, this.rects);
+        const toGoal = Math.atan2(target.y - cy, target.x - cx);
+        let best = null, bestScore = -2;
+        for (const off of [0, 0.4, -0.4, 0.8, -0.8, 1.2, -1.2]) { // forward arc, ±~69°
+          const a = cop.facing + off;
+          if (probe(a)) { const s = Math.cos(a - toGoal); if (s > bestScore) { bestScore = s; best = a; } }
+        }
+        if (best !== null) {
+          controls.up = true;                                  // clear ahead-ish → drive out toward it
+          const err = Phaser.Math.Angle.Wrap(best - cop.facing);
+          if (err > this.steerDeadzone) controls.right = true; else if (err < -this.steerDeadzone) controls.left = true;
+        } else {
+          controls.down = true;                                // front boxed → reverse straight off the wall
+        }
+        cop.aiTarget = { x: cx + Math.cos(best ?? cop.facing) * 80, y: cy + Math.sin(best ?? cop.facing) * 80 };
+        cop.debug = { mode: best !== null ? 'UNSTK_FW' : 'UNSTK_BK', speed, dist, bend: 0, cornerLimit: 0, angleErr: 0 };
+        return controls;
       }
-      cop.aiTarget = { x: target.x, y: target.y };
-      cop.debug = { mode: m.phase === 'BACK' ? 'UNSTK_BK' : 'UNSTK_FW', speed, dist, bend: 0, cornerLimit: 0, angleErr: 0 };
-      return controls;
     }
     // Wedge detection: barely moving while it wants to drive AND it's still far from its
     // goal. The old gate also fired at close range (`|| blocked`) to dislodge a cop jammed
@@ -120,8 +129,7 @@ export class CopAI {
     // within unstickProx of its target is treated as arrived: it presses, it never reverses.
     if (speed < 30 && dist > this.unstuckProx) this._stuckTime += dt; else this._stuckTime = 0;
     if (this._stuckTime > 0.35) {
-      this._unstuckDir = -this._unstuckDir; // alternate so a retry tries the other way
-      this._unstuck = { phase: 'BACK', t: this.unstuckBackTime };
+      this._unstuck = { startX: cx, startY: cy, age: 0 }; // record the jam point; recovery senses its way out
       this._stuckTime = 0;
     }
 
