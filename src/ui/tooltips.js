@@ -162,9 +162,9 @@ export const TOOLTIPS = {
   oilMaxCharges: "How many oil slicks you carry per run. (Changing this refills you.) Raise for more drops before you're empty.",
   oilPatchRadius: "Radius (px) of the oil patch (~1.5× car width by default). Raise to make a wider patch that's harder for a cop to thread around.",
   oilLifetime: "Seconds the patch stays on the road before fading out. Raise to leave the hazard down longer.",
-  oilGripLost: "How hard oil LOCKS a cop's travel direction (it can't turn, slides straight on momentum while the body still steers). 1 = fully locked (steering does nothing — slides straight into walls/past you), 0 = no effect. Decays over the decay time. ~0.9 = a strong, barely-recoverable slide.",
+  oilGripLost: "How hard oil LOCKS a cop's travel direction (it can't turn, slides straight on momentum while the body still steers). 1 = fully locked (steering does nothing — slides straight into walls/past you), 0 = no effect. Full strength for the whole effect duration, then off.",
   oilSpeedLost: "Fraction of a cop's speed scrubbed the instant it touches oil. 0 = no slow, 1 = dead stop. Raise to make the hit slow them more.",
-  oilEffectTime: "Seconds for the slide to DECAY from full strength back to normal grip after a cop leaves the patch. Full effect on contact, fading to nothing by this time. Raise for a longer, slower recovery.",
+  oilEffectTime: "Seconds the slide lasts (at full strength) after a cop leaves the patch, then it snaps back to normal. Raise to keep a cop sliding longer.",
 
   // ── Stealth (Kill Lights) ───────────────────────────────────────────────────
   killLightsRange: "Clear-LOS spotting range (px) for a SLOW, lights-off player. Lower = cops lose a blacked-out crawling car from closer in (easier ditch).",

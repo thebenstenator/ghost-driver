@@ -3036,7 +3036,7 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
     oil.add(this, "oilLifetime", 2, 30, 1).name("Patch lifetime (s)");
     oil.add(this, "oilGripLost", 0, 1, 0.05).name("Slide lock (0–1)");
     oil.add(this, "oilSpeedLost", 0, 1, 0.05).name("Speed lost on hit (0–1)");
-    oil.add(this, "oilEffectTime", 0.2, 30, 0.1).name("Decay time (s)");
+    oil.add(this, "oilEffectTime", 0.2, 30, 0.1).name("Effect duration (s)");
 
     this._persistPanel(gui, "gd_gadgetTune_v4"); // bumped: baked lifetime/decay 30s + throttle cut
 
@@ -3713,11 +3713,11 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
       // Oil slick — lock the TRAVEL DIRECTION. Capture the heading the cop is moving in BEFORE
       // integrating; after, force the velocity back onto it (keeping the new speed). The body
       // still steers (nose turns) but momentum keeps going straight — "turn the wheel, nothing
-      // happens." Strength = oilF (decays as the slick wears off) × oilGripLost (peak lock); at
-      // ~1 it can't change direction at all, sliding straight into walls/past you.
+      // happens." FULL strength (oilGripLost) the whole time the cop is oiled (no decay), then
+      // it snaps back to normal once the effect timer runs out.
       const _oilPvx = cop.vx, _oilPvy = cop.vy;
       cop.update(delta, target);
-      const oilLock = Math.min(1, (cop._oilT || 0) / Math.max(0.001, this.oilEffectTime)) * this.oilGripLost;
+      const oilLock = (cop._oilT || 0) > 0 ? this.oilGripLost : 0;
       if (oilLock > 0.01) {
         const preSpd = Math.hypot(_oilPvx, _oilPvy);
         const postSpd = cop.getSpeed();
