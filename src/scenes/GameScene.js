@@ -3076,6 +3076,9 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
       directRange: a.directRange,
       chaseRange: a.chaseRange,
       reactionTime: a.reactionTime,
+      cornerReach: a.cornerReach,
+      cornerBias: a.cornerBias,
+      huntContinueRange: a.huntContinueRange,
       sepRadius: this.sepRadius,
       sepStrength: this.sepStrength,
       rbStart: this.rbStart,
@@ -3172,6 +3175,18 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
     corner
       .add(this.copTuning, "reactionTime", 0, 0.5, 0.01)
       .name("Reaction lag (s)")
+      .onChange(apply);
+    corner
+      .add(this.copTuning, "cornerReach", 0, 300, 5)
+      .name("Corner reach (smoothness)")
+      .onChange(apply);
+    corner
+      .add(this.copTuning, "cornerBias", 0, 100, 2)
+      .name("Corner outside bias")
+      .onChange(apply);
+    corner
+      .add(this.copTuning, "huntContinueRange", 0, 1200, 25)
+      .name("Close-cop racing range")
       .onChange(apply);
 
     const pack = gui.addFolder("Pack & Search");
@@ -3306,7 +3321,7 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
 
     // Persist across refresh. Key bumped to v16: huntLead removed (blind cops now go
     // straight to last-known, no forward projection).
-    this._persistPanel(gui, "gd_copTuning19"); // bumped: convoy removed (panel shape changed)
+    this._persistPanel(gui, "gd_copTuning20"); // bumped: corner reach/bias + close-cop racing range levers
 
     gui.domElement.style.position = "fixed";
     gui.domElement.style.top = "8px";
@@ -3386,6 +3401,9 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
       a.directRange = t.directRange;
       a.chaseRange = t.chaseRange;
       a.reactionTime = t.reactionTime;
+      a.cornerReach = t.cornerReach;
+      a.cornerBias = t.cornerBias;
+      a.huntContinueRange = t.huntContinueRange;
     }
     this.sepRadius = t.sepRadius;
     this.sepStrength = t.sepStrength;
