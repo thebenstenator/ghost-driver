@@ -957,6 +957,32 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
+  // Wedge test: spawn cops nosed into the four faces of a nearby building, each FACING the wall
+  // with its recovery forced on, so you can watch the sense-and-drive extraction cope with a wall
+  // in front of it (back off → find open road → drive to the player) without setting up a pursuit.
+  _testbedWedge() {
+    const px = this.car.sprite.x, py = this.car.sprite.y;
+    // Nearest building to the player.
+    let nb = null, nd = Infinity;
+    for (const b of BUILDINGS) {
+      const d = Phaser.Math.Distance.Between(px, py, b.x + b.w / 2, b.y + b.h / 2);
+      if (d < nd) { nd = d; nb = b; }
+    }
+    if (!nb) return;
+    const m = 16; // nose this far OUTSIDE the wall, pointed straight into it
+    const faces = [
+      { x: nb.x - m,          y: nb.y + nb.h / 2, face: 0 },            // left wall, facing +x (into it)
+      { x: nb.x + nb.w + m,   y: nb.y + nb.h / 2, face: Math.PI },      // right wall, facing −x
+      { x: nb.x + nb.w / 2,   y: nb.y - m,        face: Math.PI / 2 },  // top wall, facing +y
+      { x: nb.x + nb.w / 2,   y: nb.y + nb.h + m, face: -Math.PI / 2 }, // bottom wall, facing −y
+    ];
+    for (const f of faces) {
+      const cop = this._spawnCop(f.x, f.y, this._testbed.unitType);
+      this._placeCop(cop, f.x, f.y, px, py, f.face); // place + face the wall
+      cop.ai._unstuck = { startX: f.x, startY: f.y, age: 0 }; // force recovery (set AFTER _placeCop, which clears it)
+    }
+  }
+
   // Enter a freshly spawned cop according to its def's placement strategy. This only
   // picks WHERE it appears — the cop then drives with the same shared CopAI brain.
   _placeByStrategy(cop, px, py) {
@@ -1711,6 +1737,9 @@ export class GameScene extends Phaser.Scene {
       )
       .name("▶ Spawn");
     gui.add({ clear: () => this._clearCops() }, "clear").name("✕ Clear all");
+    gui
+      .add({ wedge: () => this._testbedWedge() }, "wedge")
+      .name("▣ Wedge test (recovery)");
 
     // Placed roadblock (static set-piece). Spawn one ahead at the chosen difficulty.
     this._rbDifficulty = this._rbDifficulty || 2;
