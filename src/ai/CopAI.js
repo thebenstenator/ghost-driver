@@ -33,7 +33,10 @@ export class CopAI {
                                  // clear line — so a far cop corners at intersections instead
                                  // of tracking you straight across a corner into a building.
     this.arriveRadius     = 70;  // px to count a path node as reached
-    this.huntContinueRange = 350;// px — a CLOSE cop (within this) that loses sight of a now-FROZEN
+    this.cornerReach      = 120; // px past the current node the cornering curve aims toward the next
+                                 // node — rounds the corner LOCALLY (≈ one road-width) instead of
+                                 // slicing toward the next node and cutting the inside building.
+    this.huntContinueRange = 550;// px — a CLOSE cop (within this) that loses sight of a now-FROZEN
                                  // last-known aims its racing line straight at that point (around
                                  // the corner) instead of detouring to the intersection-centre node
                                  // — worst on wide roads, where the centre is far off your line.
@@ -191,58 +194,55 @@ export class CopAI {
         this._wpIndex  = this._path.length > 1 ? 1 : 0;
       }
 
-      // Advance to the next node once we've reached the current one.
+      // Advance to the next node when REACHED (within arriveRadius) OR PASSED (the cop is now
+      // closer to the next node than this node is — i.e. it cut the corner). The "passed" test is
+      // what lets corner-cutting work: the cop no longer has to drive all the way to the node centre.
       let wp = this.nav.pos(this._path[this._wpIndex]);
-      if (Phaser.Math.Distance.Between(cx, cy, wp.x, wp.y) < this.arriveRadius &&
-          this._wpIndex < this._path.length - 1) {
+      while (this._wpIndex < this._path.length - 1) {
+        const nx = this.nav.pos(this._path[this._wpIndex + 1]);
+        const reached = Phaser.Math.Distance.Between(cx, cy, wp.x, wp.y) < this.arriveRadius;
+        const passed  = Phaser.Math.Distance.Between(cx, cy, nx.x, nx.y) <
+                        Phaser.Math.Distance.Between(wp.x, wp.y, nx.x, nx.y);
+        if (!reached && !passed) break;
         this._wpIndex++;
-        wp = this.nav.pos(this._path[this._wpIndex]);
+        wp = nx;
       }
-      // ENDPOINT — string-pull along the path to the FURTHEST node the cop has a clear line to
-      // (walk forward, stop at the first occluded one). Using only on-road NODES (never a live or
-      // last-known position — that's the banned wall-grind) keeps it safe. When the cop reaches a
-      // corner and can finally see past it, the endpoint extends to the next node, so it rounds
-      // the corner toward where you went instead of stopping dead at the intersection node.
-      let endIdx = this._wpIndex;
-      for (let i = this._wpIndex; i < this._path.length; i++) {
-        const n = this.nav.pos(this._path[i]);
-        if (!this.rects || segmentClear(cx, cy, n.x, n.y, this.rects)) endIdx = i; else break;
-      }
-      let end  = this.nav.pos(this._path[endIdx]);
-      let aRef = this.nav.pos(this._path[Math.max(0, endIdx - 1)]);
 
-      // CLOSE-COP RACING LINE: a close cop that lost sight of a FROZEN last-known aims straight at
-      // that point (around the corner) rather than the intersection-centre node — fixes the
-      // wide-road detour to the centre. Gated tight (close + frozen + clear line) so distant cops
-      // and moving targets keep the safe node pathing above and never wall-grind.
+      // CORNER ANTICIPATION — don't aim AT the node centre (drive there, snap 90°, drone to the
+      // next). Build a curve that leaves the cop tangent to its heading, bends THROUGH the current
+      // node N (control), and heads toward the NEXT node M (endpoint) — so the turn starts early and
+      // the cop rounds the corner. M may be occluded around the corner; that's fine, the curve comes
+      // from the PATH not line-of-sight, and every aim sample is still edge-checked. For a CLOSE cop
+      // that lost a FROZEN last-known, aim at that point itself (its racing line, off the node
+      // centre) — fixes the wide-road detour; distant cops / moving targets keep the node curve.
+      const N = wp;
+      const Mraw = this._wpIndex + 1 < this._path.length
+        ? this.nav.pos(this._path[this._wpIndex + 1])
+        : { x: target.x, y: target.y };
+      // Reach only a BOUNDED distance past N toward the next node — round the corner LOCALLY rather
+      // than slicing all the way toward M (which cut the inside building, ~17% clip). cornerReach ≈
+      // one road-width keeps the curve inside the intersection.
+      const mnx = Mraw.x - N.x, mny = Mraw.y - N.y, mnl = Math.hypot(mnx, mny) || 1;
+      const reach = Math.min(mnl, this.cornerReach);
+      let ctrl = N, dest = { x: N.x + (mnx / mnl) * reach, y: N.y + (mny / mnl) * reach };
       if (dist <= this.huntContinueRange && targetMoved < 0.5 &&
           (!this.rects || segmentClear(cx, cy, target.x, target.y, this.rects))) {
-        end  = { x: target.x, y: target.y };
-        aRef = { x: cx, y: cy }; // approach from the cop's side (no node detour)
+        ctrl = { x: target.x, y: target.y };
+        dest = ctrl;
       }
-
-      // RACING LINE — leave the cop ALONG ITS CURRENT HEADING (tangent → smooth, no jerk), approach
-      // `end` from the `aRef` side (hugs the corner, not the centre), and aim at the FURTHEST point
-      // on the curve with a clear line (string-pull, edge-aware). When the corner occludes the end
-      // it aims at a nearer on-road point and rounds in as it advances.
       const hd = speed > 30 ? Math.atan2(cop.vy, cop.vx) : cop.facing;       // travel direction
       const d1 = Phaser.Math.Clamp(speed * 0.5, 60, 200);                    // departure tangent (∝ speed)
-      const dEnd = Phaser.Math.Distance.Between(cx, cy, end.x, end.y);
-      const d2 = Phaser.Math.Clamp(dEnd * 0.4, 40, 180);                     // approach tangent into the end
-      let avx = aRef.x - end.x, avy = aRef.y - end.y;                        // approach `end` from the aRef side
-      const al = Math.hypot(avx, avy) || 1;
       const P0 = { x: cx, y: cy };
       const P1 = { x: cx + Math.cos(hd) * d1, y: cy + Math.sin(hd) * d1 };
-      const P2 = { x: end.x + (avx / al) * d2, y: end.y + (avy / al) * d2 };
-      const P3 = end;
+      // Aim at the FURTHEST point on the curve with a clear line (string-pull, edge-aware): when the
+      // corner occludes the far part, it aims at a nearer on-road point and rounds in as it advances.
       let chosen = null;
       for (const t of [0.9, 0.72, 0.54, 0.36, 0.2]) {
-        const b = this._cubicBezier(P0, P1, P2, P3, t);
+        const b = this._cubicBezier(P0, P1, ctrl, dest, t);
         if (!this.rects || segmentClear(cx, cy, b.x, b.y, this.rects)) { chosen = b; break; }
       }
-      // Fallback (curve fully occluded): the rounding reference, to rejoin the road network.
-      aimX = chosen ? chosen.x : aRef.x;
-      aimY = chosen ? chosen.y : aRef.y;
+      aimX = chosen ? chosen.x : N.x; // fallback: the current node, to rejoin the road network
+      aimY = chosen ? chosen.y : N.y;
 
       // Speed: brake for the corners along the remaining path.
       const pts = this._path.map(n => this.nav.pos(n));
