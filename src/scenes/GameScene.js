@@ -138,6 +138,18 @@ export class GameScene extends Phaser.Scene {
     this.oilSpeedLost = 0;      // fraction of speed scrubbed on first contact (0 = keep momentum)
     this.oilEffectTime = 30;    // s the slide takes to DECAY from full strength back to normal
 
+    // --- Gadget: Nitro Boost (player) — a short burst that scales BOTH acceleration and top
+    // speed for a few seconds (one charge). Applied non-destructively in the update loop: it
+    // multiplies the live car stats for that frame only, then restores them, so the tuning
+    // panel's base values are never mutated (same approach as the ram-bog). All levers in the
+    // Gadgets dev panel. ---
+    this.nitroMaxCharges = 3;   // charges at the start of a run
+    this.nitroCharges = this.nitroMaxCharges;
+    this.nitroDuration = 2.5;   // s a single boost lasts
+    this.nitroAccelMult = 1.8;  // acceleration ×multiplier while boosting (the "kick")
+    this.nitroSpeedMult = 1.4;  // top-speed ×multiplier while boosting (the new ceiling)
+    this.nitroTimer = 0;        // s remaining on the active boost (0 = not boosting)
+
     this.spikes = []; // deployed spike strips (hazard wiring next; visible placeholder for now)
     this.spikeLifetime = 20; // s a dropped strip persists before it despawns
     this.spikeStripLen = 28; // px across — a cop-deployed strip is ~car-width (DODGEABLE). Roadblock
@@ -381,6 +393,7 @@ export class GameScene extends Phaser.Scene {
       this.killLightsText,
       this.garageText,
       this.oilText,
+      this.nitroText,
     ];
     if (this.debugText) hud.push(this.debugText);
     if (this.copCountText) hud.push(this.copCountText);
@@ -1424,6 +1437,17 @@ export class GameScene extends Phaser.Scene {
     this.oilSlicks.push({ x, y, r, t: 0, blobs });
   }
 
+  // Gadget: fire a NITRO boost (one charge). Refreshes the boost timer to full; the update loop
+  // reads nitroTimer and scales the car's acceleration + top speed while it runs. Blocked while
+  // a boost is already active so you can't burn a second charge stacking on top of the first.
+  _fireNitro() {
+    if (this.busted || this.paused) return;
+    if (this.nitroCharges <= 0) return;
+    if (this.nitroTimer > 0) return; // already boosting — don't waste a charge
+    this.nitroCharges--;
+    this.nitroTimer = this.nitroDuration;
+  }
+
   // Age + redraw the slicks, and apply their effect to cops: a one-shot speed scrub on the
   // frame a cop first touches oil, then a lingering grip-loss timer (cop._oilT) that the cop
   // update loop reads to slash grip each frame (it slides). Player is immune (its own oil).
@@ -2403,6 +2427,9 @@ bleed: { fastFrac: ${b.fastFrac}, fastRate: ${b.fastRate}, slowRate: ${b.slowRat
 
     // Gadget — Oil Slick (O): drop a patch behind you (one charge per press).
     this.input.keyboard.on("keydown-O", () => this._deployOilSlick());
+
+    // Gadget — Nitro Boost (B): a short burst of extra accel + top speed (one charge per press).
+    this.input.keyboard.on("keydown-B", () => this._fireNitro());
   }
 
   _setupDebugOverlay() {
@@ -2483,6 +2510,18 @@ bleed: { fastFrac: ${b.fastFrac}, fastRate: ${b.fastRate}, slowRate: ${b.slowRat
         fontSize: "15px",
         fontStyle: "bold",
         color: "#d8c27a",
+      })
+      .setOrigin(0, 1)
+      .setScrollFactor(0)
+      .setDepth(100);
+
+    // Gadget charges (bottom-left, stacked above the oil row) — Nitro Boost count.
+    this.nitroText = this.add
+      .text(16, this.scale.height - 36, "", {
+        fontFamily: "monospace",
+        fontSize: "15px",
+        fontStyle: "bold",
+        color: "#7fd8ff",
       })
       .setOrigin(0, 1)
       .setScrollFactor(0)
@@ -3038,7 +3077,16 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
     oil.add(this, "oilSpeedLost", 0, 1, 0.05).name("Speed lost on hit (0–1)");
     oil.add(this, "oilEffectTime", 0.2, 30, 0.1).name("Effect duration (s)");
 
-    this._persistPanel(gui, "gd_gadgetTune_v5"); // bumped: speed-lost default 0 (keep momentum)
+    const nitro = gui.addFolder("Nitro Boost (B)");
+    nitro
+      .add(this, "nitroMaxCharges", 1, 10, 1)
+      .name("Charges")
+      .onChange((v) => (this.nitroCharges = v)); // refill on tune (and on panel load)
+    nitro.add(this, "nitroDuration", 0.5, 8, 0.1).name("Boost duration (s)");
+    nitro.add(this, "nitroAccelMult", 1, 4, 0.05).name("Accel ×");
+    nitro.add(this, "nitroSpeedMult", 1, 3, 0.05).name("Top speed ×");
+
+    this._persistPanel(gui, "gd_gadgetTune_v6"); // bumped: added Nitro Boost levers
 
     // Anchored to the BOTTOM-RIGHT so the panel grows UPWARD when folders expand and stays
     // clear of the bottom-left spawn panel. CRITICAL: clear top/left to "auto" — lil-gui's
@@ -3490,7 +3538,25 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
       this.car.acceleration *= this.ramBogAccel;
       this.car._ramBog = Math.max(0, this.car._ramBog - delta / 1000);
     }
+
+    // Nitro boost: while the timer runs, scale up acceleration AND top speed for this update
+    // only, then restore (so the panel's base values stay intact). Bleed the timer. Composes
+    // with the ram-bog above — restore in reverse order (nitro first, then bog) below.
+    let _nitroAccel = null,
+      _nitroSpeed = null;
+    if (this.nitroTimer > 0) {
+      this.nitroTimer = Math.max(0, this.nitroTimer - delta / 1000);
+      _nitroAccel = this.car.acceleration;
+      _nitroSpeed = this.car.maxSpeed;
+      this.car.acceleration *= this.nitroAccelMult;
+      this.car.maxSpeed *= this.nitroSpeedMult;
+    }
+
     this.car.update(delta, controls);
+    if (_nitroAccel != null) {
+      this.car.acceleration = _nitroAccel;
+      this.car.maxSpeed = _nitroSpeed;
+    }
     if (_bogAccel != null) this.car.acceleration = _bogAccel;
     this._carLastVx = this.car.vx;
     this._carLastVy = this.car.vy; // pre-collision cache (see _updateCopDamage)
@@ -3509,6 +3575,21 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
           "○".repeat(Math.max(0, this.oilMaxCharges - this.oilCharges)),
       )
       .setColor(this.oilCharges > 0 ? "#d8c27a" : "#6a6450");
+
+    // Nitro Boost pips — brighten while a boost is actively firing.
+    this.nitroText
+      .setText(
+        "NITRO " +
+          "◉".repeat(this.nitroCharges) +
+          "○".repeat(Math.max(0, this.nitroMaxCharges - this.nitroCharges)),
+      )
+      .setColor(
+        this.nitroTimer > 0
+          ? "#ffffff"
+          : this.nitroCharges > 0
+            ? "#7fd8ff"
+            : "#4a5a66",
+      );
 
     // --- Perception: a cop is AWARE of the player if it has a clear sight line
     // within range, OR the player is within close proximity (omnidirectional —
