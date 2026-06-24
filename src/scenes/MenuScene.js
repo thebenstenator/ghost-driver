@@ -56,7 +56,7 @@ export class MenuScene extends Phaser.Scene {
 
     // --- Legacy free-test: fixed cop count, no escalation ---
     this.add
-      .text(cx, 286, "— or free-test a fixed cop count —", {
+      .text(cx, 286, "Get a feel for the car without pressure", {
         fontFamily: "monospace",
         fontSize: "13px",
         color: "#6a6a7a",
@@ -72,7 +72,6 @@ export class MenuScene extends Phaser.Scene {
           backgroundColor: "#1a1a24",
           align: "center",
           fixedWidth: 200,
-          padding: { x: 0, y: 7 },
         })
         .setOrigin(0.5)
         .setInteractive({ useHandCursor: true });
@@ -80,14 +79,6 @@ export class MenuScene extends Phaser.Scene {
       t.on("pointerout", () => t.setColor("#ffffff"));
       t.on("pointerdown", () => this._start(opt.n));
     });
-
-    this.add
-      .text(cx, 320 + 4 * 46 + 2, "click, or press 0 – 3", {
-        fontFamily: "monospace",
-        fontSize: "13px",
-        color: "#6a6a7a",
-      })
-      .setOrigin(0.5);
 
     // --- Controls reference ---
     this.add
@@ -99,8 +90,8 @@ export class MenuScene extends Phaser.Scene {
       })
       .setOrigin(0.5);
     const controls = [
-      "WASD / Arrows — Drive        Space — Handbrake",
-      "Shift — Brake        P — Pause        B - Nitro        O - Oil slick",
+      "WASD / Arrows — Drive        Space — Handbrake        Shift - Brake",
+      "P — Pause        B - Nitro        O - Oil slick",
     ].join("\n");
     this.add
       .text(cx, 605, controls, {
