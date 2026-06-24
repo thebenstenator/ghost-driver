@@ -146,7 +146,7 @@ export class GameScene extends Phaser.Scene {
     this.nitroMaxCharges = 3;   // charges at the start of a run
     this.nitroCharges = this.nitroMaxCharges;
     this.nitroDuration = 2.5;   // s a single boost lasts
-    this.nitroAccelMult = 1.8;  // acceleration ×multiplier while boosting (the "kick")
+    this.nitroAccelMult = 1.3;  // acceleration ×multiplier while boosting (the "kick")
     this.nitroSpeedMult = 1.4;  // top-speed ×multiplier while boosting (the new ceiling)
     this.nitroTimer = 0;        // s remaining on the active boost (0 = not boosting)
 
@@ -3086,7 +3086,7 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
     nitro.add(this, "nitroAccelMult", 1, 4, 0.05).name("Accel ×");
     nitro.add(this, "nitroSpeedMult", 1, 3, 0.05).name("Top speed ×");
 
-    this._persistPanel(gui, "gd_gadgetTune_v6"); // bumped: added Nitro Boost levers
+    this._persistPanel(gui, "gd_gadgetTune_v7"); // bumped: nitro accel default 1.8 → 1.3
 
     // Anchored to the BOTTOM-RIGHT so the panel grows UPWARD when folders expand and stays
     // clear of the bottom-left spawn panel. CRITICAL: clear top/left to "auto" — lil-gui's
