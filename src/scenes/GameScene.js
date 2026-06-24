@@ -957,26 +957,33 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
-  // Wedge test: spawn cops nosed into the four faces of a nearby building, each FACING the wall
-  // with its recovery forced on, so you can watch the sense-and-drive extraction cope with a wall
-  // in front of it (back off → find open road → drive to the player) without setting up a pursuit.
+  // Wedge test: spawn cops nosed into the four faces of a FAR building (all faces beyond sight
+  // range, so NOBODY has LOS — the blind case), each facing its wall with recovery forced on. Clears
+  // other cops first so no one is feeding live sightings, and seeds the last-known to your position
+  // so the blind cops navigate toward you. Watch them back off the wall, find open road, and route
+  // in — without a live pursuit, and without anyone able to just beeline at you.
   _testbedWedge() {
     const px = this.car.sprite.x, py = this.car.sprite.y;
-    // Nearest building to the player.
-    let nb = null, nd = Infinity;
-    for (const b of BUILDINGS) {
-      const d = Phaser.Math.Distance.Between(px, py, b.x + b.w / 2, b.y + b.h / 2);
-      if (d < nd) { nd = d; nb = b; }
-    }
-    if (!nb) return;
-    const m = 16; // nose this far OUTSIDE the wall, pointed straight into it
-    const faces = [
-      { x: nb.x - m,          y: nb.y + nb.h / 2, face: 0 },            // left wall, facing +x (into it)
-      { x: nb.x + nb.w + m,   y: nb.y + nb.h / 2, face: Math.PI },      // right wall, facing −x
-      { x: nb.x + nb.w / 2,   y: nb.y - m,        face: Math.PI / 2 },  // top wall, facing +y
-      { x: nb.x + nb.w / 2,   y: nb.y + nb.h + m, face: -Math.PI / 2 }, // bottom wall, facing −y
+    this._clearCops(); // clean slate → no cop has LOS (a pure blind-recovery test)
+    const m = 16;
+    const facesOf = (b) => [
+      { x: b.x - m,          y: b.y + b.h / 2, face: 0 },            // left wall, facing +x (into it)
+      { x: b.x + b.w + m,    y: b.y + b.h / 2, face: Math.PI },      // right wall, facing −x
+      { x: b.x + b.w / 2,    y: b.y - m,        face: Math.PI / 2 }, // top wall, facing +y
+      { x: b.x + b.w / 2,    y: b.y + b.h + m,  face: -Math.PI / 2 },// bottom wall, facing −y
     ];
-    for (const f of faces) {
+    // Pick the NEAREST building whose every face is beyond sight range (blind but easy to spectate);
+    // fall back to the farthest building if the player is mid-map with nothing far enough.
+    const minFace = (b) => Math.min(...facesOf(b).map((f) => Phaser.Math.Distance.Between(px, py, f.x, f.y)));
+    const cdist = (b) => Phaser.Math.Distance.Between(px, py, b.x + b.w / 2, b.y + b.h / 2);
+    let pick = null, pickD = Infinity;
+    for (const b of BUILDINGS) {
+      if (minFace(b) > this.sightRange + 60 && cdist(b) < pickD) { pickD = cdist(b); pick = b; }
+    }
+    if (!pick) pick = BUILDINGS.reduce((a, b) => (cdist(b) > cdist(a) ? b : a));
+    // Seed the last-known to the player so the BLIND cops have somewhere to navigate (you).
+    this.pursuit.lastKnown.x = px; this.pursuit.lastKnown.y = py; this.pursuit.hasLastKnown = true;
+    for (const f of facesOf(pick)) {
       const cop = this._spawnCop(f.x, f.y, this._testbed.unitType);
       this._placeCop(cop, f.x, f.y, px, py, f.face); // place + face the wall
       cop.ai._unstuck = { startX: f.x, startY: f.y, age: 0 }; // force recovery (set AFTER _placeCop, which clears it)
