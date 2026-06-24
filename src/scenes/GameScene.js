@@ -3124,11 +3124,6 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
       directRange: a.directRange,
       chaseRange: a.chaseRange,
       reactionTime: a.reactionTime,
-      cornerReach: a.cornerReach,
-      cornerBias: a.cornerBias,
-      cornerLookAhead: a.cornerLookAhead,
-      huntContinueRange: a.huntContinueRange,
-      stuckSpeedEps: a.stuckSpeedEps,
       sepRadius: this.sepRadius,
       sepStrength: this.sepStrength,
       rbStart: this.rbStart,
@@ -3225,26 +3220,6 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
     corner
       .add(this.copTuning, "reactionTime", 0, 0.5, 0.01)
       .name("Reaction lag (s)")
-      .onChange(apply);
-    corner
-      .add(this.copTuning, "cornerReach", 0, 300, 5)
-      .name("Corner reach (smoothness)")
-      .onChange(apply);
-    corner
-      .add(this.copTuning, "cornerBias", 0, 100, 2)
-      .name("Corner outside bias")
-      .onChange(apply);
-    corner
-      .add(this.copTuning, "cornerLookAhead", 20, 200, 5)
-      .name("Corner carrot look-ahead")
-      .onChange(apply);
-    corner
-      .add(this.copTuning, "huntContinueRange", 0, 1200, 25)
-      .name("Close-cop racing range")
-      .onChange(apply);
-    corner
-      .add(this.copTuning, "stuckSpeedEps", 0, 60, 1)
-      .name("Stuck speed threshold")
       .onChange(apply);
 
     const pack = gui.addFolder("Pack & Search");
@@ -3379,7 +3354,7 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
 
     // Persist across refresh. Key bumped to v16: huntLead removed (blind cops now go
     // straight to last-known, no forward projection).
-    this._persistPanel(gui, "gd_copTuning21"); // bumped: corner carrot look-ahead + stuck-speed levers
+    this._persistPanel(gui, "gd_copTuning22"); // bumped: removed cornering/stuck levers (CopAI reverted)
 
     gui.domElement.style.position = "fixed";
     gui.domElement.style.top = "8px";
@@ -3459,11 +3434,6 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
       a.directRange = t.directRange;
       a.chaseRange = t.chaseRange;
       a.reactionTime = t.reactionTime;
-      a.cornerReach = t.cornerReach;
-      a.cornerBias = t.cornerBias;
-      a.cornerLookAhead = t.cornerLookAhead;
-      a.huntContinueRange = t.huntContinueRange;
-      a.stuckSpeedEps = t.stuckSpeedEps;
     }
     this.sepRadius = t.sepRadius;
     this.sepStrength = t.sepStrength;
