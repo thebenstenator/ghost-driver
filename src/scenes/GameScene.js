@@ -1589,18 +1589,30 @@ export class GameScene extends Phaser.Scene {
       if (arm <= 0 || !cop.sprite) continue;
       const prog = Phaser.Math.Clamp(1 - arm / tel, 0, 1); // 0 just armed → 1 about to drop
       const f = cop.facing;
-      const bx = cop.sprite.x - Math.cos(f) * 22; // behind the rear bumper
-      const by = cop.sprite.y - Math.sin(f) * 22;
+      // Sit the cue JUST behind the rear bumper — offset by the cop's half-length so it clears the
+      // car body (else it draws under the sprite and you can't see it). Teeth point further back.
+      const back = cop.sprite.displayHeight * 0.5 + 4;
+      const bx = cop.sprite.x - Math.cos(f) * back;
+      const by = cop.sprite.y - Math.sin(f) * back;
       const a = f + Math.PI / 2; // teeth lie ACROSS travel, as the strip will
       const cos = Math.cos(a), sin = Math.sin(a);
-      const blink = 0.4 + 0.6 * Math.abs(Math.sin(this.time.now / (260 - prog * 200)));
+      const blink = 0.45 + 0.55 * Math.abs(Math.sin(this.time.now / (260 - prog * 200)));
       const col = Phaser.Display.Color.GetColor(255, Math.round(160 * (1 - prog)), 40); // amber → red
-      g.fillStyle(col, 0.9 * blink);
-      const teeth = 7, len = this.spikeStripLen, hd = 6;
+      const teeth = 7, len = this.spikeStripLen, hd = 8;
+      // Dark backing bar so the teeth read against the road, then the warning teeth on top.
+      g.fillStyle(0x100805, 0.5 * blink);
+      const bw = 3;
+      g.fillPoints([
+        { x: bx - len / 2 * cos + bw * sin, y: by - len / 2 * sin - bw * cos },
+        { x: bx + len / 2 * cos + bw * sin, y: by + len / 2 * sin - bw * cos },
+        { x: bx + len / 2 * cos - bw * sin, y: by + len / 2 * sin + bw * cos },
+        { x: bx - len / 2 * cos - bw * sin, y: by - len / 2 * sin + bw * cos },
+      ].map((p) => new Phaser.Geom.Point(p.x, p.y)), true);
+      g.fillStyle(col, 0.95 * blink);
       for (let i = 0; i < teeth; i++) {
         const fr = (i + 0.5) / teeth - 0.5;
         const tx = bx + fr * len * cos, ty = by + fr * len * sin;
-        const tip = { x: tx - (hd + 4) * sin, y: ty + (hd + 4) * cos };
+        const tip = { x: tx - (hd + 5) * sin, y: ty + (hd + 5) * cos };
         const b1 = { x: tx - 3 * cos - hd * sin, y: ty - 3 * sin + hd * cos };
         const b2 = { x: tx + 3 * cos - hd * sin, y: ty + 3 * sin + hd * cos };
         g.fillPoints([new Phaser.Geom.Point(tip.x, tip.y), new Phaser.Geom.Point(b1.x, b1.y), new Phaser.Geom.Point(b2.x, b2.y)], true);
@@ -2065,6 +2077,8 @@ this.interceptAheadDist = ${this.interceptAheadDist}; this.interceptEntrySpeed =
     spike.add(d, "spikeBoost", 0, 300, 10).name("Sprint speed boost (px/s)");
     spike.add(d, "spikeDropAhead", 0, 400, 5).name("Deploy when ahead-by (px)");
     spike.add(d, "spikeTelegraph", 0, 6, 0.25).name("Telegraph warning (s)");
+    spike.add(d, "spikeDropMinAhead", -50, 150, 5).name("Cancel if not ahead-by (px)");
+    spike.add(d, "spikeDropMaxLateral", 30, 200, 5).name("Cancel if off-lane (px)");
     spike.add(d, "spikeGlobalCooldown", 0, 40, 0.5).name("Global deploy cooldown (s)");
     spike.add(d, "spikeCloseFactor", 0.3, 1, 0.02).name("Close-in speed × yours");
     spike.add(d, "spikeCloseBuffer", 0, 200, 5).name("Brake-check switch (px)");
@@ -2088,7 +2102,7 @@ this.interceptAheadDist = ${this.interceptAheadDist}; this.interceptEntrySpeed =
       .add({ copy: () => this._copyManeuverStats() }, "copy")
       .name("Copy Maneuvers → Console");
 
-    this._persistPanel(gui, "gd_maneuverTune_v15"); // bumped: spikeTelegraph warning window
+    this._persistPanel(gui, "gd_maneuverTune_v16"); // bumped: spike drop abort thresholds
 
     gui.domElement.style.position = "fixed";
     gui.domElement.style.top = "8px";

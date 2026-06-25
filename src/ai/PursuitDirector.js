@@ -171,6 +171,10 @@ export class PursuitDirector {
     this.spikeTelegraph   = 3.0;   // s of WARNING before a strip lands: the cop shows spikes behind its
                                    // rear bumper (drawn by GameScene from cop._spikeArm) so the player
                                    // can react. 0 = no telegraph (lands instantly).
+    this.spikeDropMinAhead = 10;   // px the cop must still be AHEAD of the player (along their heading)
+                                   // for an armed drop to land — pass it and the drop CANCELS.
+    this.spikeDropMaxLateral = 95; // px the cop must be within of the player's path lane to drop — turn
+                                   // away and it CANCELS (the strip would miss your route anyway).
     this.spikeEaseAhead   = 70;    // px ahead the deployer eases to after dropping (forward-block)
     this.spikeEaseFactor  = 0.7;   // it eases to this fraction of your speed so the pack catches up
     // LEAD: a spike unit that's already ahead (it spawned ahead) drives to stay this far in front,
@@ -516,10 +520,23 @@ export class PursuitDirector {
       // player's live heading, so a wide-swung deployer still lays it in the lane. Independent of
       // the run lifecycle: even if the run ended, an armed strip still drops.
       if (c._spikeArm > 0) {
-        c._spikeArm -= dt;
-        if (c._spikeArm <= 0) {
+        // ABORT if the player evaded the drop: the cop must still be IN FRONT (ahead along the
+        // player's heading) and roughly in their lane. Passing it or turning away cancels the drop,
+        // refunds the strip and frees the pack to retry — no strip lands behind you / off your route.
+        const dx = c.sprite.x - px, dy = c.sprite.y - py;
+        const along = dx * Math.cos(h) + dy * Math.sin(h);
+        const lateral = -dx * Math.sin(h) + dy * Math.cos(h);
+        if (along < this.spikeDropMinAhead || Math.abs(lateral) > this.spikeDropMaxLateral) {
           c._spikeArm = 0;
-          c._spikeDrop = { x: c.sprite.x, y: c.sprite.y, heading: h };
+          c._spikeStrips++;                 // refund the reserved strip
+          c._spikeCd = this.spikeDropCd;
+          this._spikeGlobalCd = Math.min(this._spikeGlobalCd, this.spikeDropCd); // let the pack retry soon
+        } else {
+          c._spikeArm -= dt;
+          if (c._spikeArm <= 0) {
+            c._spikeArm = 0;
+            c._spikeDrop = { x: c.sprite.x, y: c.sprite.y, heading: h };
+          }
         }
       }
     }
