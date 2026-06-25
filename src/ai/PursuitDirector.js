@@ -179,6 +179,9 @@ export class PursuitDirector {
     this.spikeLeadDist    = 150;   // px ahead of ITSELF a closing spike unit aims (keeps it driving forward)
     this.spikeCloseFactor = 0.78;  // while still well ahead it drives at this × your speed so you CLOSE the gap
     this.spikeCloseBuffer = 60;    // px past blockAhead at which it switches from closing-in to brake-checking
+    this.spikeDropMinDist = 140;   // px the cop must be AHEAD of you before an AHEAD-unit lays a strip —
+                                   // below this it pulls forward (spikes out) to open a safe gap rather
+                                   // than dropping on your nose. (The committed overtake uses spikeDropAhead.)
     this.spikeLeadMin     = 0;     // along-px above which a spike unit is treated as "ahead" (engages)
     this.spikeGlobalCooldown = 20; // s between ANY spike deploy across the WHOLE pack (so strips can't
                                    // carpet the road — one strip down, then a pack-wide cadence)
@@ -280,24 +283,31 @@ export class PursuitDirector {
                           (cop._spikeStrips == null || cop._spikeStrips > 0);
         cop._spikesOut = canDeploy; // ready to drop → carry the strip out (telegraph) while it lines up
         boost = this.spikeBoost; // ceiling so it can keep pace / close on a fast player
-        if (along > this.blockAhead + this.spikeCloseBuffer) {
-          // Well ahead → close the gap: drive FORWARD (aim ahead of the cop, no U-turn) but slow
-          // below your pace so you catch up to brake-check range.
-          cop.role = CopState.LEAD;
-          target = this._clearTarget(px, py, { x: cop.sprite.x + Math.cos(h) * this.spikeLeadDist, y: cop.sprite.y + Math.sin(h) * this.spikeLeadDist });
-          speedCap = Math.max(this.blockMinSpeed, speed * this.spikeCloseFactor);
-        } else {
-          // In range → brake-check (get in your way). Drop a strip if the cooldown's ready.
-          cop.role = CopState.BLOCK;
-          target = this._clearTarget(px, py, { x: px + Math.cos(h) * this.blockAhead, y: py + Math.sin(h) * this.blockAhead });
-          speedCap = Math.max(this.blockMinSpeed, speed * this.blockSpeedFactor);
-          if (canDeploy && (cop._spikeOutTimer || 0) >= this.spikeMinTelegraph) {
+        if (canDeploy) {
+          // Ready to deploy → pull forward to a SAFE gap (spikeDropMinDist) with spikes out (the
+          // telegraph), and only lay the strip once it's genuinely ahead — never on your nose. If
+          // you're right on its tail (along < min) it just keeps pulling away until the gap opens.
+          cop.role = CopState.SPIKE;
+          const dd = this.spikeDropMinDist + 40; // aim a touch past the floor so it clears it cleanly
+          target = this._clearTarget(px, py, { x: px + Math.cos(h) * dd, y: py + Math.sin(h) * dd });
+          if (along >= this.spikeDropMinDist && (cop._spikeOutTimer || 0) >= this.spikeMinTelegraph) {
             cop.role = CopState.DEPLOY;
             this._requestSpikeDrop(cop, h);
             this._spikeGlobalCd = this.spikeGlobalCooldown;
             cop._spikeCd = (cop._spikeStrips <= 0) ? this.spikeReload : this.spikeDropCd;
             if (cop._spikeStrips <= 0) cop._spikeStrips = (cop.unitDef.spikeStrips ?? this.spikeStripCount); // reloaded
           }
+        } else if (along > this.blockAhead + this.spikeCloseBuffer) {
+          // Not ready (reloading) and well ahead → close the gap: drive FORWARD (aim ahead of the
+          // cop, no U-turn) but slow below your pace so you catch up to brake-check range.
+          cop.role = CopState.LEAD;
+          target = this._clearTarget(px, py, { x: cop.sprite.x + Math.cos(h) * this.spikeLeadDist, y: cop.sprite.y + Math.sin(h) * this.spikeLeadDist });
+          speedCap = Math.max(this.blockMinSpeed, speed * this.spikeCloseFactor);
+        } else {
+          // Not ready and in range → brake-check (get in your way) while it reloads.
+          cop.role = CopState.BLOCK;
+          target = this._clearTarget(px, py, { x: px + Math.cos(h) * this.blockAhead, y: py + Math.sin(h) * this.blockAhead });
+          speedCap = Math.max(this.blockMinSpeed, speed * this.blockSpeedFactor);
         }
       } else if (cop === holder && cop._maneuver) {
         // Committed maneuver wins over box/pursue. It only chooses WHERE (a drivable

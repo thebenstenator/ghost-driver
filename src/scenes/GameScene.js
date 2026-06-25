@@ -2084,6 +2084,7 @@ this.interceptAheadDist = ${this.interceptAheadDist}; this.interceptEntrySpeed =
     spike.add(d, "spikeSide", 0, 120, 2).name("Sprint swing-wide (px)");
     spike.add(d, "spikeBoost", 0, 300, 10).name("Sprint speed boost (px/s)");
     spike.add(d, "spikeDropAhead", 0, 400, 5).name("Deploy when ahead-by (px)");
+    spike.add(d, "spikeDropMinDist", 40, 400, 5).name("Ahead-unit min drop gap (px)");
     spike.add(d, "spikeMinTelegraph", 0, 3, 0.1).name("Min spikes-out before drop (s)");
     spike.add(d, "spikeGlobalCooldown", 0, 40, 0.5).name("Global deploy cooldown (s)");
     spike.add(d, "spikeCloseFactor", 0.3, 1, 0.02).name("Close-in speed × yours");
@@ -2108,7 +2109,7 @@ this.interceptAheadDist = ${this.interceptAheadDist}; this.interceptEntrySpeed =
       .add({ copy: () => this._copyManeuverStats() }, "copy")
       .name("Copy Maneuvers → Console");
 
-    this._persistPanel(gui, "gd_maneuverTune_v18"); // bumped: spikeMinTelegraph (lead before drop)
+    this._persistPanel(gui, "gd_maneuverTune_v19"); // bumped: spikeDropMinDist (ahead-unit safe gap)
 
     gui.domElement.style.position = "fixed";
     gui.domElement.style.top = "8px";
