@@ -45,7 +45,7 @@ export class ScreenEdgeFx {
     this.colorLerp = 0.12; // 0..1 per-60fps-frame cross-fade rate between mode colours
     this.breatheAmp = 5; // px the resting band swells ± as it "breathes" (subtle; 0 = static)
     this.breathePeriod = 3; // s for one full breathe in-and-out (slow)
-    this.cornerRadius = 18; // px inner-corner radius — rounds the bars around each corner (0 = square)
+    this.cornerRadius = 9; // px inner-corner radius — rounds the bars around each corner (0 = square)
     this.pursueColor = 0xff2b2b; // red — active chase (cops have sight)
     this.holdColor = 0x4a90ff; // blue — lost sight, pre-ditch hold (matches the heat bar)
     this.cooldownColor = 0x4a90ff; // blue — ditched, area cooling

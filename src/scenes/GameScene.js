@@ -151,10 +151,27 @@ export class GameScene extends Phaser.Scene {
     this.nitroSpeedMult = 1.4;  // top-speed ×multiplier while boosting (the new ceiling)
     this.nitroTimer = 0;        // s remaining on the active boost (0 = not boosting)
 
-    this.spikes = []; // deployed spike strips (hazard wiring next; visible placeholder for now)
+    this.spikes = []; // deployed spike strips (cop hazard)
     this.spikeLifetime = 20; // s a dropped strip persists before it despawns
     this.spikeStripLen = 28; // px across — a cop-deployed strip is ~car-width (DODGEABLE). Roadblock
                              // spike strips (future, L3+) stay wider; they pass their own width.
+    // --- Cop spike HAZARD effect: driving over a strip BLOWS YOUR TIRES — a heavy, lasting cripple
+    // (capped top speed + degraded grip/accel + a pull to one side). It robs the momentum that keeps
+    // you un-bustable, so spikes SET UP a bust rather than deal one. Intended counter is the (future)
+    // Repair Kit gadget — _repairTires() clears it instantly; until then it heals slowly on its own
+    // over spikeCrippleDuration so it isn't a soft-lock. Applied non-destructively in the update loop
+    // (multiplies live car stats for the frame, then restores — same approach as nitro/ram-bog). ---
+    this.spikeContactPad = 14;     // px added to the strip half-depth for the player-overlap test
+    this.spikeHitScrub = 0.3;      // fraction of speed scrubbed on the contact jolt
+    this.spikeWobble = 0.12;       // rad of one-shot random yaw kick on contact (the blowout lurch)
+    this.spikeCrippleDuration = 25;// s a blowout takes to fully heal on its own (heavy/long)
+    this.spikeSpeedCap = 0.5;      // top-speed × at full blowout (eases back to 1 as it heals)
+    this.spikeAccelMult = 0.55;    // acceleration × at full blowout
+    this.spikeGripMult = 0.6;      // grip × at full blowout (looser → slides more)
+    this.spikePull = 0.25;         // rad/s steer pull to one side at full blowout (counter-steerable)
+    this.spikeCrippleTime = 0;     // s remaining on the active blowout (0 = tires fine)
+    this._spikePullSign = 1;       // which side the pull goes (set per hit)
+    this._onSpikes = false;        // rising-edge tracker so a drive-over fires once, not every frame
     this.roadblocks = []; // placed block formations (each = dynamic car bodies + visuals)
     // Roadblock cars are DYNAMIC bodies with mass — you SHOVE through them (losing speed),
     // not a brick wall. Player↔car collision is handled by the rotating CAPSULE (so when a
@@ -410,6 +427,7 @@ export class GameScene extends Phaser.Scene {
       this.heatLabel,
       this.reinforceText,
       this.killLightsText,
+      this.spikeText,
       this.garageText,
       this.oilText,
       this.nitroText,
@@ -1490,18 +1508,25 @@ export class GameScene extends Phaser.Scene {
     return strip;
   }
 
-  // Age out deployed strips and redraw them. (Collision/tire-pop wiring comes next.)
+  // Age out deployed strips, redraw them, and pop the player's tires on contact.
   _updateSpikes(px, py, dt) {
     const g = this.spikeGfx;
     g.clear();
-    if (!this.spikes.length) return;
+    // Heal an active blowout slowly over time (the Repair Kit will clear it instantly later).
+    if (this.spikeCrippleTime > 0)
+      this.spikeCrippleTime = Math.max(0, this.spikeCrippleTime - dt);
+    if (!this.spikes.length) { this._onSpikes = false; return; }
+    let onAny = false;
     for (const s of [...this.spikes]) {
       s.t += dt;
       const life = s.life ?? this.spikeLifetime;
       if (s.t > life) { this.spikes = this.spikes.filter((o) => o !== s); continue; }
+      // Contact: distance from the player to the strip's line segment (length len, across travel).
+      const cos = Math.cos(s.angle), sin = Math.sin(s.angle), hl = s.len / 2, hd = s.depth / 2;
+      const d = this._pointSegDist(px, py, s.x - hl * cos, s.y - hl * sin, s.x + hl * cos, s.y + hl * sin);
+      if (d < hd + this.spikeContactPad) onAny = true;
       // Fade out over the last 3s of life.
       const fade = Phaser.Math.Clamp((life - s.t) / 3, 0, 1);
-      const cos = Math.cos(s.angle), sin = Math.sin(s.angle), hl = s.len / 2, hd = s.depth / 2;
       // strip body (drawn as an absolute-point polygon — no transform needed)
       g.fillStyle(0x222222, 0.55 * fade);
       const corners = [
@@ -1520,7 +1545,35 @@ export class GameScene extends Phaser.Scene {
         g.fillPoints([new Phaser.Geom.Point(tip.x, tip.y), new Phaser.Geom.Point(b1.x, b1.y), new Phaser.Geom.Point(b2.x, b2.y)], true);
       }
     }
+    // Rising edge: blow the tires the frame the player first touches a strip (not every frame on it).
+    if (onAny && !this._onSpikes) this._blowTires();
+    this._onSpikes = onAny;
   }
+
+  // Shortest distance from point (px,py) to the segment (ax,ay)-(bx,by).
+  _pointSegDist(px, py, ax, ay, bx, by) {
+    const dx = bx - ax, dy = by - ay;
+    const len2 = dx * dx + dy * dy;
+    let t = len2 ? ((px - ax) * dx + (py - ay) * dy) / len2 : 0;
+    t = Math.max(0, Math.min(1, t));
+    const cx = ax + t * dx, cy = ay + t * dy;
+    return Math.hypot(px - cx, py - cy);
+  }
+
+  // Cop spike hit → BLOW THE TIRES: a one-shot jolt (speed scrub + lurch) then a heavy, lasting
+  // cripple the update loop applies (capped speed + degraded grip/accel + a pull to one side).
+  _blowTires() {
+    if (this.busted || this.paused) return;
+    this.spikeCrippleTime = this.spikeCrippleDuration; // refresh to full severity
+    this._spikePullSign = Math.random() < 0.5 ? -1 : 1; // which side blew
+    const keep = 1 - this.spikeHitScrub;                // jolt: scrub momentum on contact
+    this.car.vx *= keep; this.car.vy *= keep;
+    if (this.car.sprite.body) this.car.sprite.body.setVelocity(this.car.vx, this.car.vy);
+    this.car.facing += (Math.random() * 2 - 1) * this.spikeWobble; // brief physical lurch
+  }
+
+  // Clear a blowout instantly — the hook the (future) Repair Kit gadget calls.
+  _repairTires() { this.spikeCrippleTime = 0; }
 
   // Gadget: drop an oil slick BEHIND the player (one charge). The patch is a cluster of dark
   // blobs (a splotchy mess) ~1.5× the car width across; cops that drive over it slide.
@@ -2605,6 +2658,19 @@ bleed: { fastFrac: ${b.fastFrac}, fastRate: ${b.fastRate}, slowRate: ${b.slowRat
       .setDepth(100)
       .setAlpha(0);
 
+    // Blown-tires warning — bottom-centre (above the garage/lights rows), only while crippled.
+    this.spikeText = this.add
+      .text(width / 2, this.scale.height - 72, "⚠ BLOWN TIRES", {
+        fontFamily: "monospace",
+        fontSize: "14px",
+        fontStyle: "bold",
+        color: "#ff5a3c",
+      })
+      .setOrigin(0.5, 1)
+      .setScrollFactor(0)
+      .setDepth(100)
+      .setAlpha(0);
+
     // Parking-garage status — shown only while inside a garage (HIDDEN vs SEEN).
     this.garageText = this.add
       .text(width / 2, this.scale.height - 50, "", {
@@ -3201,7 +3267,21 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
     nitro.add(this, "nitroAccelMult", 1, 4, 0.05).name("Accel ×");
     nitro.add(this, "nitroSpeedMult", 1, 3, 0.05).name("Top speed ×");
 
-    this._persistPanel(gui, "gd_gadgetTune_v7"); // bumped: nitro accel default 1.8 → 1.3
+    // Cop spike HAZARD effect (not a player gadget — the cripple you take from driving over a
+    // strip). Lives here so it's tunable in normal pursuit playtest. A "Test blowout" button
+    // triggers it without needing a spike unit on the road.
+    const spk = gui.addFolder("Cop Spikes (hazard)");
+    spk.add(this, "spikeCrippleDuration", 2, 60, 1).name("Cripple duration (s)");
+    spk.add(this, "spikeSpeedCap", 0.2, 1, 0.05).name("Top speed × (full)");
+    spk.add(this, "spikeAccelMult", 0.2, 1, 0.05).name("Accel × (full)");
+    spk.add(this, "spikeGripMult", 0.2, 1, 0.05).name("Grip × (full)");
+    spk.add(this, "spikePull", 0, 1, 0.02).name("Pull to side (rad/s)");
+    spk.add(this, "spikeHitScrub", 0, 0.8, 0.05).name("Contact speed scrub");
+    spk.add(this, "spikeWobble", 0, 0.5, 0.02).name("Contact lurch (rad)");
+    spk.add({ test: () => this._blowTires() }, "test").name("Test blowout");
+    spk.add({ repair: () => this._repairTires() }, "repair").name("Repair (clear)");
+
+    this._persistPanel(gui, "gd_gadgetTune_v8"); // bumped: added Cop Spikes hazard levers
 
     // Anchored to the BOTTOM-RIGHT so the panel grows UPWARD when folders expand and stays
     // clear of the bottom-left spawn panel. CRITICAL: clear top/left to "auto" — lil-gui's
@@ -3721,7 +3801,31 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
       this.car.maxSpeed *= this.nitroSpeedMult;
     }
 
+    // Spike blowout: a heavy cripple while the timer runs, easing out as it heals. Scales accel,
+    // top speed AND grip down by severity (1=fresh→0=healed) and adds a counter-steerable pull to
+    // one side via the car's external yaw. Restored after update (reverse order: spike→nitro→bog).
+    let _spk = null;
+    if (this.spikeCrippleTime > 0) {
+      const sev = Math.min(1, this.spikeCrippleTime / this.spikeCrippleDuration);
+      const ease = (mult) => 1 - (1 - mult) * sev; // = mult at sev 1, → 1 (no effect) at sev 0
+      _spk = {
+        a: this.car.acceleration, m: this.car.maxSpeed,
+        gl: this.car.gripLow, gh: this.car.gripHigh,
+      };
+      this.car.acceleration *= ease(this.spikeAccelMult);
+      this.car.maxSpeed *= ease(this.spikeSpeedCap);
+      this.car.gripLow *= ease(this.spikeGripMult);
+      this.car.gripHigh *= ease(this.spikeGripMult);
+      this.car._pitYaw = (this.car._pitYaw || 0) + this._spikePullSign * this.spikePull * sev;
+    }
+
     this.car.update(delta, controls);
+    if (_spk != null) {
+      this.car.acceleration = _spk.a;
+      this.car.maxSpeed = _spk.m;
+      this.car.gripLow = _spk.gl;
+      this.car.gripHigh = _spk.gh;
+    }
     if (_nitroAccel != null) {
       this.car.acceleration = _nitroAccel;
       this.car.maxSpeed = _nitroSpeed;
@@ -3735,6 +3839,11 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
 
     // Kill Lights stealth indicator (bottom-centre) follows the lights-off state.
     this.killLightsText.setAlpha(this.car.lightsOff ? 1 : 0);
+
+    // Blown-tires warning — visible while a spike blowout is active, pulsing for urgency.
+    this.spikeText.setAlpha(
+      this.spikeCrippleTime > 0 ? 0.55 + 0.45 * Math.abs(Math.sin(_time / 180)) : 0,
+    );
 
     // Gadget charges (bottom-left): filled/empty pips for the Oil Slick.
     this.oilText
