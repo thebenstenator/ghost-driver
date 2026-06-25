@@ -246,6 +246,15 @@ export class PursuitDirector {
         cop.role = CopState.PIT;
         target = { x: px, y: py };
         boost = this.pitBoost;
+      } else if (cop._spikeArm > 0) {
+        // TELEGRAPH in progress: HOLD the lead ahead of the player (pace them, never slower) so when
+        // the strip lands it's still in FRONT. Easing back now would let the player overtake and the
+        // strip would drop behind them (the bug this branch fixes). Aim ahead of the cop (no U-turn);
+        // the ease-in-front (DEPLOY) only kicks in once the strip has actually landed.
+        cop.role = CopState.DEPLOY;
+        target = this._clearTarget(px, py, { x: cop.sprite.x + Math.cos(h) * this.spikeLeadDist, y: cop.sprite.y + Math.sin(h) * this.spikeLeadDist });
+        speedCap = Math.max(this.blockMinSpeed, speed); // match the player → the lead holds steady
+        boost = this.spikeBoost;                         // headroom to keep pace with a fast player
       } else if (cop === spiker && cop._spikeRun) {
         // Spike run: SPIKE = sprint ahead (boost, swing wide like an overtake); DEPLOY = it has
         // dropped and now eases in front so the player drives onto the strip. The drop itself is
