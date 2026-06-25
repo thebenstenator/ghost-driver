@@ -9,12 +9,13 @@ permissions:
   pages: write
   id-token: write
 
-# Only one Pages deployment at a time. Queue (don't cancel) so an in-progress deploy
-# finishes instead of two racing for the single deployment slot (the "in progress
-# deployment, please cancel or wait" error).
+# Only one Pages deployment at a time. Cancel any in-progress/queued run when a newer
+# push lands, so the LATEST build always wins — and a wedged "in progress" deploy can't
+# stack everything up behind it (the failure mode of cancel-in-progress: false). For a
+# static site where only the newest build matters, interrupting a mid-flight deploy is fine.
 concurrency:
   group: "pages"
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   deploy:
