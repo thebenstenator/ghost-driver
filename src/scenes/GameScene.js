@@ -1515,6 +1515,9 @@ export class GameScene extends Phaser.Scene {
     // Heal an active blowout slowly over time (the Repair Kit will clear it instantly later).
     if (this.spikeCrippleTime > 0)
       this.spikeCrippleTime = Math.max(0, this.spikeCrippleTime - dt);
+    // Telegraph: cops about to drop spikes (cop._spikeArm > 0) show warning teeth behind their
+    // bumper. Drawn before the no-strips bail because there's no strip on the ground yet.
+    this._drawSpikeTelegraphs(g);
     if (!this.spikes.length) { this._onSpikes = false; return; }
     let onAny = false;
     for (const s of [...this.spikes]) {
@@ -1574,6 +1577,36 @@ export class GameScene extends Phaser.Scene {
 
   // Clear a blowout instantly — the hook the (future) Repair Kit gadget calls.
   _repairTires() { this.spikeCrippleTime = 0; }
+
+  // Telegraph render: any cop the director has ARMED (cop._spikeArm > 0) shows a row of warning
+  // teeth behind its rear bumper, across its travel (where the strip will land), blinking faster +
+  // reddening as the drop nears — so the player gets ~spikeTelegraph seconds to react.
+  _drawSpikeTelegraphs(g) {
+    const tel = this.director ? this.director.spikeTelegraph : 0;
+    if (tel <= 0) return;
+    for (const cop of this.cops) {
+      const arm = cop._spikeArm || 0;
+      if (arm <= 0 || !cop.sprite) continue;
+      const prog = Phaser.Math.Clamp(1 - arm / tel, 0, 1); // 0 just armed → 1 about to drop
+      const f = cop.facing;
+      const bx = cop.sprite.x - Math.cos(f) * 22; // behind the rear bumper
+      const by = cop.sprite.y - Math.sin(f) * 22;
+      const a = f + Math.PI / 2; // teeth lie ACROSS travel, as the strip will
+      const cos = Math.cos(a), sin = Math.sin(a);
+      const blink = 0.4 + 0.6 * Math.abs(Math.sin(this.time.now / (260 - prog * 200)));
+      const col = Phaser.Display.Color.GetColor(255, Math.round(160 * (1 - prog)), 40); // amber → red
+      g.fillStyle(col, 0.9 * blink);
+      const teeth = 7, len = this.spikeStripLen, hd = 6;
+      for (let i = 0; i < teeth; i++) {
+        const fr = (i + 0.5) / teeth - 0.5;
+        const tx = bx + fr * len * cos, ty = by + fr * len * sin;
+        const tip = { x: tx - (hd + 4) * sin, y: ty + (hd + 4) * cos };
+        const b1 = { x: tx - 3 * cos - hd * sin, y: ty - 3 * sin + hd * cos };
+        const b2 = { x: tx + 3 * cos - hd * sin, y: ty + 3 * sin + hd * cos };
+        g.fillPoints([new Phaser.Geom.Point(tip.x, tip.y), new Phaser.Geom.Point(b1.x, b1.y), new Phaser.Geom.Point(b2.x, b2.y)], true);
+      }
+    }
+  }
 
   // Gadget: drop an oil slick BEHIND the player (one charge). The patch is a cluster of dark
   // blobs (a splotchy mess) ~1.5× the car width across; cops that drive over it slide.
@@ -2031,6 +2064,7 @@ this.interceptAheadDist = ${this.interceptAheadDist}; this.interceptEntrySpeed =
     spike.add(d, "spikeSide", 0, 120, 2).name("Sprint swing-wide (px)");
     spike.add(d, "spikeBoost", 0, 300, 10).name("Sprint speed boost (px/s)");
     spike.add(d, "spikeDropAhead", 0, 400, 5).name("Deploy when ahead-by (px)");
+    spike.add(d, "spikeTelegraph", 0, 6, 0.25).name("Telegraph warning (s)");
     spike.add(d, "spikeGlobalCooldown", 0, 40, 0.5).name("Global deploy cooldown (s)");
     spike.add(d, "spikeCloseFactor", 0.3, 1, 0.02).name("Close-in speed × yours");
     spike.add(d, "spikeCloseBuffer", 0, 200, 5).name("Brake-check switch (px)");
@@ -2054,7 +2088,7 @@ this.interceptAheadDist = ${this.interceptAheadDist}; this.interceptEntrySpeed =
       .add({ copy: () => this._copyManeuverStats() }, "copy")
       .name("Copy Maneuvers → Console");
 
-    this._persistPanel(gui, "gd_maneuverTune_v14"); // bumped: spikeCloseFactor, spikeCloseBuffer + maxActiveRoadblocks
+    this._persistPanel(gui, "gd_maneuverTune_v15"); // bumped: spikeTelegraph warning window
 
     gui.domElement.style.position = "fixed";
     gui.domElement.style.top = "8px";

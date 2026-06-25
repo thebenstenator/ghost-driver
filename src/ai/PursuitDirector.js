@@ -168,6 +168,9 @@ export class PursuitDirector {
     this.spikeDropCd      = 2.5;   // s between drops (and between runs) for one unit
     this.spikeReload      = 12.0;  // s reload after a unit empties its strip count
     this.spikeStripCount  = 3;     // strips a unit carries before the reload (per-unit default in units.js)
+    this.spikeTelegraph   = 3.0;   // s of WARNING before a strip lands: the cop shows spikes behind its
+                                   // rear bumper (drawn by GameScene from cop._spikeArm) so the player
+                                   // can react. 0 = no telegraph (lands instantly).
     this.spikeEaseAhead   = 70;    // px ahead the deployer eases to after dropping (forward-block)
     this.spikeEaseFactor  = 0.7;   // it eases to this fraction of your speed so the pack catches up
     // LEAD: a spike unit that's already ahead (it spawned ahead) drives to stay this far in front,
@@ -498,7 +501,19 @@ export class PursuitDirector {
   // is replaced by a DROP. Single holder; sprint AHEAD, deploy a strip into the player's path,
   // ease in front, then cool down (or reload when the strip count empties). Returns the holder.
   _updateSpikeRun(cops, px, py, h, speed, dt) {
-    for (const c of cops) c._spikeCd = Math.max(0, (c._spikeCd || 0) - dt);
+    for (const c of cops) {
+      c._spikeCd = Math.max(0, (c._spikeCd || 0) - dt);
+      // Land an armed drop once its telegraph elapses — at the cop's CURRENT position, across the
+      // player's live heading, so a wide-swung deployer still lays it in the lane. Independent of
+      // the run lifecycle: even if the run ended, an armed strip still drops.
+      if (c._spikeArm > 0) {
+        c._spikeArm -= dt;
+        if (c._spikeArm <= 0) {
+          c._spikeArm = 0;
+          c._spikeDrop = { x: c.sprite.x, y: c.sprite.y, heading: h };
+        }
+      }
+    }
     this._spikeGlobalCd = Math.max(0, this._spikeGlobalCd - dt);
 
     let s = this._spikeHolder;
@@ -566,8 +581,12 @@ export class PursuitDirector {
   _requestSpikeDrop(cop, h) {
     if (cop._spikeStrips == null) cop._spikeStrips = (cop.unitDef.spikeStrips ?? this.spikeStripCount);
     if (cop._spikeStrips <= 0) return;
-    cop._spikeDrop = { x: cop.sprite.x, y: cop.sprite.y, heading: h };
-    cop._spikeStrips--;
+    cop._spikeStrips--; // reserve the strip now (it lands after the telegraph)
+    // ARM the drop: don't lay the strip yet — telegraph it for spikeTelegraph seconds (cop shows
+    // warning teeth behind its bumper, drawn by GameScene from cop._spikeArm), then _updateSpikeRun
+    // lands it. With no telegraph configured, drop immediately.
+    if (this.spikeTelegraph > 0) cop._spikeArm = this.spikeTelegraph;
+    else cop._spikeDrop = { x: cop.sprite.x, y: cop.sprite.y, heading: h };
   }
 
   // End a spike run: short cooldown between drops, or a long reload (refilling) once empty.
