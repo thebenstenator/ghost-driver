@@ -9,6 +9,13 @@ permissions:
   pages: write
   id-token: write
 
+# Only one Pages deployment at a time. Queue (don't cancel) so an in-progress deploy
+# finishes instead of two racing for the single deployment slot (the "in progress
+# deployment, please cancel or wait" error).
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
 jobs:
   deploy:
     environment:
@@ -21,7 +28,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: 'npm'
 
       - name: Install dependencies
