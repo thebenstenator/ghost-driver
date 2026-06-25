@@ -166,10 +166,10 @@ export class PursuitDirector {
     this.spikeProgressEps = 8;     // px of forward gain that counts as real progress (ignores jitter)
     this.spikeStallTime   = 1.5;   // s of NO progress before the run gives up
     this.spikeDeployHold  = 3.0;   // s the deployer holds in front after dropping (if you don't pass it)
-    this.spikeDropCd      = 2.5;   // s between drops (and between runs) for one unit
+    this.spikeDropCd      = 12;    // s between drops (and between runs) for one unit
     this.spikeReload      = 12.0;  // s reload after a unit empties its strip count
     this.spikeStripCount  = 3;     // strips a unit carries before the reload (per-unit default in units.js)
-    this.spikeMinTelegraph = 0.7;  // s the cop must have its spikes OUT (cop._spikesOut: overtaking /
+    this.spikeMinTelegraph = 2;    // s the cop must have its spikes OUT (cop._spikesOut: overtaking /
                                    // lining up) before a strip can drop. The overtake/close-in approach
                                    // covers this for free in normal play — it just stops a cop that
                                    // spawns already in position from dropping with no visible warning.
