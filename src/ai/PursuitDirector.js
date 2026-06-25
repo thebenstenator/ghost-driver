@@ -168,6 +168,10 @@ export class PursuitDirector {
     this.spikeDropCd      = 2.5;   // s between drops (and between runs) for one unit
     this.spikeReload      = 12.0;  // s reload after a unit empties its strip count
     this.spikeStripCount  = 3;     // strips a unit carries before the reload (per-unit default in units.js)
+    this.spikeMinTelegraph = 0.7;  // s the cop must have its spikes OUT (cop._spikesOut: overtaking /
+                                   // lining up) before a strip can drop. The overtake/close-in approach
+                                   // covers this for free in normal play — it just stops a cop that
+                                   // spawns already in position from dropping with no visible warning.
     this.spikeEaseAhead   = 70;    // px ahead the deployer eases to after dropping (forward-block)
     this.spikeEaseFactor  = 0.7;   // it eases to this fraction of your speed so the pack catches up
     // LEAD: a spike unit that's already ahead (it spawned ahead) drives to stay this far in front,
@@ -287,7 +291,7 @@ export class PursuitDirector {
           cop.role = CopState.BLOCK;
           target = this._clearTarget(px, py, { x: px + Math.cos(h) * this.blockAhead, y: py + Math.sin(h) * this.blockAhead });
           speedCap = Math.max(this.blockMinSpeed, speed * this.blockSpeedFactor);
-          if (canDeploy) {
+          if (canDeploy && (cop._spikeOutTimer || 0) >= this.spikeMinTelegraph) {
             cop.role = CopState.DEPLOY;
             this._requestSpikeDrop(cop, h);
             this._spikeGlobalCd = this.spikeGlobalCooldown;
@@ -503,7 +507,12 @@ export class PursuitDirector {
   // is replaced by a DROP. Single holder; sprint AHEAD, deploy a strip into the player's path,
   // ease in front, then cool down (or reload when the strip count empties). Returns the holder.
   _updateSpikeRun(cops, px, py, h, speed, dt) {
-    for (const c of cops) c._spikeCd = Math.max(0, (c._spikeCd || 0) - dt);
+    for (const c of cops) {
+      c._spikeCd = Math.max(0, (c._spikeCd || 0) - dt);
+      // Accrue how long this cop has had its spikes OUT (last frame's flag) — the telegraph lead the
+      // drop is gated on. Resets the moment it's not actively deploying.
+      c._spikeOutTimer = c._spikesOut ? (c._spikeOutTimer || 0) + dt : 0;
+    }
     this._spikeGlobalCd = Math.max(0, this._spikeGlobalCd - dt);
 
     let s = this._spikeHolder;
@@ -522,7 +531,7 @@ export class PursuitDirector {
             // Track progress toward the front: any real forward gain resets the stall timer.
             if (along > run.bestAlong + this.spikeProgressEps) { run.bestAlong = along; run.stallT = 0; }
             else run.stallT += dt;
-            if (along > this.spikeDropAhead) {
+            if (along > this.spikeDropAhead && (s._spikeOutTimer || 0) >= this.spikeMinTelegraph) {
               if (this._spikeGlobalCd <= 0) {                      // pack-wide deploy cadence
                 this._requestSpikeDrop(s, h);
                 this._spikeGlobalCd = this.spikeGlobalCooldown;
