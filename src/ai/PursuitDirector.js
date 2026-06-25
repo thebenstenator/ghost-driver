@@ -168,13 +168,6 @@ export class PursuitDirector {
     this.spikeDropCd      = 2.5;   // s between drops (and between runs) for one unit
     this.spikeReload      = 12.0;  // s reload after a unit empties its strip count
     this.spikeStripCount  = 3;     // strips a unit carries before the reload (per-unit default in units.js)
-    this.spikeTelegraph   = 3.0;   // s of WARNING before a strip lands: the cop shows spikes behind its
-                                   // rear bumper (drawn by GameScene from cop._spikeArm) so the player
-                                   // can react. 0 = no telegraph (lands instantly).
-    this.spikeDropMinAhead = 10;   // px the cop must still be AHEAD of the player (along their heading)
-                                   // for an armed drop to land — pass it and the drop CANCELS.
-    this.spikeDropMaxLateral = 95; // px the cop must be within of the player's path lane to drop — turn
-                                   // away and it CANCELS (the strip would miss your route anyway).
     this.spikeEaseAhead   = 70;    // px ahead the deployer eases to after dropping (forward-block)
     this.spikeEaseFactor  = 0.7;   // it eases to this fraction of your speed so the pack catches up
     // LEAD: a spike unit that's already ahead (it spawned ahead) drives to stay this far in front,
@@ -241,6 +234,9 @@ export class PursuitDirector {
     for (const cop of cops) {
       let target, speedCap = Infinity, boost = 0;
       cop.parkAngle = null;   // cleared unless the roadblock branch parks this cop
+      cop._spikesOut = false; // set true below while actively working a deploy — the TELEGRAPH: a
+                              // spike cop carries its strip visibly out the back during the overtake/
+                              // approach (drawn by GameScene), then drops the instant it's in position.
 
       if (cop === pitAttacker) {
         // Committed PIT: drive straight INTO the player's rear quarter (the swipe). The cop
@@ -250,21 +246,13 @@ export class PursuitDirector {
         cop.role = CopState.PIT;
         target = { x: px, y: py };
         boost = this.pitBoost;
-      } else if (cop._spikeArm > 0) {
-        // TELEGRAPH in progress: HOLD the lead ahead of the player (pace them, never slower) so when
-        // the strip lands it's still in FRONT. Easing back now would let the player overtake and the
-        // strip would drop behind them (the bug this branch fixes). Aim ahead of the cop (no U-turn);
-        // the ease-in-front (DEPLOY) only kicks in once the strip has actually landed.
-        cop.role = CopState.DEPLOY;
-        target = this._clearTarget(px, py, { x: cop.sprite.x + Math.cos(h) * this.spikeLeadDist, y: cop.sprite.y + Math.sin(h) * this.spikeLeadDist });
-        speedCap = Math.max(this.blockMinSpeed, speed); // match the player → the lead holds steady
-        boost = this.spikeBoost;                         // headroom to keep pace with a fast player
       } else if (cop === spiker && cop._spikeRun) {
-        // Spike run: SPIKE = sprint ahead (boost, swing wide like an overtake); DEPLOY = it has
-        // dropped and now eases in front so the player drives onto the strip. The drop itself is
-        // requested in _updateSpikeRun (cop._spikeDrop) and built by GameScene.
+        // Spike run: SPIKE = sprint ahead (boost, swing wide like an overtake) with spikes OUT;
+        // DEPLOY = it has dropped and now eases in front so the player drives onto the strip. The
+        // drop is requested in _updateSpikeRun (cop._spikeDrop) and built by GameScene.
         if (cop._spikeRun.phase === 'SPIKE') {
           cop.role = CopState.SPIKE;
+          cop._spikesOut = true; // overtaking to deploy → show the telegraph through the whole pass
           const perp = h + Math.PI / 2;
           const lat  = (cop.sprite.x - px) * Math.cos(perp) + (cop.sprite.y - py) * Math.sin(perp);
           const side = lat >= 0 ? 1 : -1;
@@ -286,6 +274,7 @@ export class PursuitDirector {
         const along = this._along(cop, px, py, h);
         const canDeploy = (cop._spikeCd || 0) <= 0 && this._spikeGlobalCd <= 0 &&
                           (cop._spikeStrips == null || cop._spikeStrips > 0);
+        cop._spikesOut = canDeploy; // ready to drop → carry the strip out (telegraph) while it lines up
         boost = this.spikeBoost; // ceiling so it can keep pace / close on a fast player
         if (along > this.blockAhead + this.spikeCloseBuffer) {
           // Well ahead → close the gap: drive FORWARD (aim ahead of the cop, no U-turn) but slow
@@ -514,32 +503,7 @@ export class PursuitDirector {
   // is replaced by a DROP. Single holder; sprint AHEAD, deploy a strip into the player's path,
   // ease in front, then cool down (or reload when the strip count empties). Returns the holder.
   _updateSpikeRun(cops, px, py, h, speed, dt) {
-    for (const c of cops) {
-      c._spikeCd = Math.max(0, (c._spikeCd || 0) - dt);
-      // Land an armed drop once its telegraph elapses — at the cop's CURRENT position, across the
-      // player's live heading, so a wide-swung deployer still lays it in the lane. Independent of
-      // the run lifecycle: even if the run ended, an armed strip still drops.
-      if (c._spikeArm > 0) {
-        // ABORT if the player evaded the drop: the cop must still be IN FRONT (ahead along the
-        // player's heading) and roughly in their lane. Passing it or turning away cancels the drop,
-        // refunds the strip and frees the pack to retry — no strip lands behind you / off your route.
-        const dx = c.sprite.x - px, dy = c.sprite.y - py;
-        const along = dx * Math.cos(h) + dy * Math.sin(h);
-        const lateral = -dx * Math.sin(h) + dy * Math.cos(h);
-        if (along < this.spikeDropMinAhead || Math.abs(lateral) > this.spikeDropMaxLateral) {
-          c._spikeArm = 0;
-          c._spikeStrips++;                 // refund the reserved strip
-          c._spikeCd = this.spikeDropCd;
-          this._spikeGlobalCd = Math.min(this._spikeGlobalCd, this.spikeDropCd); // let the pack retry soon
-        } else {
-          c._spikeArm -= dt;
-          if (c._spikeArm <= 0) {
-            c._spikeArm = 0;
-            c._spikeDrop = { x: c.sprite.x, y: c.sprite.y, heading: h };
-          }
-        }
-      }
-    }
+    for (const c of cops) c._spikeCd = Math.max(0, (c._spikeCd || 0) - dt);
     this._spikeGlobalCd = Math.max(0, this._spikeGlobalCd - dt);
 
     let s = this._spikeHolder;
@@ -607,12 +571,11 @@ export class PursuitDirector {
   _requestSpikeDrop(cop, h) {
     if (cop._spikeStrips == null) cop._spikeStrips = (cop.unitDef.spikeStrips ?? this.spikeStripCount);
     if (cop._spikeStrips <= 0) return;
-    cop._spikeStrips--; // reserve the strip now (it lands after the telegraph)
-    // ARM the drop: don't lay the strip yet — telegraph it for spikeTelegraph seconds (cop shows
-    // warning teeth behind its bumper, drawn by GameScene from cop._spikeArm), then _updateSpikeRun
-    // lands it. With no telegraph configured, drop immediately.
-    if (this.spikeTelegraph > 0) cop._spikeArm = this.spikeTelegraph;
-    else cop._spikeDrop = { x: cop.sprite.x, y: cop.sprite.y, heading: h };
+    // Drop immediately — the cop is already in position (ahead, lined up). The telegraph was the
+    // overtake itself (spikes shown out the back via cop._spikesOut while it passed), so there's no
+    // wait here. The strip lands at the cop's position, across the player's travel.
+    cop._spikeDrop = { x: cop.sprite.x, y: cop.sprite.y, heading: h };
+    cop._spikeStrips--;
   }
 
   // End a spike run: short cooldown between drops, or a long reload (refilling) once empty.

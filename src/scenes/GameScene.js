@@ -1526,8 +1526,8 @@ export class GameScene extends Phaser.Scene {
     // Heal an active blowout slowly over time (the Repair Kit will clear it instantly later).
     if (this.spikeCrippleTime > 0)
       this.spikeCrippleTime = Math.max(0, this.spikeCrippleTime - dt);
-    // Telegraph: cops about to drop spikes (cop._spikeArm > 0) show warning teeth behind their
-    // bumper. Drawn before the no-strips bail because there's no strip on the ground yet.
+    // Telegraph: a spike cop working a deploy (cop._spikesOut) carries warning teeth behind its
+    // bumper. Drawn before the no-strips bail because there may be no strip on the ground yet.
     this._drawSpikeTelegraphs(g);
     if (!this.spikes.length) { this._onSpikes = false; return; }
     let onAny = false;
@@ -1589,16 +1589,13 @@ export class GameScene extends Phaser.Scene {
   // Clear a blowout instantly — the hook the (future) Repair Kit gadget calls.
   _repairTires() { this.spikeCrippleTime = 0; }
 
-  // Telegraph render: any cop the director has ARMED (cop._spikeArm > 0) shows a row of warning
-  // teeth behind its rear bumper, across its travel (where the strip will land), blinking faster +
-  // reddening as the drop nears — so the player gets ~spikeTelegraph seconds to react.
+  // Telegraph render: a spike cop actively working a deploy (director sets cop._spikesOut while it
+  // overtakes / lines up) carries its strip visibly out behind its rear bumper — a row of warning
+  // teeth across its travel that pulses for readability. The overtake IS the warning; it drops the
+  // instant it's in position (no countdown).
   _drawSpikeTelegraphs(g) {
-    const tel = this.director ? this.director.spikeTelegraph : 0;
-    if (tel <= 0) return;
     for (const cop of this.cops) {
-      const arm = cop._spikeArm || 0;
-      if (arm <= 0 || !cop.sprite) continue;
-      const prog = Phaser.Math.Clamp(1 - arm / tel, 0, 1); // 0 just armed → 1 about to drop
+      if (!cop._spikesOut || !cop.sprite) continue;
       const f = cop.facing;
       // Sit the cue JUST behind the rear bumper — offset by the cop's half-length so it clears the
       // car body (else it draws under the sprite and you can't see it). Teeth point further back.
@@ -1607,8 +1604,8 @@ export class GameScene extends Phaser.Scene {
       const by = cop.sprite.y - Math.sin(f) * back;
       const a = f + Math.PI / 2; // teeth lie ACROSS travel, as the strip will
       const cos = Math.cos(a), sin = Math.sin(a);
-      const blink = 0.45 + 0.55 * Math.abs(Math.sin(this.time.now / (260 - prog * 200)));
-      const col = Phaser.Display.Color.GetColor(255, Math.round(160 * (1 - prog)), 40); // amber → red
+      const blink = 0.5 + 0.5 * Math.abs(Math.sin(this.time.now / 140));
+      const col = 0xff7a1a; // warning amber — "this cop has spikes out"
       const teeth = 7, len = this.spikeStripLen, hd = 8;
       // Dark backing bar so the teeth read against the road, then the warning teeth on top.
       g.fillStyle(0x100805, 0.5 * blink);
@@ -2087,9 +2084,6 @@ this.interceptAheadDist = ${this.interceptAheadDist}; this.interceptEntrySpeed =
     spike.add(d, "spikeSide", 0, 120, 2).name("Sprint swing-wide (px)");
     spike.add(d, "spikeBoost", 0, 300, 10).name("Sprint speed boost (px/s)");
     spike.add(d, "spikeDropAhead", 0, 400, 5).name("Deploy when ahead-by (px)");
-    spike.add(d, "spikeTelegraph", 0, 6, 0.25).name("Telegraph warning (s)");
-    spike.add(d, "spikeDropMinAhead", -50, 150, 5).name("Cancel if not ahead-by (px)");
-    spike.add(d, "spikeDropMaxLateral", 30, 200, 5).name("Cancel if off-lane (px)");
     spike.add(d, "spikeGlobalCooldown", 0, 40, 0.5).name("Global deploy cooldown (s)");
     spike.add(d, "spikeCloseFactor", 0.3, 1, 0.02).name("Close-in speed × yours");
     spike.add(d, "spikeCloseBuffer", 0, 200, 5).name("Brake-check switch (px)");
@@ -2113,7 +2107,7 @@ this.interceptAheadDist = ${this.interceptAheadDist}; this.interceptEntrySpeed =
       .add({ copy: () => this._copyManeuverStats() }, "copy")
       .name("Copy Maneuvers → Console");
 
-    this._persistPanel(gui, "gd_maneuverTune_v16"); // bumped: spike drop abort thresholds
+    this._persistPanel(gui, "gd_maneuverTune_v17"); // bumped: removed spike telegraph/abort levers
 
     gui.domElement.style.position = "fixed";
     gui.domElement.style.top = "8px";
