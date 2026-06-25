@@ -2109,7 +2109,7 @@ this.interceptAheadDist = ${this.interceptAheadDist}; this.interceptEntrySpeed =
       .add({ copy: () => this._copyManeuverStats() }, "copy")
       .name("Copy Maneuvers → Console");
 
-    this._persistPanel(gui, "gd_maneuverTune_v19"); // bumped: spikeDropMinDist (ahead-unit safe gap)
+    this._persistPanel(gui, "gd_maneuverTune_v20"); // bumped: overtake/spike swing 30px, spikeBoost 135
 
     gui.domElement.style.position = "fixed";
     gui.domElement.style.top = "8px";

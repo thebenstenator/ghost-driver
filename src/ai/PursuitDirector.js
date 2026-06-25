@@ -77,9 +77,9 @@ export class PursuitDirector {
     this.maneuverRange     = 160;  // cop must be within this of the player to start/own a maneuver
     this.maneuverBehind    = 20;   // px the cop must be BEHIND the player to start an overtake
     this.overtakeAhead     = 260;  // px ahead of the player the overtaker sprints to (full speed)
-    this.overtakeSide      = 40;   // px lateral offset so it swings around you, not through you. MUST clear
-                                   // the capsule envelope (player capR + cop capR ≈ 23) or the cop can't get
-                                   // beside you — it rams your rear and friction pins it there. 40 leaves margin.
+    this.overtakeSide      = 30;   // px lateral offset so it swings around you, not through you — just past
+                                   // the car. MUST clear the capsule envelope (player capR + cop capR ≈ 23)
+                                   // or the cop can't get beside you (it rams your rear); 30 leaves ~7px.
     this.overtakeBoost     = 100;  // EXTRA top speed (px/s) while overtaking, so it can actually pass
     this.overtakeDone      = 50;   // px ahead the cop must reach to switch OVERTAKE → BLOCK
     this.blockAhead        = 90;   // px ahead the blocker sits to cut you off
@@ -153,10 +153,11 @@ export class PursuitDirector {
     this.spikeRange       = 320;   // px the cop must be within to start a run
     this.spikeBehind      = 20;    // px the cop must be BEHIND the player to start (it has to get ahead)
     this.spikeAhead       = 130;   // px ahead of the COP it aims (in the adjacent lane) — its forward lead
-    this.spikeSide        = 44;    // px lateral swing while sprinting — MUST clear the capsule envelope
-                                   // (~23px) or it can't get beside you to pass. The drop projects back
-                                   // onto your centreline anyway, so a wide swing still lands the strip in-lane.
-    this.spikeBoost       = 150;   // EXTRA top speed while sprinting — its own lever so it can actually get clear
+    this.spikeSide        = 30;    // px lateral swing while sprinting — just past the car. MUST clear the
+                                   // capsule envelope (~23px) or it can't get beside you to pass. The drop is
+                                   // PROJECTED onto your centreline (see _requestSpikeDrop), so a swing still
+                                   // lands the strip in-lane.
+    this.spikeBoost       = 135;   // EXTRA top speed while sprinting — its own lever so it can actually get clear
     this.spikeDropAhead   = 225;   // along-px ahead the cop must get before it DEPLOYS — a committed pass,
                                    // so the strip lands well in front of you (dodgeable), not on your nose
     // Give-up is PROGRESS-based, not a fixed clock: while the cop keeps gaining ground toward the
@@ -292,7 +293,7 @@ export class PursuitDirector {
           target = this._clearTarget(px, py, { x: px + Math.cos(h) * dd, y: py + Math.sin(h) * dd });
           if (along >= this.spikeDropMinDist && (cop._spikeOutTimer || 0) >= this.spikeMinTelegraph) {
             cop.role = CopState.DEPLOY;
-            this._requestSpikeDrop(cop, h);
+            this._requestSpikeDrop(cop, px, py, h);
             this._spikeGlobalCd = this.spikeGlobalCooldown;
             cop._spikeCd = (cop._spikeStrips <= 0) ? this.spikeReload : this.spikeDropCd;
             if (cop._spikeStrips <= 0) cop._spikeStrips = (cop.unitDef.spikeStrips ?? this.spikeStripCount); // reloaded
@@ -543,7 +544,7 @@ export class PursuitDirector {
             else run.stallT += dt;
             if (along > this.spikeDropAhead && (s._spikeOutTimer || 0) >= this.spikeMinTelegraph) {
               if (this._spikeGlobalCd <= 0) {                      // pack-wide deploy cadence
-                this._requestSpikeDrop(s, h);
+                this._requestSpikeDrop(s, px, py, h);
                 this._spikeGlobalCd = this.spikeGlobalCooldown;
                 run.phase = 'DEPLOY'; run.deployT = 0;
               } else {
@@ -587,13 +588,14 @@ export class PursuitDirector {
   // Queue a strip drop AT THE COP'S OWN POSITION (it's on a road → never inside a building, and it
   // reads as the cop laying it under itself), oriented across the player's travel. Since the cop is
   // ahead of you when it deploys, the strip still lands in your path.
-  _requestSpikeDrop(cop, h) {
+  _requestSpikeDrop(cop, px, py, h) {
     if (cop._spikeStrips == null) cop._spikeStrips = (cop.unitDef.spikeStrips ?? this.spikeStripCount);
     if (cop._spikeStrips <= 0) return;
-    // Drop immediately — the cop is already in position (ahead, lined up). The telegraph was the
-    // overtake itself (spikes shown out the back via cop._spikesOut while it passed), so there's no
-    // wait here. The strip lands at the cop's position, across the player's travel.
-    cop._spikeDrop = { x: cop.sprite.x, y: cop.sprite.y, heading: h };
+    // Drop on the player's CENTRELINE (in their path), NOT at the cop's literal position — a cop
+    // swung out to the side would otherwise lay the strip off to the side, missing your route.
+    // Project the cop's spot onto the player's heading line at its forward (along) distance.
+    const along = (cop.sprite.x - px) * Math.cos(h) + (cop.sprite.y - py) * Math.sin(h);
+    cop._spikeDrop = { x: px + Math.cos(h) * along, y: py + Math.sin(h) * along, heading: h };
     cop._spikeStrips--;
   }
 
