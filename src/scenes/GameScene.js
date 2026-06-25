@@ -178,6 +178,19 @@ export class GameScene extends Phaser.Scene {
     this.illumSpeedRef = 300;   // px/s — at/above this speed lights-off gives no stealth benefit
     this.sepRadius = 80; // separation: how close before cops repel
     this.sepStrength = 150; // separation: aim push strength
+    // Cop-cop YIELD (un-piling): a cop jammed nose-to-tail behind a teammate that's
+    // strictly closer to the player eases its throttle so the capsule resolver can flow
+    // the stack front-to-back instead of everyone pressing inward and locking. Tightly
+    // gated (near the player, barely moving, teammate within ~a car length DIRECTLY
+    // ahead, strictly closer) + ease-off-only (no steer/reverse) so it can't regress the
+    // swarm into a passive pack or shove anyone into a wall. See _shouldYield().
+    this.yieldEnabled = true;
+    this.yieldRange = 320; // px — only un-pile cops this close to the player (it's a contact knot)
+    this.yieldStuckSpeed = 35; // px/s — only a cop barely moving is "jammed"
+    this.yieldGap = 52; // px — teammate must be this close ahead to count as blocking
+    this.yieldCone = 0.55; // cos of half-angle — teammate must be roughly straight ahead
+    this.yieldHold = 0.3; // s — keep yielding this long after the block clears (anti-flicker)
+    this.yieldSpeed = 20; // px/s — eased throttle cap while yielding
     // Tier-1 rejoin band: a cop that falls behind blends its HANDLING toward a near-
     // kinematic profile (not just speed) so it stops washing into walls and rejoins
     // cleanly. Blend ramps from rbStart (no change) to rbFull (max). Invisible in
@@ -651,6 +664,39 @@ export class GameScene extends Phaser.Scene {
     return { x: target.x + sx * STRENGTH, y: target.y + sy * STRENGTH };
   }
 
+  // Cop-cop YIELD test: should THIS cop ease off because it's jammed behind a teammate
+  // that's closer to the player? All gates must hold (any one failing = drive normally):
+  //   1. near the player (yieldRange) — un-piling only matters in the contact knot.
+  //   2. barely moving (yieldStuckSpeed) — a cop with room is not jammed.
+  //   3. a teammate within yieldGap, roughly straight ahead toward the player (yieldCone),
+  //      and STRICTLY closer to the player than us (index breaks exact ties) — so only the
+  //      rear car of a stack yields, never both, and a cop pinning YOU (no teammate ahead)
+  //      never yields. Hysteresis (yieldHold) keeps it from flickering at the gate edge.
+  _shouldYield(cop, px, py, dt) {
+    if (!this.yieldEnabled) { cop._yieldT = 0; return false; }
+    const cx = cop.sprite.x, cy = cop.sprite.y;
+    const myD = Math.hypot(px - cx, py - cy);
+    let blocked = false;
+    if (myD < this.yieldRange && cop.getSpeed() < this.yieldStuckSpeed) {
+      // unit toward the player — "ahead" means toward where the cop wants to go
+      const tx = (px - cx) / (myD || 1), ty = (py - cy) / (myD || 1);
+      const myIdx = this.cops.indexOf(cop);
+      for (const other of this.cops) {
+        if (other === cop) continue;
+        const ox = other.sprite.x, oy = other.sprite.y;
+        const dx = ox - cx, dy = oy - cy;
+        const d = Math.hypot(dx, dy);
+        if (d < 0.001 || d > this.yieldGap) continue;        // not adjacent
+        if ((dx / d) * tx + (dy / d) * ty < this.yieldCone) continue; // not ahead of me
+        const otherD = Math.hypot(px - ox, py - oy);
+        const closer = otherD < myD || (otherD === myD && this.cops.indexOf(other) < myIdx);
+        if (closer) { blocked = true; break; }
+      }
+    }
+    cop._yieldT = blocked ? this.yieldHold : Math.max(0, (cop._yieldT || 0) - dt);
+    return cop._yieldT > 0;
+  }
+
   // Tier-1 rejoin band: lerp a cop's live handling from its base "in the fight"
   // profile toward a near-kinematic one as it falls behind, so far cops stop washing
   // into walls and rejoin cleanly. Writes the live stat fields each frame (Vehicle
@@ -995,6 +1041,28 @@ export class GameScene extends Phaser.Scene {
       const cop = this._spawnCop(f.x, f.y, this._testbed.unitType);
       this._placeCop(cop, f.x, f.y, px, py, f.face); // place + face the wall
       cop.ai._unstuck = { startX: f.x, startY: f.y, age: 0 }; // force recovery (set AFTER _placeCop, which clears it)
+    }
+  }
+
+  // Pile test: stack several cops nose-to-tail in a tight column DIRECTLY behind the player,
+  // all facing (and aiming at) the player, so they jam into one contact knot — every car
+  // pressing toward the same point. With the yield rule on, the rear cars should ease off and
+  // let the column flow front-to-back instead of locking. Clears other cops first. They keep
+  // LOS (point-blank), so this is purely a cop-cop un-piling test, not a blind-nav one.
+  _testbedPile() {
+    const px = this.car.sprite.x, py = this.car.sprite.y;
+    this._clearCops();
+    // Column heads straight "down" from the player in a random direction; cops sit one body-
+    // length apart, nosing forward toward the player at the head of the column.
+    const ang = Math.random() * Math.PI * 2;
+    const ux = Math.cos(ang), uy = Math.sin(ang);
+    const gap = 46, start = 70; // first cop 70px back, then a body-length each
+    const n = 4;
+    for (let i = 0; i < n; i++) {
+      const d = start + i * gap;
+      const x = px + ux * d, y = py + uy * d;
+      const cop = this._spawnCop(x, y, this._testbed.unitType);
+      this._placeCop(cop, x, y, px, py); // facing defaults toward the player (the head of the column)
     }
   }
 
@@ -1755,6 +1823,9 @@ export class GameScene extends Phaser.Scene {
     gui
       .add({ wedge: () => this._testbedWedge() }, "wedge")
       .name("▣ Wedge test (recovery)");
+    gui
+      .add({ pile: () => this._testbedPile() }, "pile")
+      .name("▤ Pile test (yield)");
 
     // Placed roadblock (static set-piece). Spawn one ahead at the chosen difficulty.
     this._rbDifficulty = this._rbDifficulty || 2;
@@ -3227,6 +3298,13 @@ this.withdrawColor = ${hex(f.withdrawColor)};`;
       reactionTime: a.reactionTime,
       sepRadius: this.sepRadius,
       sepStrength: this.sepStrength,
+      yieldEnabled: this.yieldEnabled,
+      yieldRange: this.yieldRange,
+      yieldStuckSpeed: this.yieldStuckSpeed,
+      yieldGap: this.yieldGap,
+      yieldCone: this.yieldCone,
+      yieldHold: this.yieldHold,
+      yieldSpeed: this.yieldSpeed,
       rbStart: this.rbStart,
       rbFull: this.rbFull,
       rbGrip: this.rbGrip,
@@ -3348,6 +3426,13 @@ this.withdrawColor = ${hex(f.withdrawColor)};`;
       .add(this.copTuning, "sepStrength", 0, 400, 5)
       .name("Separation strength")
       .onChange(apply);
+    pack.add(this.copTuning, "yieldEnabled").name("Yield: un-pile cops").onChange(apply);
+    pack.add(this.copTuning, "yieldRange", 100, 600, 10).name("Yield: near-player (px)").onChange(apply);
+    pack.add(this.copTuning, "yieldStuckSpeed", 5, 120, 5).name("Yield: jammed below (px/s)").onChange(apply);
+    pack.add(this.copTuning, "yieldGap", 20, 120, 2).name("Yield: teammate gap (px)").onChange(apply);
+    pack.add(this.copTuning, "yieldCone", 0, 1, 0.05).name("Yield: ahead cone (cos)").onChange(apply);
+    pack.add(this.copTuning, "yieldHold", 0, 1, 0.05).name("Yield: hold (s)").onChange(apply);
+    pack.add(this.copTuning, "yieldSpeed", 0, 120, 5).name("Yield: eased cap (px/s)").onChange(apply);
     pack
       .add(this.copTuning, "searchSpeed", 80, 600, 10)
       .name("Search speed cap")
@@ -3455,7 +3540,7 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
 
     // Persist across refresh. Key bumped to v16: huntLead removed (blind cops now go
     // straight to last-known, no forward projection).
-    this._persistPanel(gui, "gd_copTuning22"); // bumped: removed cornering/stuck levers (CopAI reverted)
+    this._persistPanel(gui, "gd_copTuning23"); // bumped: added cop-cop yield (un-pile) levers
 
     gui.domElement.style.position = "fixed";
     gui.domElement.style.top = "8px";
@@ -3538,6 +3623,13 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
     }
     this.sepRadius = t.sepRadius;
     this.sepStrength = t.sepStrength;
+    this.yieldEnabled = t.yieldEnabled;
+    this.yieldRange = t.yieldRange;
+    this.yieldStuckSpeed = t.yieldStuckSpeed;
+    this.yieldGap = t.yieldGap;
+    this.yieldCone = t.yieldCone;
+    this.yieldHold = t.yieldHold;
+    this.yieldSpeed = t.yieldSpeed;
     this.rbStart = t.rbStart;
     this.rbFull = t.rbFull;
     this.rbGrip = t.rbGrip;
