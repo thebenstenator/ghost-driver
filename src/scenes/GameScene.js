@@ -3152,6 +3152,10 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
     ls.add(au, "masterVolume", 0, 1, 0.01).name("Master volume")
       .onChange((v) => au.setMasterVolume(v));
     ls.add(au, "engineVol", 0, 2, 0.05).name("Engine volume");
+    ls.add(au, "engineGrowlMix", 0, 1.5, 0.05).name("Engine growl");
+    ls.add(au, "engineGritMix", 0, 1.5, 0.05).name("Engine grit");
+    ls.add(au, "engineDrive", 1, 8, 0.1).name("Engine drive");
+    ls.add(au, "engineRes", 0.5, 12, 0.5).name("Engine throat (Q)");
     ls.add(au, "sirenVol", 0, 2, 0.05).name("Siren volume");
     ls.add(au, "muted").name("Mute (N)").onChange((v) => au.setMuted(v));
 
@@ -3161,7 +3165,7 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
     st.add(this, "illumSpeedRef", 100, 600, 10).name("Re-lit at speed (px/s)");
 
     // Persist across refresh (binds directly to the car, so load sets car fields).
-    this._persistPanel(gui, "gd_carTuning_v8"); // bumped: Stealth (Kill Lights) folder
+    this._persistPanel(gui, "gd_carTuning_v9"); // bumped: engine tone levers (growl/grit/drive/throat)
 
     gui.domElement.style.position = "fixed";
     gui.domElement.style.top = "8px";

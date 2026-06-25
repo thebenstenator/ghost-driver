@@ -41,6 +41,12 @@ export class GameAudio {
     this.masterVolume = masterVolume;
     this.engineVol = 1; // multiplier on engine gain
     this.sirenVol = 1;  // multiplier on siren gain
+    // Engine TONE (live-tunable in the car panel's audio folder). These shape the character;
+    // updateEngine reads them every frame (drive rebuilds the waveshaper curve only on change).
+    this.engineGrowlMix = 0.6;  // harmonic saw "growl" level — the engine's voice
+    this.engineGritMix = 0.3;   // filtered-noise intake "grit" level — secondary texture
+    this.engineDrive = 3.2;     // waveshaper distortion amount (higher = dirtier/more aggressive)
+    this.engineRes = 4.5;       // resonant-lowpass Q — the throaty "formant"
     const ctx = scene.sound && scene.sound.context;
     // No WebAudio (HTML5/NoAudio fallback) → every method becomes a safe no-op.
     if (!ctx || typeof ctx.createOscillator !== "function") {
@@ -62,71 +68,99 @@ export class GameAudio {
   }
 
   // ── Engine ────────────────────────────────────────────────────────────────
-  // Not a pitched tone (that reads as synth-bass/techno) — a NOISE bed chopped into
-  // firing pulses. An LFO amplitude-modulates filtered noise; its rate is the firing
-  // rate, so the engine "revs" (chuffs blur into a roar) instead of playing a melody.
+  // A real engine is a HARMONIC growl, not a noise wash (noise alone reads as a fan). The voice
+  // is a detuned sawtooth pair at the cylinder-firing rate — a rich harmonic series whose period
+  // IS the firing rhythm — driven through a WAVESHAPER (distortion, for the dirty/aggressive
+  // grind) and a RESONANT lowpass (the throaty "formant" that says motor, not synth). A sine sub
+  // adds the weight you feel, and a thin layer of firing-rate-chopped noise gives intake grit —
+  // demoted to texture, not the main event. The detune + noise + distortion break the "clean
+  // musical note" perception that made a bare oscillator read as synth-bass.
   _buildEngine() {
     const ctx = this.ctx;
 
-    // 2s of looping white noise — the mechanical rush/grit.
+    // --- Growl: two saws a hair apart at the firing rate (beating thickens, kills the pure tone) ---
+    const osc1 = ctx.createOscillator(); osc1.type = "sawtooth"; osc1.frequency.value = 30;
+    const osc2 = ctx.createOscillator(); osc2.type = "sawtooth"; osc2.frequency.value = 30;
+    osc2.detune.value = 14; // cents
+    const oscMix = ctx.createGain(); oscMix.gain.value = this.engineGrowlMix;
+    osc1.connect(oscMix); osc2.connect(oscMix);
+
+    // --- Sub: clean sine at the firing fundamental for felt weight (bypasses the distortion) ---
+    const sub = ctx.createOscillator(); sub.type = "sine"; sub.frequency.value = 30;
+    const subG = ctx.createGain(); subG.gain.value = 0.5;
+    sub.connect(subG);
+
+    // --- Grit: looping white noise chopped at the firing rate (intake/exhaust hiss), secondary ---
     const buf = ctx.createBuffer(1, ctx.sampleRate * 2, ctx.sampleRate);
     const d = buf.getChannelData(0);
     for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
-    const noise = ctx.createBufferSource();
-    noise.buffer = buf;
-    noise.loop = true;
+    const noise = ctx.createBufferSource(); noise.buffer = buf; noise.loop = true;
+    const noiseLP = ctx.createBiquadFilter(); noiseLP.type = "lowpass"; noiseLP.frequency.value = 800; noiseLP.Q.value = 0.7;
+    const am = ctx.createGain(); am.gain.value = 0.5; // swings ±lfoGain at the firing rate = chuff
+    const lfo = ctx.createOscillator(); lfo.type = "sawtooth"; lfo.frequency.value = 30;
+    const lfoGain = ctx.createGain(); lfoGain.gain.value = 0.5;
+    lfo.connect(lfoGain); lfoGain.connect(am.gain);
+    const noiseG = ctx.createGain(); noiseG.gain.value = this.engineGritMix;
+    noise.connect(noiseLP); noiseLP.connect(am); am.connect(noiseG);
 
-    const noiseLP = ctx.createBiquadFilter();
-    noiseLP.type = "lowpass";
-    noiseLP.frequency.value = 600;
-    noiseLP.Q.value = 0.7; // no resonance → no whistle/synth character
+    // --- Distortion: soft-clip the growl + grit for the dirty, aggressive grind ---
+    const shaper = ctx.createWaveShaper();
+    shaper.curve = this._engineCurve(this.engineDrive);
+    shaper.oversample = "2x";
+    oscMix.connect(shaper); noiseG.connect(shaper);
 
-    // Amplitude modulation = cylinder firing. Sawtooth LFO gives each chuff a sharp
-    // attack; am.gain swings around 0.5 by ±lfoGain at the firing rate.
-    const am = ctx.createGain();
-    am.gain.value = 0.5;
-    const lfo = ctx.createOscillator();
-    lfo.type = "sawtooth";
-    lfo.frequency.value = 24;
-    const lfoGain = ctx.createGain();
-    lfoGain.gain.value = 0.5;
-    lfo.connect(lfoGain);
-    lfoGain.connect(am.gain);
+    // --- Throat: resonant lowpass; cutoff + Q track the revs (opens/screams at speed) ---
+    const lp = ctx.createBiquadFilter(); lp.type = "lowpass"; lp.frequency.value = 600; lp.Q.value = this.engineRes;
+    shaper.connect(lp);
 
-    // Quiet low body for weight — tracks the firing rate (not a separate bassline),
-    // heavily lowpassed so it's felt, not heard as a note.
-    const body = ctx.createOscillator();
-    body.type = "triangle";
-    body.frequency.value = 48;
-    const bodyG = ctx.createGain();
-    bodyG.gain.value = 0.12;
-    const bodyLP = ctx.createBiquadFilter();
-    bodyLP.type = "lowpass";
-    bodyLP.frequency.value = 200;
-
-    const g = ctx.createGain();
-    g.gain.value = 0.0001; // silent until updated (and until context resumes)
-
-    noise.connect(noiseLP); noiseLP.connect(am); am.connect(g);
-    body.connect(bodyLP); bodyLP.connect(bodyG); bodyG.connect(g);
+    const g = ctx.createGain(); g.gain.value = 0.0001; // silent until updated (and context resumes)
+    lp.connect(g); subG.connect(g); // sub joins clean, post-distortion
     g.connect(this.master);
 
-    noise.start(); lfo.start(); body.start();
-    this.engine = { g, noise, noiseLP, am, lfo, lfoGain, body };
+    osc1.start(); osc2.start(); sub.start(); noise.start(); lfo.start();
+    this._engineDriveApplied = this.engineDrive;
+    this.engine = { g, osc1, osc2, sub, oscMix, noise, noiseLP, am, lfo, lfoGain, noiseG, lp, shaper };
   }
 
-  // speed/maxSpeed → firing rate (rev) + brightness; throttle adds load. Smoothed.
+  // tanh soft-clip curve for the engine waveshaper. Higher `amount` = more saturation/grind.
+  _engineCurve(amount) {
+    const n = 1024, c = new Float32Array(n);
+    for (let i = 0; i < n; i++) {
+      const x = (i / (n - 1)) * 2 - 1;
+      c[i] = Math.tanh(amount * x);
+    }
+    return c;
+  }
+
+  // speed/maxSpeed → firing rate (rev) + brightness; throttle adds load. Tone levers applied live.
   updateEngine(speed, maxSpeed, throttle) {
     if (!this.ctx) return;
     const now = this.ctx.currentTime;
     const frac = Math.max(0, Math.min(1, speed / (maxSpeed || 1)));
-    const fire = 22 + Math.pow(frac, 0.9) * 150; // firing rate (Hz): idle putter → revving roar
-    const { g, noiseLP, lfo, lfoGain, body } = this.engine;
+    const fire = 30 + Math.pow(frac, 0.9) * 165; // firing rate (Hz): idle lope → revving roar
+    const { g, osc1, osc2, sub, oscMix, noiseLP, am, lfo, lfoGain, noiseG, lp, shaper } = this.engine;
+
+    // Pitch: growl, sub and the grit-chop all ride the firing rate.
+    osc1.frequency.setTargetAtTime(fire, now, 0.05);
+    osc2.frequency.setTargetAtTime(fire, now, 0.05);
+    sub.frequency.setTargetAtTime(fire, now, 0.05);
     lfo.frequency.setTargetAtTime(fire, now, 0.05);
-    body.frequency.setTargetAtTime(fire, now, 0.05);
-    noiseLP.frequency.setTargetAtTime(500 + frac * 3000 + (throttle ? 500 : 0), now, 0.06);
-    // Deep chug at idle; less modulation at speed so the chuffs smooth into a roar.
-    lfoGain.gain.setTargetAtTime(0.55 - frac * 0.3, now, 0.1);
+
+    // Throat opens with revs (brighter/angrier at speed), with throttle adding a load bump.
+    lp.frequency.setTargetAtTime(520 + frac * 2400 + (throttle ? 400 : 0), now, 0.06);
+    lp.Q.setTargetAtTime(this.engineRes, now, 0.1);
+    // Grit deeper at idle (lumpy lope), smoothing to a roar at speed; noise stays dark.
+    lfoGain.gain.setTargetAtTime(0.5 - frac * 0.28, now, 0.1);
+    noiseLP.frequency.setTargetAtTime(700 + frac * 1600 + (throttle ? 300 : 0), now, 0.06);
+
+    // Live tone levers (cheap to re-set every frame; drive rebuilds the curve only when changed).
+    oscMix.gain.setTargetAtTime(this.engineGrowlMix, now, 0.1);
+    noiseG.gain.setTargetAtTime(this.engineGritMix, now, 0.1);
+    if (this.engineDrive !== this._engineDriveApplied) {
+      shaper.curve = this._engineCurve(this.engineDrive);
+      this._engineDriveApplied = this.engineDrive;
+    }
+
     const vol = this.muted ? 0.0001 : (0.05 + frac * 0.085 + (throttle ? 0.015 : 0)) * this.engineVol;
     g.gain.setTargetAtTime(vol, now, 0.08);
   }
@@ -267,7 +301,7 @@ export class GameAudio {
     if (!this.ctx) return;
     try {
       const stop = (o) => { try { o.stop(); } catch {} };
-      const e = this.engine; if (e) { stop(e.noise); stop(e.lfo); stop(e.body); }
+      const e = this.engine; if (e) { stop(e.noise); stop(e.lfo); stop(e.osc1); stop(e.osc2); stop(e.sub); }
       // Stop the siren oscillators too — zeroing gain alone leaves them running after the
       // master is disconnected, leaking a fresh set of oscillators on every scene restart.
       for (const v of this.sirens || []) { stop(v.carrier); stop(v.lfo); v.g.gain.value = 0; }
