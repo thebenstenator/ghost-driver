@@ -35,16 +35,17 @@ export class ScreenEdgeFx {
     this.gfx = scene.add.graphics().setDepth(90).setScrollFactor(0);
 
     // --- Tunables (live-bound by the "Pursuit Screen FX" dev panel) ---
-    this.intensity = 0.55; // peak alpha at the very edge (0..1)
-    this.holdThickness = 10; // px the band settles to during a sustained chase / hold
+    this.intensity = 0.3; // peak alpha at the very edge (0..1)
+    this.holdThickness = 5; // px the band settles to during a sustained chase / hold
     this.flashThickness = 50; // px the band snaps out to on a flash (= the gradient depth then)
     this.growSpeed = 600; // px/s the band may GROW when a target rises without a flash
-    this.redRetreatSpeed = 120; // px/s the red pursuit flash shrinks back to holdThickness (fast)
-    this.blueRetreatSpeed = 45; // px/s the blue cooldown flash shrinks back (slower)
-    this.whiteRetreatSpeed = 70; // px/s the white withdraw flash shrinks to nothing (then OFF)
+    this.redRetreatSpeed = 30; // px/s the red pursuit flash shrinks back to holdThickness
+    this.blueRetreatSpeed = 30; // px/s the blue cooldown flash shrinks back
+    this.whiteRetreatSpeed = 30; // px/s the white withdraw flash shrinks to nothing (then OFF)
     this.colorLerp = 0.12; // 0..1 per-60fps-frame cross-fade rate between mode colours
-    this.breatheAmp = 2; // px the resting band swells ± as it "breathes" (subtle; 0 = static)
-    this.breathePeriod = 4.5; // s for one full breathe in-and-out (slow)
+    this.breatheAmp = 5; // px the resting band swells ± as it "breathes" (subtle; 0 = static)
+    this.breathePeriod = 3; // s for one full breathe in-and-out (slow)
+    this.cornerRadius = 18; // px inner-corner radius — rounds the bars around each corner (0 = square)
     this.pursueColor = 0xff2b2b; // red — active chase (cops have sight)
     this.holdColor = 0x4a90ff; // blue — lost sight, pre-ditch hold (matches the heat bar)
     this.cooldownColor = 0x4a90ff; // blue — ditched, area cooling
@@ -163,17 +164,21 @@ export class ScreenEdgeFx {
       (Math.round(this._col.r) << 16) |
       (Math.round(this._col.g) << 8) |
       Math.round(this._col.b);
-    // Each edge: a band `t` px deep, full alpha at the screen edge fading to 0 alpha `t` px inward.
-    // (Per-corner alphas on fillGradientStyle give the inward fade; corners where two edges meet
-    // overlap and read slightly brighter — a natural vignette emphasis.)
-    g.fillGradientStyle(col, col, col, col, peak, peak, 0, 0); // top
-    g.fillRect(0, 0, W, t);
-    g.fillGradientStyle(col, col, col, col, 0, 0, peak, peak); // bottom
-    g.fillRect(0, H - t, W, t);
-    g.fillGradientStyle(col, col, col, col, peak, 0, peak, 0); // left
-    g.fillRect(0, 0, t, H);
-    g.fillGradientStyle(col, col, col, col, 0, peak, 0, peak); // right
-    g.fillRect(W - t, 0, t, H);
+    // The glow is a gradient FRAME drawn as a stack of rounded-rect strokes from the screen edge
+    // inward — brightest at the edge, fading to nothing `t` px in. Because each stroke is a rounded
+    // rect whose corner radius shrinks with its inset (all sharing a corner centre), the corners
+    // become concentric arcs (a smooth radial blend) while the straight runs are a linear fade —
+    // so the two bars wrap AROUND each corner instead of crossing in a hard bright square.
+    const R = Math.max(0, this.cornerRadius);
+    const steps = Math.min(40, Math.max(8, Math.round(t)));
+    const step = t / steps;
+    for (let i = 0; i < steps; i++) {
+      const inset = (i + 0.5) * step;
+      const a = peak * (1 - i / steps);
+      const rad = Math.max(0.5, R + t - inset); // outer strokes round wider, inner tighter
+      g.lineStyle(step + 1, col, a); // +1px overlap so adjacent strokes leave no dark seam
+      g.strokeRoundedRect(inset, inset, W - 2 * inset, H - 2 * inset, rad);
+    }
   }
 
   destroy() {
