@@ -2098,6 +2098,7 @@ this.interceptAheadDist = ${this.interceptAheadDist}; this.interceptEntrySpeed =
     spike.add(d, "spikeStripCount", 1, 8, 1).name("Strips per unit");
     spike.add(d, "spikeEaseAhead", 0, 300, 5).name("Ease-in-front ahead (px)");
     spike.add(d, "spikeEaseFactor", 0.1, 1, 0.05).name("Ease to × your speed");
+    spike.add(d, "spikeLeadDist", 50, 400, 10).name("Lead aim-ahead (px)");
     spike.add(this, "spikeLifetime", 3, 60, 1).name("Strip lifetime (s)");
     spike.add(this, "spikeSpawnAhead", 100, 800, 10).name("Spawn-ahead dist (px)");
     spike.add(this, "spikeEntrySpeed", 0, 600, 10).name("Spawn entry speed (px/s)");
@@ -2108,7 +2109,7 @@ this.interceptAheadDist = ${this.interceptAheadDist}; this.interceptEntrySpeed =
       .add({ copy: () => this._copyManeuverStats() }, "copy")
       .name("Copy Maneuvers → Console");
 
-    this._persistPanel(gui, "gd_maneuverTune_v21"); // bumped: spikeBoost 175 + ahead-unit pace-and-hold
+    this._persistPanel(gui, "gd_maneuverTune_v22"); // bumped: ahead-unit aims ahead of itself (fix U-turn ram)
 
     gui.domElement.style.position = "fixed";
     gui.domElement.style.top = "8px";

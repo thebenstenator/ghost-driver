@@ -177,8 +177,9 @@ export class PursuitDirector {
     this.spikeEaseFactor  = 0.7;   // it eases to this fraction of your speed so the pack catches up
     // LEAD: a spike unit that's already ahead (it spawned ahead) drives to stay this far in front,
     // matching your pace, until its drop cooldown clears — then it deploys at the deploy distance.
-    this.spikeLeadDist    = 150;   // vestigial — the ahead-unit now holds at spikeDropMinDist (pace-and-hold),
-                                   // it no longer aims a fixed lead ahead of itself. Kept so no stale save breaks.
+    this.spikeLeadDist    = 150;   // px ahead of ITSELF an ahead spike unit aims, so it always drives FORWARD
+                                   // in your travel direction (never U-turns back into you). The gap is held
+                                   // by SPEED, not by aiming at a point that could sit behind the cop.
     this.spikeCloseFactor = 0.78;  // while still well ahead it drives at this × your speed so you CLOSE the gap
     this.spikeCloseBuffer = 60;    // px past blockAhead at which it switches from closing-in to brake-checking
     this.spikeDropMinDist = 140;   // px the cop must be AHEAD of you before an AHEAD-unit lays a strip —
@@ -276,21 +277,23 @@ export class PursuitDirector {
         }
       } else if (cop.unitDef && cop.unitDef.ability === 'spike' &&
                  this._along(cop, px, py, h) > this.spikeLeadMin) {
-        // Spike unit that's AHEAD (it spawned ahead). It HOLDS at the deploy distance and PACES you
-        // (never slower → you don't rear-end it), and when its deploy is off cooldown it pulls forward
+        // Spike unit that's AHEAD (it spawned ahead). It travels YOUR way, holds at the deploy distance
+        // and PACES you (never slower → no rear-ending), then when its deploy is ready it pulls forward
         // to a safe gap and lays a strip in your path. (Once behind it's free to PIT — see exclusion.)
+        //
+        // CRITICAL: it always aims AHEAD OF ITSELF (along your heading) so it keeps driving FORWARD.
+        // Aiming at a fixed point ahead of YOU put that point BEHIND a far-ahead cop, U-turning it
+        // back into you (the ram bug). The gap is controlled by SPEED below, never by the target.
         const along = this._along(cop, px, py, h);
         const canDeploy = (cop._spikeCd || 0) <= 0 && this._spikeGlobalCd <= 0 &&
                           (cop._spikeStrips == null || cop._spikeStrips > 0);
         cop._spikesOut = canDeploy; // ready to drop → carry the strip out (telegraph) while it lines up
-        boost = this.spikeBoost; // ceiling so it can keep pace / pull ahead on a fast player
+        boost = this.spikeBoost;    // headroom to keep pace / pull ahead on a fast player
+        target = this._clearTarget(px, py, { x: cop.sprite.x + Math.cos(h) * this.spikeLeadDist, y: cop.sprite.y + Math.sin(h) * this.spikeLeadDist });
         if (canDeploy) {
-          // Ready to deploy → pull forward to a SAFE gap (spikeDropMinDist) with spikes out (the
-          // telegraph), and only lay the strip once it's genuinely ahead — never on your nose. If
-          // you're right on its tail (along < min) it just keeps pulling away until the gap opens.
+          // Ready → pull forward (full speed + boost: no cap) to a SAFE gap, and lay the strip once
+          // it's genuinely ahead + the telegraph's shown — never on your nose.
           cop.role = CopState.SPIKE;
-          const dd = this.spikeDropMinDist + 40; // aim a touch past the floor so it clears it cleanly
-          target = this._clearTarget(px, py, { x: px + Math.cos(h) * dd, y: py + Math.sin(h) * dd });
           if (along >= this.spikeDropMinDist && (cop._spikeOutTimer || 0) >= this.spikeMinTelegraph) {
             cop.role = CopState.DEPLOY;
             this._requestSpikeDrop(cop, px, py, h);
@@ -299,11 +302,9 @@ export class PursuitDirector {
             if (cop._spikeStrips <= 0) cop._spikeStrips = (cop.unitDef.spikeStrips ?? this.spikeStripCount); // reloaded
           }
         } else {
-          // Reloading / telegraph pending → HOLD at the deploy distance and PACE you so you don't
-          // rear-end it. Aim spikeDropMinDist ahead; only slow below your pace when it's farther back
-          // (let you close), MATCH your pace in the hold band, and pull ahead if you've closed inside.
+          // Reloading / telegraph pending → HOLD at the deploy distance, pacing you: slow only when
+          // farther back (so you close), MATCH your pace in the hold band, pull ahead if you've closed in.
           cop.role = CopState.LEAD;
-          target = this._clearTarget(px, py, { x: px + Math.cos(h) * this.spikeDropMinDist, y: py + Math.sin(h) * this.spikeDropMinDist });
           if (along > this.spikeDropMinDist + this.spikeCloseBuffer)
             speedCap = Math.max(this.blockMinSpeed, speed * this.spikeCloseFactor); // far → let you close
           else if (along >= this.spikeDropMinDist)
