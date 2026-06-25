@@ -12,6 +12,7 @@ import { Pursuit, PursuitState } from "../systems/Pursuit.js";
 import { PursuitLevel } from "../systems/PursuitLevel.js";
 import { BustMeter } from "../systems/BustMeter.js";
 import { CarLights } from "../fx/CarLights.js";
+import { ScreenEdgeFx } from "../fx/ScreenEdgeFx.js";
 import { GameAudio } from "../audio/GameAudio.js";
 import {
   WORLD_WIDTH,
@@ -352,6 +353,10 @@ export class GameScene extends Phaser.Scene {
 
     this._setupHud();
 
+    // Pursuit screen-edge glow — driven by the pursuit state each frame (see update + ScreenEdgeFx).
+    // Created unconditionally (it's gameplay juice, not dev-only); its dev panel is gated below.
+    this.screenFx = new ScreenEdgeFx(this);
+
     // Camera follows with slight lag for a sense of speed
     this.cameras.main.startFollow(this.car.sprite, true, 0.1, 0.1);
     this.cameras.main.setZoom(1.0);
@@ -370,6 +375,7 @@ export class GameScene extends Phaser.Scene {
         this._setupCopTunePanel();
         if (this.pursuitLevel) this._setupPursuitPanel();
       }
+      this._setupScreenFxPanel();
     }
 
     // --- HUD camera ---------------------------------------------------------------
@@ -394,6 +400,7 @@ export class GameScene extends Phaser.Scene {
       this.garageText,
       this.oilText,
       this.nitroText,
+      this.screenFx.gfx,
     ];
     if (this.debugText) hud.push(this.debugText);
     if (this.copCountText) hud.push(this.copCountText);
@@ -405,6 +412,7 @@ export class GameScene extends Phaser.Scene {
     this.events.once("shutdown", () => {
       if (this.gui) this.gui.destroy();
       if (this.gadgetGui) this.gadgetGui.destroy();
+      if (this.screenFxGui) this.screenFxGui.destroy();
       if (this.copGui) this.copGui.destroy();
       if (this.pursuitGui) this.pursuitGui.destroy();
       if (this.testbedGui) this.testbedGui.destroy();
@@ -3137,6 +3145,63 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
     gui.domElement.style.zIndex = "9999";
   }
 
+  // Pursuit screen-edge FX dev panel — every lever for the edge glow (brightness, band sizes,
+  // retreat speeds per phase, colours) bound straight to the live ScreenEdgeFx instance.
+  _setupScreenFxPanel() {
+    const fx = this.screenFx;
+    const gui = new GUI({ title: "Pursuit Screen FX", width: 300 });
+    this.screenFxGui = gui;
+    gui.close();
+
+    gui.add(fx, "intensity", 0, 1, 0.01).name("Edge brightness");
+    gui.add(fx, "holdThickness", 2, 80, 1).name("Hold thickness (px)");
+    gui.add(fx, "flashThickness", 10, 160, 1).name("Flash thickness (px)");
+    gui.add(fx, "colorLerp", 0.01, 0.5, 0.01).name("Colour fade rate");
+    gui.add(fx, "growSpeed", 50, 2000, 10).name("Grow speed (px/s)");
+
+    const ret = gui.addFolder("Flash retreat speed (px/s)");
+    ret.add(fx, "redRetreatSpeed", 10, 600, 5).name("Red (pursuit)");
+    ret.add(fx, "blueRetreatSpeed", 10, 600, 5).name("Blue (cooldown)");
+    ret.add(fx, "whiteRetreatSpeed", 10, 600, 5).name("White (withdraw)");
+
+    const cols = gui.addFolder("Colours");
+    cols.addColor(fx, "pursueColor").name("Pursuit (red)");
+    cols.addColor(fx, "holdColor").name("Lost sight (blue)");
+    cols.addColor(fx, "cooldownColor").name("Cooldown (blue)");
+    cols.addColor(fx, "withdrawColor").name("Withdraw (white)");
+
+    gui
+      .add({ copy: () => this._copyScreenFx() }, "copy")
+      .name("Copy Screen FX → Console");
+
+    this._persistPanel(gui, "gd_screenFx_v1");
+
+    gui.domElement.style.position = "fixed";
+    gui.domElement.style.top = "8px";
+    gui.domElement.style.right = "8px";
+    gui.domElement.style.zIndex = "9999";
+  }
+
+  // Paste-ready dump of the live screen-FX tuning. Drop into the ScreenEdgeFx constructor.
+  _copyScreenFx() {
+    const f = this.screenFx;
+    const hex = (c) => "0x" + (c >>> 0).toString(16).padStart(6, "0");
+    const s = `// --- Pursuit screen-edge FX (paste into ScreenEdgeFx constructor) ---
+this.intensity = ${f.intensity};
+this.holdThickness = ${f.holdThickness};
+this.flashThickness = ${f.flashThickness};
+this.growSpeed = ${f.growSpeed};
+this.redRetreatSpeed = ${f.redRetreatSpeed};
+this.blueRetreatSpeed = ${f.blueRetreatSpeed};
+this.whiteRetreatSpeed = ${f.whiteRetreatSpeed};
+this.colorLerp = ${f.colorLerp};
+this.pursueColor = ${hex(f.pursueColor)};
+this.holdColor = ${hex(f.holdColor)};
+this.cooldownColor = ${hex(f.cooldownColor)};
+this.withdrawColor = ${hex(f.withdrawColor)};`;
+    console.log(s);
+  }
+
   _setupCopTunePanel() {
     if (!this.cops.length) return;
     const c = this.cops[0],
@@ -3816,6 +3881,12 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
         : state === PursuitState.ACTIVE && cop.maneuverSpeedCap != null
           ? cop.maneuverSpeedCap
           : Infinity;
+      // Cop-cop YIELD: a cop jammed nose-to-tail behind a teammate that's closer to you eases off
+      // its throttle so the capsule resolver can separate the pile (front-to-back flow), instead of
+      // everyone pressing inward and locking. Ease-off only (no steer/reverse → can't shove anyone
+      // into a wall). A cop pinning YOU has no teammate ahead, so it never yields. See _shouldYield.
+      if (this._shouldYield(cop, px, py, delta / 1000))
+        cop.ai.speedCap = Math.min(cop.ai.speedCap, this.yieldSpeed);
       this._applyRejoinBand(
         cop,
         Phaser.Math.Distance.Between(cop.sprite.x, cop.sprite.y, px, py),
@@ -3938,6 +4009,21 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
     }
     this._drawBustBar();
     this._drawHeatBar(state);
+    // Screen-edge pursuit glow — mode mirrors the heat-bar phase. PURSUE flashes red on a NEW
+    // chase / a re-spot AFTER a ditch (not on a brief HOLD re-acquire); HOLD is the blue lost-sight
+    // hold; COOLDOWN flashes blue as the ditch lands; WITHDRAW flashes white then fades to nothing.
+    let fxMode;
+    if (!this.cops.length || state === PursuitState.IDLE)
+      fxMode = ScreenEdgeFx.OFF;
+    else if (state === PursuitState.ACTIVE) fxMode = ScreenEdgeFx.PURSUE;
+    else if (state === PursuitState.SEARCH)
+      fxMode = this.pursuit.ditched
+        ? ScreenEdgeFx.COOLDOWN
+        : ScreenEdgeFx.HOLD;
+    else if (state === PursuitState.RETURNING) fxMode = ScreenEdgeFx.WITHDRAW;
+    else fxMode = ScreenEdgeFx.OFF;
+    this.screenFx.setMode(fxMode);
+    this.screenFx.update(delta / 1000);
     this._drawHealthBars();
     if (this.devMode) this._drawCopCounter();
 

@@ -16,14 +16,11 @@ const SIREN_PAN_RANGE = 900;   // px lateral offset that maps to full L/R pan
 // Real sirens cycle through modes rather than holding one pattern. Each segment sets the
 // sweep RATE (Hz — how fast the pitch rises/falls), DEPTH (Hz — how far it sweeps), and
 // CENTER (Hz — the base pitch). FASTER PACE = HIGHER PITCH: wail is slow + low, yelp is
-// fast + notably higher, phaser is fastest + highest. So the cycle climbs in pitch toward
-// yelp/phaser then drops back to wail. Voices are phase-offset so the pack desyncs (one car
-// wails while another yelps).
+// fast + notably higher. The cycle alternates wail → yelp. Voices are phase-offset so the
+// pack desyncs (one car wails while another yelps).
 const SIREN_CYCLE = [
   { dur: 6.0, rate: 0.28, depth: 320, center: 780 },  // wail   — slow; same ~460 floor, sweeps up near yelp (~1100)
   { dur: 4.0, rate: 3.3,  depth: 240, center: 1120 }, // yelp   — fast + higher
-  { dur: 5.0, rate: 0.30, depth: 320, center: 780 },  // wail
-  { dur: 2.5, rate: 6.8,  depth: 160, center: 1120 }, // phaser — fastest, pitch matched to yelp
 ];
 const SIREN_CYCLE_LEN = SIREN_CYCLE.reduce((s, seg) => s + seg.dur, 0);
 function sirenMode(t) {
@@ -145,7 +142,7 @@ export class GameAudio {
       carrier.frequency.value = SIREN_CYCLE[0].center + detune;
 
       // LFO sweeps the carrier around its center. Rate + depth (and the carrier center)
-      // are re-driven each frame from the mode schedule (wail/yelp/phaser).
+      // are re-driven each frame from the mode schedule (wail/yelp).
       const lfo = ctx.createOscillator(); lfo.type = "triangle"; lfo.frequency.value = SIREN_CYCLE[0].rate;
       const lfoGain = ctx.createGain(); lfoGain.gain.value = SIREN_CYCLE[0].depth;
       lfo.connect(lfoGain); lfoGain.connect(carrier.frequency);
@@ -197,7 +194,7 @@ export class GameAudio {
             now,
             0.08,
           );
-        // Advance this voice through the wail/yelp/phaser cycle. The 0.3s smoothing makes
+        // Advance this voice through the wail/yelp cycle. The 0.3s smoothing makes
         // mode changes "spin up/down" (rate, depth AND center pitch ramp) rather than snapping.
         const m = sirenMode(now + v.phase);
         v.lfo.frequency.setTargetAtTime(m.rate, now, 0.3);
