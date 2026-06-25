@@ -2204,7 +2204,22 @@ this.overtakeAhead = ${d.overtakeAhead}; this.overtakeSide = ${d.overtakeSide}; 
 // Block / brake-check
 this.blockAhead = ${d.blockAhead}; this.blockSpeedFactor = ${d.blockSpeedFactor}; this.blockMinSpeed = ${d.blockMinSpeed}; this.blockedSpeed = ${d.blockedSpeed}; this.blockLost = ${d.blockLost};
 // Box v2
-this.boxTriggerSpeed = ${d.boxTriggerSpeed}; this.boxReleaseSpeed = ${d.boxReleaseSpeed}; this.boxEngageRange = ${d.boxEngageRange}; this.boxCloseMargin = ${d.boxCloseMargin}; this.boxContactGap = ${d.boxContactGap};`);
+this.boxTriggerSpeed = ${d.boxTriggerSpeed}; this.boxReleaseSpeed = ${d.boxReleaseSpeed}; this.boxEngageRange = ${d.boxEngageRange}; this.boxCloseMargin = ${d.boxCloseMargin}; this.boxContactGap = ${d.boxContactGap};
+// PIT
+this.pitMinLevel = ${d.pitMinLevel}; this.pitCooldown = ${d.pitCooldown}; this.pitUnitCooldown = ${d.pitUnitCooldown}; this.pitRange = ${d.pitRange}; this.pitMinSpeed = ${d.pitMinSpeed};
+this.pitMaxTime = ${d.pitMaxTime}; this.pitGiveUp = ${d.pitGiveUp}; this.pitBoost = ${d.pitBoost};
+this.pitContactDist = ${d.pitContactDist}; this.pitCoDirMin = ${d.pitCoDirMin}; this.pitRearMax = ${d.pitRearMax}; this.pitSideMin = ${d.pitSideMin}; this.pitSideMax = ${d.pitSideMax};
+this.pitRefSpeed = ${d.pitRefSpeed}; this.pitPowerFloor = ${d.pitPowerFloor}; this.pitYawRate = ${d.pitYawRate};
+// Spike run — trigger / approach
+this.spikeTrigSpeed = ${d.spikeTrigSpeed}; this.spikeDeployMinSpeed = ${d.spikeDeployMinSpeed}; this.spikeRange = ${d.spikeRange}; this.spikeBehind = ${d.spikeBehind};
+this.spikeAhead = ${d.spikeAhead}; this.spikeSide = ${d.spikeSide}; this.spikeBoost = ${d.spikeBoost};
+// Spike run — deploy
+this.spikeDropAhead = ${d.spikeDropAhead}; this.spikeDropMinDist = ${d.spikeDropMinDist}; this.spikeMinTelegraph = ${d.spikeMinTelegraph}; this.spikeGlobalCooldown = ${d.spikeGlobalCooldown};
+this.spikeProgressEps = ${d.spikeProgressEps}; this.spikeStallTime = ${d.spikeStallTime}; this.spikeDeployHold = ${d.spikeDeployHold}; this.spikeDropCd = ${d.spikeDropCd}; this.spikeReload = ${d.spikeReload}; this.spikeStripCount = ${d.spikeStripCount};
+// Spike run — lead / ease
+this.spikeEaseAhead = ${d.spikeEaseAhead}; this.spikeEaseFactor = ${d.spikeEaseFactor}; this.spikeLeadDist = ${d.spikeLeadDist}; this.spikeCloseFactor = ${d.spikeCloseFactor}; this.spikeCloseBuffer = ${d.spikeCloseBuffer};
+// Spike — SCENE-SIDE (paste into GameScene, not the director)
+this.spikeStripLen = ${this.spikeStripLen}; this.spikeLifetime = ${this.spikeLifetime}; this.spikeSpawnAhead = ${this.spikeSpawnAhead}; this.spikeEntrySpeed = ${this.spikeEntrySpeed}; this.spikeRespawnDropCd = ${this.spikeRespawnDropCd};`);
   }
 
   // Per-type tuning: binds a panel to UNITS[type]'s def (handling + the def-eligible AI
