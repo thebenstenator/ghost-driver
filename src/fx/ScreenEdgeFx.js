@@ -43,6 +43,8 @@ export class ScreenEdgeFx {
     this.blueRetreatSpeed = 45; // px/s the blue cooldown flash shrinks back (slower)
     this.whiteRetreatSpeed = 70; // px/s the white withdraw flash shrinks to nothing (then OFF)
     this.colorLerp = 0.12; // 0..1 per-60fps-frame cross-fade rate between mode colours
+    this.breatheAmp = 2; // px the resting band swells ± as it "breathes" (subtle; 0 = static)
+    this.breathePeriod = 4.5; // s for one full breathe in-and-out (slow)
     this.pursueColor = 0xff2b2b; // red — active chase (cops have sight)
     this.holdColor = 0x4a90ff; // blue — lost sight, pre-ditch hold (matches the heat bar)
     this.cooldownColor = 0x4a90ff; // blue — ditched, area cooling
@@ -54,6 +56,7 @@ export class ScreenEdgeFx {
     this.targetThickness = 0; // where it's retreating/growing toward
     this.retreatSpeed = this.redRetreatSpeed; // active shrink rate (set per flash)
     this._col = this._rgb(this.holdColor); // current eased colour {r,g,b}
+    this._breathe = 0; // breathing phase accumulator (s)
   }
 
   _rgb(hex) {
@@ -133,13 +136,25 @@ export class ScreenEdgeFx {
     this._col.g = Phaser.Math.Linear(this._col.g, target.g, k);
     this._col.b = Phaser.Math.Linear(this._col.b, target.b, k);
 
+    this._breathe += dt;
     this._draw();
   }
 
   _draw() {
     const g = this.gfx;
     g.clear();
-    const t = this.thickness;
+    let t = this.thickness;
+    // Gentle breathe: only once the band has SETTLED at a resting hold (target > 0 and not still
+    // retreating from a flash) — a flash, withdraw-to-nothing or OFF shouldn't wobble.
+    if (
+      this.breatheAmp > 0 &&
+      this.breathePeriod > 0 &&
+      this.targetThickness > 0 &&
+      this.thickness <= this.targetThickness + 0.5
+    ) {
+      t += this.breatheAmp * Math.sin((this._breathe * 2 * Math.PI) / this.breathePeriod);
+      t = Math.max(1, t);
+    }
     const peak = this.intensity;
     if (t < 0.5 || peak <= 0.001) return;
     const W = this.scene.scale.width,

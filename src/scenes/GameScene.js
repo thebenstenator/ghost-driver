@@ -3229,6 +3229,8 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
     gui.add(fx, "flashThickness", 10, 160, 1).name("Flash thickness (px)");
     gui.add(fx, "colorLerp", 0.01, 0.5, 0.01).name("Colour fade rate");
     gui.add(fx, "growSpeed", 50, 2000, 10).name("Grow speed (px/s)");
+    gui.add(fx, "breatheAmp", 0, 12, 0.5).name("Breathe amount (px)");
+    gui.add(fx, "breathePeriod", 1, 12, 0.5).name("Breathe period (s)");
 
     const ret = gui.addFolder("Flash retreat speed (px/s)");
     ret.add(fx, "redRetreatSpeed", 10, 600, 5).name("Red (pursuit)");
@@ -3245,7 +3247,7 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
       .add({ copy: () => this._copyScreenFx() }, "copy")
       .name("Copy Screen FX → Console");
 
-    this._persistPanel(gui, "gd_screenFx_v1");
+    this._persistPanel(gui, "gd_screenFx_v2"); // bumped: added breathe levers
 
     gui.domElement.style.position = "fixed";
     gui.domElement.style.top = "8px";
@@ -3266,6 +3268,8 @@ this.redRetreatSpeed = ${f.redRetreatSpeed};
 this.blueRetreatSpeed = ${f.blueRetreatSpeed};
 this.whiteRetreatSpeed = ${f.whiteRetreatSpeed};
 this.colorLerp = ${f.colorLerp};
+this.breatheAmp = ${f.breatheAmp};
+this.breathePeriod = ${f.breathePeriod};
 this.pursueColor = ${hex(f.pursueColor)};
 this.holdColor = ${hex(f.holdColor)};
 this.cooldownColor = ${hex(f.cooldownColor)};
