@@ -3411,6 +3411,7 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
       .onChange((v) => au.setMasterVolume(v));
     ls.add(au, "engineVol", 0, 2, 0.05).name("Engine volume");
     ls.add(au, "sirenVol", 0, 2, 0.05).name("Siren volume");
+    ls.add(au, "screechVol", 0, 2, 0.05).name("Tire screech volume");
     ls.add(au, "muted").name("Mute (N)").onChange((v) => au.setMuted(v));
 
     // Stealth — Kill Lights (L) detection tuning.
@@ -3419,7 +3420,7 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
     st.add(this, "illumSpeedRef", 100, 600, 10).name("Re-lit at speed (px/s)");
 
     // Persist across refresh (binds directly to the car, so load sets car fields).
-    this._persistPanel(gui, "gd_carTuning_v8"); // bumped: Stealth (Kill Lights) folder
+    this._persistPanel(gui, "gd_carTuning_v9"); // bumped: engineVol default 0.5 + tire screech
 
     gui.domElement.style.position = "fixed";
     gui.domElement.style.top = "8px";
@@ -3980,6 +3981,7 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
       if (this.audio) {
         this.audio.updateEngine(0, this.car.maxSpeed, false);
         this.audio.updateSirens(this.car.sprite, this.cops, false);
+        this.audio.updateScreech(0);
       }
       return;
     }
@@ -4072,6 +4074,21 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
 
     // Engine synth tracks the player's speed + throttle.
     this.audio.updateEngine(this.car.getSpeed(), this.car.maxSpeed, controls.up);
+
+    // Tire screech — every case is tire SLIP, read from the post-update car dynamics:
+    //   • lateral slide  → |driftAngle| (cornering hard / drifting), speed-gated
+    //   • handbrake lock → a baseline floor while sliding (full squeal mid-drift)
+    //   • launch wheelspin → throttle held while near-stopped, fades in by ~150 px/s
+    //   • brake lock-up  → hard brake / down at speed
+    // max() lets the dominant source win rather than stacking unnaturally.
+    {
+      const sp = this.car.getSpeed(), c = controls, C = Phaser.Math.Clamp;
+      const lat   = C((Math.abs(this.car.driftAngle) - 0.12) / 0.5, 0, 1) * C(sp / 140, 0, 1);
+      const hb    = (c.handbrake && sp > 80) ? 0.55 : 0;
+      const launch = c.up ? C(1 - sp / 150, 0, 1) : 0;
+      const brake = (c.brake || (c.down && sp > 60)) ? C(sp / 170, 0, 1) * 0.85 : 0;
+      this.audio.updateScreech(Math.min(1, Math.max(lat + hb, launch, brake)));
+    }
 
     // Kill Lights stealth indicator (bottom-centre) follows the lights-off state.
     this.killLightsText.setAlpha(this.car.lightsOff ? 1 : 0);
