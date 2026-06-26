@@ -76,17 +76,20 @@ export class GameAudio {
     const cache = this.scene.cache && this.scene.cache.audio;
     if (!cache) return false;
 
-    // frac = fraction of top speed at which each band sits. idle anchors 0.
+    // frac = fraction of top speed at which each band sits (which two bands are audible).
+    // rpm  = the band's recorded pitch — used to pitch the two active bands into UNISON
+    //        at the target rpm so the crossfade morphs TIMBRE only, never stacks pitches
+    //        into a chord/organ. idle anchors frac 0.
     const layout = [
-      { key: `eng_${car}_idle`,    frac: 0.0 },
-      { key: `eng_${car}_1500`,    frac: 0.12 },
-      { key: `eng_${car}_2500`,    frac: 0.25 },
-      { key: `eng_${car}_3500`,    frac: 0.38 },
-      { key: `eng_${car}_4500`,    frac: 0.50 },
-      { key: `eng_${car}_5500`,    frac: 0.63 },
-      { key: `eng_${car}_6500`,    frac: 0.75 },
-      { key: `eng_${car}_7500`,    frac: 0.88 },
-      { key: `eng_${car}_redline`, frac: 1.0 },
+      { key: `eng_${car}_idle`,    frac: 0.0,  rpm: 800 },
+      { key: `eng_${car}_1500`,    frac: 0.12, rpm: 1500 },
+      { key: `eng_${car}_2500`,    frac: 0.25, rpm: 2500 },
+      { key: `eng_${car}_3500`,    frac: 0.38, rpm: 3500 },
+      { key: `eng_${car}_4500`,    frac: 0.50, rpm: 4500 },
+      { key: `eng_${car}_5500`,    frac: 0.63, rpm: 5500 },
+      { key: `eng_${car}_6500`,    frac: 0.75, rpm: 6500 },
+      { key: `eng_${car}_7500`,    frac: 0.88, rpm: 7500 },
+      { key: `eng_${car}_redline`, frac: 1.0,  rpm: 8500 },
     ];
     // All-or-nothing: if anything's missing, bail to procedural rather than play gaps.
     const bufs = layout.map((l) => cache.get(l.key));
@@ -110,7 +113,7 @@ export class GameAudio {
       const g = ctx.createGain(); g.gain.value = 0.0001;
       src.connect(g); g.connect(engineSum);
       src.start();
-      return { src, g, frac: l.frac };
+      return { src, g, frac: l.frac, rpm: l.rpm };
     });
 
     this.sampleEngine = { voices, onGain, offGain, engineMaster };
@@ -138,6 +141,13 @@ export class GameAudio {
       else if (i === lo + 1) g = Math.sin(t * 0.5 * Math.PI);
       v[i].g.gain.setTargetAtTime(Math.max(0.0001, g), now, 0.06);
     }
+
+    // Pitch the two audible bands to a SHARED target rpm (lerp across the segment) so they
+    // sound as one gliding pitch — the crossfade morphs timbre, it never stacks two notes.
+    // Each band sits at rate 1.0 at its own centre, so fidelity is best where it dominates.
+    const targetRpm = hasHi ? v[lo].rpm + (v[lo + 1].rpm - v[lo].rpm) * t : v[lo].rpm;
+    v[lo].src.playbackRate.setTargetAtTime(targetRpm / v[lo].rpm, now, 0.06);
+    if (hasHi) v[lo + 1].src.playbackRate.setTargetAtTime(targetRpm / v[lo + 1].rpm, now, 0.06);
 
     // Load: throttle held → bright (on) tap; released → darker (off) tap. Smoothed so
     // it "breathes" between power and coast rather than snapping.
