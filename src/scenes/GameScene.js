@@ -151,6 +151,21 @@ export class GameScene extends Phaser.Scene {
     this.nitroSpeedMult = 1.4;  // top-speed ×multiplier while boosting (the new ceiling)
     this.nitroTimer = 0;        // s remaining on the active boost (0 = not boosting)
 
+    // --- Gadget: Smoke Screen (player) — drop a dense cloud behind you; any cop whose sightline to
+    // you passes THROUGH the cloud loses LOS (it drives in blind toward last-known and can't re-
+    // acquire until it's clear of the far side). NOT a wall — cops drive straight through it; it's
+    // pure visual + LOS-blocking, so it forces the pursuit toward SEARCH/cooldown. Levers in the
+    // Gadgets dev panel. ---
+    this.smokeMaxCharges = 2;   // charges at the start of a run
+    this.smokeCharges = this.smokeMaxCharges;
+    this.smokeRadius = 95;      // px — full cloud radius (also the LOS-block radius once grown)
+    this.smokeLifetime = 6;     // s the cloud blocks sight before it clears
+    this.smokeGrowTime = 0.6;   // s to expand from the tailpipe to full radius
+    this.smokeFadeTime = 1.8;   // s it visually fades out over at the end of life
+    this.smokeOpacity = 0.85;   // peak draw alpha of the cloud (visual only)
+    this.smokeDropOffset = 38;  // px behind the car centre the cloud spawns
+    this.smokes = [];           // active clouds: { x, y, r, t, blobs }
+
     this.spikes = []; // deployed spike strips (cop hazard)
     this.spikeLifetime = 20; // s a dropped strip persists before it despawns
     this.spikeStripLen = 28; // px across — a cop-deployed strip is ~car-width (DODGEABLE). Roadblock
@@ -400,6 +415,11 @@ export class GameScene extends Phaser.Scene {
     this.oilGfx = this.add.graphics().setDepth(6);
     this.worldLayer.add(this.oilGfx);
 
+    // Smoke clouds — drawn ABOVE the cops (depth 9) but BELOW the player (depth 10), so the cloud
+    // obscures the cops chasing through it while your own car stays visible on top. See _updateSmoke.
+    this.smokeGfx = this.add.graphics().setDepth(9.5);
+    this.worldLayer.add(this.smokeGfx);
+
     this._setupHud();
 
     // Pursuit screen-edge glow — driven by the pursuit state each frame (see update + ScreenEdgeFx).
@@ -450,6 +470,7 @@ export class GameScene extends Phaser.Scene {
       this.garageText,
       this.oilText,
       this.nitroText,
+      this.smokeText,
       this.screenFx.gfx,
     ];
     if (this.debugText) hud.push(this.debugText);
@@ -1730,6 +1751,62 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
+  // Gadget: drop a SMOKE cloud behind the player (one charge). A cluster of grey puffs that grows,
+  // holds, then fades — any cop sightline through it reads as blocked (see _segmentInSmoke).
+  _deploySmoke() {
+    if (this.busted || this.paused) return;
+    if (this.smokeCharges <= 0) return;
+    this.smokeCharges--;
+    const f = this.car.facing;
+    const x = this.car.sprite.x - Math.cos(f) * this.smokeDropOffset;
+    const y = this.car.sprite.y - Math.sin(f) * this.smokeDropOffset;
+    // Puffs stored as FRACTIONS of the radius so they scale as the cloud grows (visual → Math.random).
+    const blobs = [];
+    const n = 7 + Math.floor(Math.random() * 4);
+    for (let i = 0; i < n; i++) {
+      blobs.push({
+        dx: (Math.random() * 2 - 1) * 0.55,
+        dy: (Math.random() * 2 - 1) * 0.55,
+        rf: 0.42 + Math.random() * 0.45,
+      });
+    }
+    this.smokes.push({ x, y, t: 0, blobs });
+  }
+
+  // Age + redraw the clouds. Radius eases from a tailpipe puff to smokeRadius over smokeGrowTime;
+  // alpha fades over the last smokeFadeTime. (LOS blocking reads the live radius via _cloudR.)
+  _updateSmoke(dt) {
+    const g = this.smokeGfx;
+    g.clear();
+    for (let i = this.smokes.length - 1; i >= 0; i--) {
+      const s = this.smokes[i];
+      s.t += dt;
+      if (s.t > this.smokeLifetime) { this.smokes.splice(i, 1); continue; }
+      const r = this._cloudR(s);
+      const fade = Phaser.Math.Clamp((this.smokeLifetime - s.t) / this.smokeFadeTime, 0, 1);
+      const a = this.smokeOpacity * fade;
+      // Darker body then a lighter highlight on each puff for a bit of volume.
+      g.fillStyle(0x6b6b73, 0.55 * a);
+      for (const b of s.blobs) g.fillCircle(s.x + b.dx * r, s.y + b.dy * r, b.rf * r);
+      g.fillStyle(0xb9b9c2, 0.5 * a);
+      for (const b of s.blobs) g.fillCircle(s.x + b.dx * r - b.rf * r * 0.2, s.y + b.dy * r - b.rf * r * 0.2, b.rf * r * 0.6);
+    }
+  }
+
+  // Current LOS-block radius of a cloud — grows from a small puff to smokeRadius over smokeGrowTime.
+  _cloudR(s) {
+    const grow = this.smokeGrowTime > 0 ? Phaser.Math.Clamp(s.t / this.smokeGrowTime, 0, 1) : 1;
+    return this.smokeRadius * (0.25 + 0.75 * grow);
+  }
+
+  // Does the sightline (ax,ay)-(bx,by) pass through any active smoke cloud? Used to block cop LOS.
+  _segmentInSmoke(ax, ay, bx, by) {
+    for (const s of this.smokes) {
+      if (this._pointSegDist(s.x, s.y, ax, ay, bx, by) < this._cloudR(s)) return true;
+    }
+    return false;
+  }
+
   // Custom CAPSULE collision for the player, cops AND roadblock cars — Arcade's box can't
   // cover a rotated car, so each is modelled as 3 circles along its spine and pushed out of
   // walls + apart from each other by hand. Rounded → slides along walls/corners. Additive to
@@ -2698,6 +2775,9 @@ bleed: { fastFrac: ${b.fastFrac}, fastRate: ${b.fastRate}, slowRate: ${b.slowRat
 
     // Gadget — Nitro Boost (B): a short burst of extra accel + top speed (one charge per press).
     this.input.keyboard.on("keydown-B", () => this._fireNitro());
+
+    // Gadget — Smoke Screen (X): drop a sight-blocking cloud behind you (one charge per press).
+    this.input.keyboard.on("keydown-X", () => this._deploySmoke());
   }
 
   _setupDebugOverlay() {
@@ -2803,6 +2883,18 @@ bleed: { fastFrac: ${b.fastFrac}, fastRate: ${b.fastRate}, slowRate: ${b.slowRat
         fontSize: "15px",
         fontStyle: "bold",
         color: "#7fd8ff",
+      })
+      .setOrigin(0, 1)
+      .setScrollFactor(0)
+      .setDepth(100);
+
+    // Gadget charges (bottom-left, stacked above the nitro row) — Smoke Screen count.
+    this.smokeText = this.add
+      .text(16, this.scale.height - 56, "", {
+        fontFamily: "monospace",
+        fontSize: "15px",
+        fontStyle: "bold",
+        color: "#b9b9c2",
       })
       .setOrigin(0, 1)
       .setScrollFactor(0)
@@ -3367,6 +3459,18 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
     nitro.add(this, "nitroAccelMult", 1, 4, 0.05).name("Accel ×");
     nitro.add(this, "nitroSpeedMult", 1, 3, 0.05).name("Top speed ×");
 
+    const smoke = gui.addFolder("Smoke Screen (X)");
+    smoke
+      .add(this, "smokeMaxCharges", 1, 10, 1)
+      .name("Charges")
+      .onChange((v) => (this.smokeCharges = v)); // refill on tune (and on panel load)
+    smoke.add(this, "smokeRadius", 30, 220, 5).name("Cloud radius (px)");
+    smoke.add(this, "smokeLifetime", 1, 20, 0.5).name("Lifetime (s)");
+    smoke.add(this, "smokeGrowTime", 0, 3, 0.1).name("Grow time (s)");
+    smoke.add(this, "smokeFadeTime", 0.2, 6, 0.1).name("Fade time (s)");
+    smoke.add(this, "smokeOpacity", 0.1, 1, 0.05).name("Opacity");
+    smoke.add(this, "smokeDropOffset", 0, 120, 2).name("Drop offset behind (px)");
+
     // Cop spike HAZARD effect (not a player gadget — the cripple you take from driving over a
     // strip). Lives here so it's tunable in normal pursuit playtest. A "Test blowout" button
     // triggers it without needing a spike unit on the road.
@@ -3381,7 +3485,7 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
     spk.add({ test: () => this._blowTires() }, "test").name("Test blowout");
     spk.add({ repair: () => this._repairTires() }, "repair").name("Repair (clear)");
 
-    this._persistPanel(gui, "gd_gadgetTune_v8"); // bumped: added Cop Spikes hazard levers
+    this._persistPanel(gui, "gd_gadgetTune_v9"); // bumped: added Smoke Screen levers
 
     // Anchored to the BOTTOM-RIGHT so the panel grows UPWARD when folders expand and stays
     // clear of the bottom-left spawn panel. CRITICAL: clear top/left to "auto" — lil-gui's
@@ -3882,6 +3986,7 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
     this._updateRoadblocks(this.car.sprite.x, this.car.sprite.y, delta / 1000);
     this._updateSpikes(this.car.sprite.x, this.car.sprite.y, delta / 1000);
     this._updateOilSlicks(delta / 1000);
+    this._updateSmoke(delta / 1000);
 
     // While spectating a cop (camera not on the player), freeze the car so the
     // observer can't accidentally drive or re-trigger anything.
@@ -3995,6 +4100,21 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
             : "#4a5a66",
       );
 
+    // Smoke Screen pips — brighten while a cloud is actively out.
+    this.smokeText
+      .setText(
+        "SMOKE " +
+          "◉".repeat(this.smokeCharges) +
+          "○".repeat(Math.max(0, this.smokeMaxCharges - this.smokeCharges)),
+      )
+      .setColor(
+        this.smokes.length > 0
+          ? "#ffffff"
+          : this.smokeCharges > 0
+            ? "#b9b9c2"
+            : "#55555c",
+      );
+
     // --- Perception: a cop is AWARE of the player if it has a clear sight line
     // within range, OR the player is within close proximity (omnidirectional —
     // you can't lose someone beside you). Awareness persists for awareGrace after
@@ -4020,7 +4140,9 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
       const sees =
         d <= this.proximityRange ||
         (d <= effSight &&
-          segmentClear(cop.sprite.x, cop.sprite.y, px, py, this.losRects));
+          segmentClear(cop.sprite.x, cop.sprite.y, px, py, this.losRects) &&
+          !this._segmentInSmoke(cop.sprite.x, cop.sprite.y, px, py)); // smoke breaks the sightline
+
       cop.awareTimer = sees
         ? this.awareGrace
         : Math.max(0, (cop.awareTimer || 0) - dt);

@@ -166,6 +166,15 @@ export const TOOLTIPS = {
   oilSpeedLost: "Fraction of a cop's speed scrubbed the instant it touches oil. 0 = no slow, 1 = dead stop. Raise to make the hit slow them more.",
   oilEffectTime: "Seconds the slide lasts (at full strength) after a cop leaves the patch, then it snaps back to normal. Raise to keep a cop sliding longer.",
 
+  // ── Gadget: Smoke Screen ────────────────────────────────────────────────────
+  smokeMaxCharges: "How many smoke clouds you carry per run. (Changing this refills you.) Raise for more drops before you're empty.",
+  smokeRadius: "Cloud radius (px) once grown — this is ALSO the sight-block radius. Any cop sightline that passes within this of the cloud centre is blocked. Raise for a bigger screen that's harder to see around.",
+  smokeLifetime: "Seconds the cloud blocks sight before it clears. Raise to keep cops blind longer (more time to ditch).",
+  smokeGrowTime: "Seconds the cloud takes to expand from a tailpipe puff to full radius. Lower so it blocks sight almost instantly; raise for a slower bloom.",
+  smokeFadeTime: "Seconds the cloud visually fades out over at the end of its life. Visual only — it still blocks until lifetime ends. Raise for a softer dissipate.",
+  smokeOpacity: "Peak draw opacity of the cloud (visual only — does not change the block). Lower if it obscures the road too much for you.",
+  smokeDropOffset: "How far behind your car (px) the cloud spawns. Raise to drop it further back (between you and a tailing cop); lower to drop it closer under your tail.",
+
   // ── Stealth (Kill Lights) ───────────────────────────────────────────────────
   killLightsRange: "Clear-LOS spotting range (px) for a SLOW, lights-off player. Lower = cops lose a blacked-out crawling car from closer in (easier ditch).",
   illumSpeedRef: "Speed (px/s) at which lights-off gives NO stealth — a dark car this fast is seen as if lit. Lower so you must crawl to benefit; raise to stay stealthy at speed.",
