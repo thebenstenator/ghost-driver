@@ -218,6 +218,15 @@ export class GameScene extends Phaser.Scene {
     this.rbGrip = 0.9; // grip (low & high) at full blend — near on-rails
     this.rbTurnMult = 1.6; // turn-rate multiplier at full blend
     this.rbSpeedBoost = 90; // px/s added to top speed at full blend
+    // Patrol sight-edge rubber band: keeps a chasing PATROL (slow, 495 vs player 600) from being
+    // straight-lined out of sight in the early levels — its top-speed cap ramps up toward
+    // patrolBandSpeed across the outer patrolBandWidth px of sightRange, so the gap holds at the
+    // edge of view. bandSpeed sits a hair above player top (600) so a patrol pulls a touch INSIDE
+    // the edge rather than hugging it (and flickering in/out of LOS), but never actually closes —
+    // you still ditch by cornering. See _applyPatrolBand().
+    this.patrolBandEnabled = true;
+    this.patrolBandWidth = 70;   // px — outer shell of sightRange where the cap ramps 0→full
+    this.patrolBandSpeed = 615;  // px/s — patrol top speed at the sight edge (just above player 600)
     // Spawn ease-in: a freshly placed/relocated cop EASES in rather than rocketing at you — capped
     // slow while far, ramping to match your speed as the gap closes, then it hands off to normal
     // chasing (the flag clears once it's within seNear). Caps maxSpeed via min() AFTER the rejoin
@@ -742,6 +751,27 @@ export class GameScene extends Phaser.Scene {
     const turnMult = 1 + (this.rbTurnMult - 1) * f;
     cop.turnSpeedLow = cop.baseTurnSpeedLow * turnMult;
     cop.turnSpeed = cop.baseTurnSpeed * turnMult;
+  }
+
+  // Patrol sight-edge rubber band: a PATROL (495 top vs the player's 600) gets straight-lined
+  // off trivially in the early levels — drive in a line, pull away 105px/s, slide out of sight.
+  // This raises a chasing patrol's top-speed cap toward patrolBandSpeed (just above player top)
+  // as it nears the OUTER shell of sightRange, so the gap stops growing right at the edge and it
+  // hovers just inside view (~sightRange − a hair). It does NOT help it CLOSE — the cap only
+  // matches you, so you still ditch patrols by cornering / garages / gadgets, just not by driving
+  // straight. Patrols only (interceptor/spike are already faster + boosted; heavy is a blocker)
+  // and ACTIVE only (a blind/searching patrol isn't "in view"). Distance-based, no LOS coupling.
+  // Applied AFTER the rejoin + overtake boosts and taken as a MAX so it only ever raises the cap.
+  _applyPatrolBand(cop, dist, active) {
+    if (!this.patrolBandEnabled || !active || cop.unitType !== "patrol") return;
+    const inner = this.sightRange - this.patrolBandWidth;
+    const f = Phaser.Math.Clamp((dist - inner) / Math.max(1, this.patrolBandWidth), 0, 1);
+    if (f <= 0) return;
+    const cap = Phaser.Math.Linear(cop.baseMaxSpeed, this.patrolBandSpeed, f);
+    if (cap > cop.maxSpeed) {
+      cop.maxSpeed = cap;
+      cop.ai.maxApproachSpeed = Math.max(cop.ai.maxApproachSpeed, cap);
+    }
   }
 
   // Is a world point clear of the camera view by `margin` px (i.e. safely off-screen)?
@@ -3466,6 +3496,9 @@ this.withdrawColor = ${hex(f.withdrawColor)};`;
       rbGrip: this.rbGrip,
       rbTurnMult: this.rbTurnMult,
       rbSpeedBoost: this.rbSpeedBoost,
+      patrolBandEnabled: this.patrolBandEnabled,
+      patrolBandWidth: this.patrolBandWidth,
+      patrolBandSpeed: this.patrolBandSpeed,
       respawnEnabled: this.respawnEnabled,
       respawnDist: this.respawnDist,
       respawnTime: this.respawnTime,
@@ -3639,6 +3672,18 @@ this.withdrawColor = ${hex(f.withdrawColor)};`;
       .add(this.copTuning, "rbSpeedBoost", 0, 400, 10)
       .name("Speed boost at full")
       .onChange(apply);
+    rejoin
+      .add(this.copTuning, "patrolBandEnabled")
+      .name("Patrol sight-edge band")
+      .onChange(apply);
+    rejoin
+      .add(this.copTuning, "patrolBandWidth", 20, 300, 10)
+      .name("Patrol band width (px)")
+      .onChange(apply);
+    rejoin
+      .add(this.copTuning, "patrolBandSpeed", 495, 800, 5)
+      .name("Patrol band top speed")
+      .onChange(apply);
 
     const respawn = gui.addFolder("Respawn (lost cops)");
     respawn
@@ -3704,7 +3749,7 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
 
     // Persist across refresh. Key bumped to v16: huntLead removed (blind cops now go
     // straight to last-known, no forward projection).
-    this._persistPanel(gui, "gd_copTuning24"); // bumped: added spawn ease-in levers
+    this._persistPanel(gui, "gd_copTuning25"); // bumped: added patrol sight-edge rubber band levers
 
     gui.domElement.style.position = "fixed";
     gui.domElement.style.top = "8px";
@@ -3794,6 +3839,9 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
     this.yieldCone = t.yieldCone;
     this.yieldHold = t.yieldHold;
     this.yieldSpeed = t.yieldSpeed;
+    this.patrolBandEnabled = t.patrolBandEnabled;
+    this.patrolBandWidth = t.patrolBandWidth;
+    this.patrolBandSpeed = t.patrolBandSpeed;
     this.rbStart = t.rbStart;
     this.rbFull = t.rbFull;
     this.rbGrip = t.rbGrip;
@@ -4182,6 +4230,13 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
       const boost = state === PursuitState.ACTIVE ? cop.maneuverBoost || 0 : 0;
       cop.maxSpeed += boost;
       cop.ai.maxApproachSpeed = cop.ai.baseApproach + boost;
+      // Patrol sight-edge rubber band (raises the cap toward player top so straight-lining can't
+      // shed a patrol). MAX'd over the boosts above, so it only ever helps. See _applyPatrolBand.
+      this._applyPatrolBand(
+        cop,
+        Phaser.Math.Distance.Between(cop.sprite.x, cop.sprite.y, px, py),
+        state === PursuitState.ACTIVE,
+      );
 
       // Spawn ease-in: while a fresh cop is still far, cap it slow and ramp the cap up to your
       // speed as it closes; once it's within seNear it has "arrived" → clear the flag and let the
