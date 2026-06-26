@@ -1,8 +1,11 @@
-// Procedural game audio — no sound files. Borrows Phaser's WebAudio AudioContext
-// (this.sound.context) and synthesizes everything from oscillators + noise + filters.
+// Game audio — borrows Phaser's WebAudio AudioContext (this.sound.context).
 //
-//   • Engine — detuned sawtooths + a sine sub through a lowpass; pitch/cutoff/volume
-//     track the player's speed and throttle. One persistent voice, updated per frame.
+//   • Engine — SAMPLE-based when recorded loops are present: idle + steady on-load RPM
+//     bands (eng_<car>_*, loaded in BootScene) crossfaded by speed→RPM, with a darker
+//     lowpassed tap mixed in by throttle to fake the off-load/coast timbre. If the
+//     samples aren't in cache it falls back to the PROCEDURAL synth below (filtered
+//     noise chopped into firing pulses). Same updateEngine(speed,maxSpeed,throttle) API
+//     either way, so the rest of the game is oblivious to which voice is running.
 //   • Sirens — a pool of two-tone "wail" voices (an LFO sweeping a square carrier),
 //     panned + attenuated by each cop's position relative to the player. The nearest
 //     few chasing cops get a voice; the rest are silent.
@@ -56,12 +59,98 @@ export class GameAudio {
     this.master.connect(comp);
     comp.connect(ctx.destination);
 
-    this._buildEngine();
+    // Prefer recorded samples; fall back to the procedural engine if they're missing.
+    if (!this._buildSampleEngine("prowler")) this._buildEngine();
     this._buildSirens();
     this._resumeOnGesture();
   }
 
-  // ── Engine ────────────────────────────────────────────────────────────────
+  // ── Engine: sample-based ───────────────────────────────────────────────────
+  // idle + 8 steady on-load loops, each on its own looping source→gain. updateEngine
+  // moves the gains to crossfade between the two bands that bracket the current RPM
+  // (idle treated as the frac=0 band). A parallel lowpassed tap, mixed in when the
+  // throttle is released, darkens the tone for coasting. Returns false (→ procedural
+  // fallback) if any buffer isn't decoded into the cache yet.
+  _buildSampleEngine(car) {
+    const ctx = this.ctx;
+    const cache = this.scene.cache && this.scene.cache.audio;
+    if (!cache) return false;
+
+    // frac = fraction of top speed at which each band sits. idle anchors 0.
+    const layout = [
+      { key: `eng_${car}_idle`,    frac: 0.0 },
+      { key: `eng_${car}_1500`,    frac: 0.12 },
+      { key: `eng_${car}_2500`,    frac: 0.25 },
+      { key: `eng_${car}_3500`,    frac: 0.38 },
+      { key: `eng_${car}_4500`,    frac: 0.50 },
+      { key: `eng_${car}_5500`,    frac: 0.63 },
+      { key: `eng_${car}_6500`,    frac: 0.75 },
+      { key: `eng_${car}_7500`,    frac: 0.88 },
+      { key: `eng_${car}_redline`, frac: 1.0 },
+    ];
+    // All-or-nothing: if anything's missing, bail to procedural rather than play gaps.
+    const bufs = layout.map((l) => cache.get(l.key));
+    if (bufs.some((b) => !b)) return false;
+
+    // engineSum → [onGain] ─┐
+    //           → [offLP→offGain] ┴→ engineMaster → master
+    const engineSum = ctx.createGain();
+    const onGain = ctx.createGain();  onGain.gain.value = 1;        // throttle held
+    const offLP = ctx.createBiquadFilter(); offLP.type = "lowpass"; offLP.frequency.value = 850;
+    const offGain = ctx.createGain(); offGain.gain.value = 0.0001;  // coasting (faked dark)
+    const engineMaster = ctx.createGain(); engineMaster.gain.value = 0.0001;
+    engineSum.connect(onGain);  onGain.connect(engineMaster);
+    engineSum.connect(offLP);   offLP.connect(offGain); offGain.connect(engineMaster);
+    engineMaster.connect(this.master);
+
+    const voices = layout.map((l, i) => {
+      const src = ctx.createBufferSource();
+      src.buffer = bufs[i];
+      src.loop = true;
+      const g = ctx.createGain(); g.gain.value = 0.0001;
+      src.connect(g); g.connect(engineSum);
+      src.start();
+      return { src, g, frac: l.frac };
+    });
+
+    this.sampleEngine = { voices, onGain, offGain, engineMaster };
+    return true;
+  }
+
+  _updateSampleEngine(speed, maxSpeed, throttle) {
+    const ctx = this.ctx, now = ctx.currentTime;
+    const e = this.sampleEngine;
+    const frac = Math.max(0, Math.min(1, speed / (maxSpeed || 1)));
+    const v = e.voices;
+
+    // Find the bracketing pair and equal-power crossfade between them; silence the rest.
+    let lo = 0;
+    while (lo < v.length - 1 && frac > v[lo + 1].frac) lo++;
+    const hasHi = lo < v.length - 1;
+    let t = 0;
+    if (hasHi) {
+      const a = v[lo].frac, b = v[lo + 1].frac;
+      t = Math.max(0, Math.min(1, (frac - a) / (b - a)));
+    }
+    for (let i = 0; i < v.length; i++) {
+      let g = 0.0001;
+      if (i === lo) g = hasHi ? Math.cos(t * 0.5 * Math.PI) : 1;
+      else if (i === lo + 1) g = Math.sin(t * 0.5 * Math.PI);
+      v[i].g.gain.setTargetAtTime(Math.max(0.0001, g), now, 0.06);
+    }
+
+    // Load: throttle held → bright (on) tap; released → darker (off) tap. Smoothed so
+    // it "breathes" between power and coast rather than snapping.
+    const load = throttle ? 1 : 0;
+    e.onGain.gain.setTargetAtTime(Math.max(0.0001, load), now, 0.12);
+    e.offGain.gain.setTargetAtTime(Math.max(0.0001, 1 - load), now, 0.12);
+
+    // Slight swell with speed; engineVol + mute applied here (read live for the panel).
+    const vol = this.muted ? 0.0001 : (0.5 + frac * 0.35) * this.engineVol;
+    e.engineMaster.gain.setTargetAtTime(Math.max(0.0001, vol), now, 0.08);
+  }
+
+  // ── Engine: procedural fallback ─────────────────────────────────────────────
   // Not a pitched tone (that reads as synth-bass/techno) — a NOISE bed chopped into
   // firing pulses. An LFO amplitude-modulates filtered noise; its rate is the firing
   // rate, so the engine "revs" (chuffs blur into a roar) instead of playing a melody.
@@ -118,6 +207,7 @@ export class GameAudio {
   // speed/maxSpeed → firing rate (rev) + brightness; throttle adds load. Smoothed.
   updateEngine(speed, maxSpeed, throttle) {
     if (!this.ctx) return;
+    if (this.sampleEngine) return this._updateSampleEngine(speed, maxSpeed, throttle);
     const now = this.ctx.currentTime;
     const frac = Math.max(0, Math.min(1, speed / (maxSpeed || 1)));
     const fire = 22 + Math.pow(frac, 0.9) * 150; // firing rate (Hz): idle putter → revving roar
@@ -268,6 +358,8 @@ export class GameAudio {
     try {
       const stop = (o) => { try { o.stop(); } catch {} };
       const e = this.engine; if (e) { stop(e.noise); stop(e.lfo); stop(e.body); }
+      // Sample engine: stop every looping band source, else they leak on scene restart.
+      if (this.sampleEngine) for (const v of this.sampleEngine.voices) stop(v.src);
       // Stop the siren oscillators too — zeroing gain alone leaves them running after the
       // master is disconnected, leaking a fresh set of oscillators on every scene restart.
       for (const v of this.sirens || []) { stop(v.carrier); stop(v.lfo); v.g.gain.value = 0; }
