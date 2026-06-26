@@ -3534,9 +3534,14 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
 
     this._persistPanel(gui, "gd_screenFx_v3"); // bumped: baked tuned values + corner radius
 
+    // Bottom-middle — was top-right, stacked on top of the Car Tuning panel (which holds
+    // the Lights & Sound / audio controls) and hid it. Centred via translateX(-50%).
     gui.domElement.style.position = "fixed";
-    gui.domElement.style.top = "8px";
-    gui.domElement.style.right = "8px";
+    gui.domElement.style.top = "auto";
+    gui.domElement.style.right = "auto";
+    gui.domElement.style.left = "50%";
+    gui.domElement.style.bottom = "8px";
+    gui.domElement.style.transform = "translateX(-50%)";
     gui.domElement.style.zIndex = "9999";
   }
 
