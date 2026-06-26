@@ -44,7 +44,7 @@ export class GameAudio {
     this.masterVolume = masterVolume;
     this.engineVol = 0.5; // multiplier on engine gain (baked from playtest)
     this.sirenVol = 1;    // multiplier on siren gain
-    this.screechVol = 1;  // multiplier on tire-screech gain
+    this.screechVol = 0.15; // multiplier on tire-screech gain (baked from playtest)
     const ctx = scene.sound && scene.sound.context;
     // No WebAudio (HTML5/NoAudio fallback) → every method becomes a safe no-op.
     if (!ctx || typeof ctx.createOscillator !== "function") {
