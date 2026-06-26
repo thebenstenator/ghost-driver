@@ -234,53 +234,46 @@ export class GameAudio {
   }
 
   // ── Tire screech ────────────────────────────────────────────────────────────
-  // One persistent voice driven by tire SLIP (set each frame by updateScreech). Noise
-  // through a resonant bandpass = the rubber "squeal"; a slow LFO wobbles the centre so
-  // it scrubs/chirps instead of holding a pure tone. A second flatter band adds the
-  // broadband scuff under the squeal. Silent (gain ~0) until there's slip.
+  // Recorded one-shots grouped by event (brake / handbrake / launch). GameScene detects
+  // the slip event and calls playScreech(category); we fire a random variation from that
+  // group. A per-category cooldown (= the clip length) stops a held slide from
+  // retriggering every frame. Buffers come from Phaser's loader (BootScene); if they're
+  // missing, every call is a safe no-op.
   _buildScreech() {
-    const ctx = this.ctx;
-
-    const buf = ctx.createBuffer(1, ctx.sampleRate * 2, ctx.sampleRate);
-    const d = buf.getChannelData(0);
-    for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
-    const noise = ctx.createBufferSource();
-    noise.buffer = buf;
-    noise.loop = true;
-
-    // Resonant squeal — high Q so the rubber "rings". Centre wobbles via the LFO.
-    const bp = ctx.createBiquadFilter();
-    bp.type = "bandpass"; bp.frequency.value = 2400; bp.Q.value = 9;
-    const lfo = ctx.createOscillator();
-    lfo.type = "sine"; lfo.frequency.value = 6;
-    const lfoGain = ctx.createGain(); lfoGain.gain.value = 45; // Hz of wobble (was 180 — much steadier)
-    lfo.connect(lfoGain); lfoGain.connect(bp.frequency);
-
-    // Thin broadband scuff bed so it's not a PURE whistle — kept quiet to stay tonal.
-    const scuff = ctx.createBiquadFilter();
-    scuff.type = "bandpass"; scuff.frequency.value = 1100; scuff.Q.value = 1.4;
-    const scuffG = ctx.createGain(); scuffG.gain.value = 0.2;
-
-    const g = ctx.createGain(); g.gain.value = 0.0001; // silent until slip
-
-    noise.connect(bp);    bp.connect(g);
-    noise.connect(scuff); scuff.connect(scuffG); scuffG.connect(g);
-    g.connect(this.master);
-
-    noise.start(); lfo.start();
-    this.screech = { g, bp, noise, lfo };
+    this._screechBufs = { brake: [], handbrake: [], launch: [] };
+    this._screechCdUntil = { brake: 0, handbrake: 0, launch: 0, corner: 0 };
+    this._screechActive = [];
+    const cache = this.scene.cache && this.scene.cache.audio;
+    if (!cache) return;
+    const add = (cat, key) => { const b = cache.get(key); if (b) this._screechBufs[cat].push(b); };
+    add("brake", "scr_brake_1");         add("brake", "scr_brake_2");
+    add("handbrake", "scr_handbrake_1"); add("handbrake", "scr_handbrake_2"); add("handbrake", "scr_handbrake_3");
+    add("launch", "scr_launch_1");
   }
 
-  // level 0..1 = how much the tires are slipping (computed from car dynamics in GameScene).
-  // Louder AND a touch brighter with more slip, so a small scuff and a full lock-up differ.
-  updateScreech(level) {
-    if (!this.ctx || !this.screech) return;
+  // category: "brake" | "handbrake" | "launch" | "corner" (corner reuses the handbrake
+  // clips, quieter, on its own cooldown). opts: { gain=1, cooldown=clip length }.
+  playScreech(category, opts = {}) {
+    if (!this.ctx || this.muted || !this._screechBufs) return;
+    const group = category === "corner" ? "handbrake" : category;
+    const bufs = this._screechBufs[group];
+    if (!bufs || !bufs.length) return;
     const now = this.ctx.currentTime;
-    const lv = Math.max(0, Math.min(1, level || 0));
-    const { g, bp } = this.screech;
-    const vol = this.muted ? 0.0001 : Math.max(0.0001, lv * 0.5 * this.screechVol);
-    g.gain.setTargetAtTime(vol, now, 0.04); // fast on/off so chirps stay punchy
-    bp.frequency.setTargetAtTime(2200 + lv * 900, now, 0.05);
+    if (now < (this._screechCdUntil[category] || 0)) return; // still cooling down
+
+    const buf = bufs[(Math.random() * bufs.length) | 0];
+    const src = this.ctx.createBufferSource(); src.buffer = buf;
+    const g = this.ctx.createGain();
+    g.gain.value = Math.max(0.0001, (opts.gain ?? 1) * this.screechVol);
+    src.connect(g); g.connect(this.master);
+    src.start();
+
+    this._screechActive.push(src);
+    src.onended = () => {
+      const i = this._screechActive.indexOf(src);
+      if (i >= 0) this._screechActive.splice(i, 1);
+    };
+    this._screechCdUntil[category] = now + (opts.cooldown ?? buf.duration * 0.9);
   }
 
   // ── Sirens ────────────────────────────────────────────────────────────────
@@ -422,7 +415,7 @@ export class GameAudio {
       const e = this.engine; if (e) { stop(e.noise); stop(e.lfo); stop(e.body); }
       // Sample engine: stop every looping band source, else they leak on scene restart.
       if (this.sampleEngine) for (const v of this.sampleEngine.voices) stop(v.src);
-      if (this.screech) { stop(this.screech.noise); stop(this.screech.lfo); }
+      for (const s of this._screechActive || []) stop(s); // stop any in-flight one-shots
       // Stop the siren oscillators too — zeroing gain alone leaves them running after the
       // master is disconnected, leaking a fresh set of oscillators on every scene restart.
       for (const v of this.sirens || []) { stop(v.carrier); stop(v.lfo); v.g.gain.value = 0; }

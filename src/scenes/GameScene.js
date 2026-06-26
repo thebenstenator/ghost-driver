@@ -3981,7 +3981,6 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
       if (this.audio) {
         this.audio.updateEngine(0, this.car.maxSpeed, false);
         this.audio.updateSirens(this.car.sprite, this.cops, false);
-        this.audio.updateScreech(0);
       }
       return;
     }
@@ -4075,21 +4074,28 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
     // Engine synth tracks the player's speed + throttle.
     this.audio.updateEngine(this.car.getSpeed(), this.car.maxSpeed, controls.up);
 
-    // Tire screech — every case is tire SLIP, read from the post-update car dynamics:
-    //   • lateral slide  → |driftAngle| (cornering hard / drifting), speed-gated
-    //   • handbrake lock → a baseline floor while sliding (full squeal mid-drift)
-    //   • launch wheelspin → throttle held while near-stopped, fades in by ~150 px/s
-    //   • brake lock-up  → hard brake / down at speed
-    // max() lets the dominant source win rather than stacking unnaturally.
+    // Tire screech — recorded one-shots fired on the RISING EDGE of each slip event
+    // (audio applies a per-category cooldown so a held slide doesn't machine-gun):
+    //   • handbrake → the entry kick starting (tap-and-release drift initiation)
+    //   • brake     → hard brake / reverse-press while moving fast
+    //   • corner    → big lateral slide with no handbrake (quieter handbrake clip)
+    //   • launch    → throttle from a near standstill (wheelspin)
     {
-      const sp = this.car.getSpeed(), c = controls, C = Phaser.Math.Clamp;
-      const lat   = C((Math.abs(this.car.driftAngle) - 0.12) / 0.5, 0, 1) * C(sp / 140, 0, 1);
-      // Full squeal through the entry kick (tap-and-release), not just while space is held.
-      const kick  = this.car.isDriftKicking() ? 0.9 : 0;
-      const hb    = (c.handbrake && sp > 80) ? 0.55 : 0;
-      const launch = c.up ? C(1 - sp / 150, 0, 1) : 0;
-      const brake = (c.brake || (c.down && sp > 60)) ? C(sp / 170, 0, 1) * 0.85 : 0;
-      this.audio.updateScreech(Math.min(1, Math.max(lat + Math.max(hb, kick), launch, brake)));
+      const sp = this.car.getSpeed(), c = controls;
+      const da = Math.abs(this.car.driftAngle);
+      const s = this._screechEdge || (this._screechEdge = {});
+      const kicking   = this.car.isDriftKicking();
+      const braking   = (c.brake || c.down) && sp > 220;
+      const cornering = !c.handbrake && !kicking && da > 0.32 && sp > 220;
+      const launching = c.up && sp < 45 && (this._screechLastSp || 0) < 12;
+
+      if (kicking   && !s.kicking)   this.audio.playScreech("handbrake");
+      if (braking   && !s.braking)   this.audio.playScreech("brake");
+      if (cornering && !s.cornering) this.audio.playScreech("corner", { gain: 0.5, cooldown: 0.8 });
+      if (launching)                 this.audio.playScreech("launch"); // cooldown gates repeats
+
+      s.kicking = kicking; s.braking = braking; s.cornering = cornering;
+      this._screechLastSp = sp;
     }
 
     // Kill Lights stealth indicator (bottom-centre) follows the lights-off state.

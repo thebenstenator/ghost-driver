@@ -15,6 +15,19 @@ export class BootScene extends Phaser.Scene {
     // `eng_<car>_<band>`; GameAudio crossfades the bands by speed→RPM. If any are
     // missing the engine voice falls back to the procedural synth (see GameAudio).
     this._loadEngine('prowler');
+    this._loadScreech();
+  }
+
+  // Tire-screech one-shots, grouped by event. GameAudio plays a random variation per
+  // category (brake / handbrake / launch) on the matching slip event.
+  _loadScreech() {
+    const base = 'audio/tire_screech/';
+    this.load.audio('scr_brake_1',     base + 'screech_brake_1.ogg');
+    this.load.audio('scr_brake_2',     base + 'screech_brake_2.ogg');
+    this.load.audio('scr_handbrake_1', base + 'screech_handbrake_1.ogg');
+    this.load.audio('scr_handbrake_2', base + 'screech_handbrake_2.ogg');
+    this.load.audio('scr_handbrake_3', base + 'screech_handbrake_3.ogg');
+    this.load.audio('scr_launch_1',    base + 'screech_launch_1.ogg');
   }
 
   // One driveable car's engine bank: idle + the steady on-load RPM bands.
