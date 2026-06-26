@@ -97,6 +97,13 @@ export class Vehicle {
     return Math.sqrt(this.vx * this.vx + this.vy * this.vy);
   }
 
+  // True while the handbrake entry-kick is still rotating the car — i.e. the drift is
+  // being initiated even after the space tap is released. Used to sustain tire screech
+  // for the full kick rather than only while the key is held.
+  isDriftKicking() {
+    return this._kickTotal !== 0 && this._kickTimer < this.entryKickDuration;
+  }
+
   update(delta, controls) {
     const dt = delta / 1000;
 

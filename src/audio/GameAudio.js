@@ -250,16 +250,16 @@ export class GameAudio {
 
     // Resonant squeal — high Q so the rubber "rings". Centre wobbles via the LFO.
     const bp = ctx.createBiquadFilter();
-    bp.type = "bandpass"; bp.frequency.value = 1500; bp.Q.value = 7;
+    bp.type = "bandpass"; bp.frequency.value = 2400; bp.Q.value = 9;
     const lfo = ctx.createOscillator();
-    lfo.type = "sine"; lfo.frequency.value = 7.5;
-    const lfoGain = ctx.createGain(); lfoGain.gain.value = 180; // Hz of wobble
+    lfo.type = "sine"; lfo.frequency.value = 6;
+    const lfoGain = ctx.createGain(); lfoGain.gain.value = 45; // Hz of wobble (was 180 — much steadier)
     lfo.connect(lfoGain); lfoGain.connect(bp.frequency);
 
-    // Broadband scuff bed (lower, wide) so it's not a pure whistle.
+    // Thin broadband scuff bed so it's not a PURE whistle — kept quiet to stay tonal.
     const scuff = ctx.createBiquadFilter();
-    scuff.type = "bandpass"; scuff.frequency.value = 700; scuff.Q.value = 1.2;
-    const scuffG = ctx.createGain(); scuffG.gain.value = 0.4;
+    scuff.type = "bandpass"; scuff.frequency.value = 1100; scuff.Q.value = 1.4;
+    const scuffG = ctx.createGain(); scuffG.gain.value = 0.2;
 
     const g = ctx.createGain(); g.gain.value = 0.0001; // silent until slip
 
@@ -278,9 +278,9 @@ export class GameAudio {
     const now = this.ctx.currentTime;
     const lv = Math.max(0, Math.min(1, level || 0));
     const { g, bp } = this.screech;
-    const vol = this.muted ? 0.0001 : Math.max(0.0001, lv * 0.16 * this.screechVol);
+    const vol = this.muted ? 0.0001 : Math.max(0.0001, lv * 0.5 * this.screechVol);
     g.gain.setTargetAtTime(vol, now, 0.04); // fast on/off so chirps stay punchy
-    bp.frequency.setTargetAtTime(1300 + lv * 700, now, 0.05);
+    bp.frequency.setTargetAtTime(2200 + lv * 900, now, 0.05);
   }
 
   // ── Sirens ────────────────────────────────────────────────────────────────

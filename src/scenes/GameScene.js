@@ -3420,7 +3420,7 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
     st.add(this, "illumSpeedRef", 100, 600, 10).name("Re-lit at speed (px/s)");
 
     // Persist across refresh (binds directly to the car, so load sets car fields).
-    this._persistPanel(gui, "gd_carTuning_v9"); // bumped: engineVol default 0.5 + tire screech
+    this._persistPanel(gui, "gd_carTuning_v10"); // bumped: louder screech base (resets maxed screechVol)
 
     gui.domElement.style.position = "fixed";
     gui.domElement.style.top = "8px";
@@ -4084,10 +4084,12 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
     {
       const sp = this.car.getSpeed(), c = controls, C = Phaser.Math.Clamp;
       const lat   = C((Math.abs(this.car.driftAngle) - 0.12) / 0.5, 0, 1) * C(sp / 140, 0, 1);
+      // Full squeal through the entry kick (tap-and-release), not just while space is held.
+      const kick  = this.car.isDriftKicking() ? 0.9 : 0;
       const hb    = (c.handbrake && sp > 80) ? 0.55 : 0;
       const launch = c.up ? C(1 - sp / 150, 0, 1) : 0;
       const brake = (c.brake || (c.down && sp > 60)) ? C(sp / 170, 0, 1) * 0.85 : 0;
-      this.audio.updateScreech(Math.min(1, Math.max(lat + hb, launch, brake)));
+      this.audio.updateScreech(Math.min(1, Math.max(lat + Math.max(hb, kick), launch, brake)));
     }
 
     // Kill Lights stealth indicator (bottom-centre) follows the lights-off state.
