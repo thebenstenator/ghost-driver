@@ -347,7 +347,9 @@ export class GameScene extends Phaser.Scene {
     this.rbSpinDamp    = 0.93;   // per-frame spin decay (so a spun car settles)
     this.rbSpinMax     = 9;      // rad/s cap on a car's spin
     this.pitTestLevel  = 5;      // sandbox-only stand-in for the pursuit level (drives PIT power)
-    this.searchSpeed = 250; // cop speed cap while searching (clean corners)
+    this.searchSpeed = 300; // UNIFORM cop speed while searching — they sweep at a flat brisk pace
+                            // (kinematic grip + cornerFloor remove the per-intersection braking that
+                            // otherwise drops a physics searcher to ~110). See _applySearchProfile.
     this.searchDepth = 2; // STARTING search radius (blocks out from last-known)
     this.searchMaxDepth = 10; // search grows out to this many blocks as ground is checked
     this.coverageTTL = 6; // s a searched node stays "covered" before it's worth re-checking
@@ -809,6 +811,23 @@ export class GameScene extends Phaser.Scene {
     const turnMult = 1 + (this.rbTurnMult - 1) * f;
     cop.turnSpeedLow = cop.baseTurnSpeedLow * turnMult;
     cop.turnSpeed = cop.baseTurnSpeed * turnMult;
+  }
+
+  // Search profile: while a cop is SEARCHING (or returning) it should sweep at a UNIFORM brisk pace,
+  // not the ragged 110-vs-230 a physics cop produces braking into every intersection. Two parts:
+  //   1. cornerFloor = searchSpeed → CopAI ignores its corner/turn braking and holds the flat cap.
+  //   2. kinematic-ish grip/turn (the same near-on-rails profile the rejoin band uses at full) so it
+  //      can actually round those corners at searchSpeed without washing into a wall.
+  // Applied to ALL searchers (near and far), so it OVERRIDES the rejoin band's distance-based handling
+  // for them — they're off the player's bumper (the chase is lost), so on-rails sweeping reads clean,
+  // not robotic. When not searching, cornerFloor → 0 and the rejoin band owns handling again next frame.
+  _applySearchProfile(cop, slow) {
+    if (!slow) { cop.ai.cornerFloor = 0; return; }
+    cop.ai.cornerFloor = this.searchSpeed;
+    cop.gripLow = this.rbGrip;
+    cop.gripHigh = this.rbGrip;
+    cop.turnSpeedLow = cop.baseTurnSpeedLow * this.rbTurnMult;
+    cop.turnSpeed = cop.baseTurnSpeed * this.rbTurnMult;
   }
 
   // Patrol rubber band: a PATROL (495 top vs the player's 600) gets straight-lined off trivially
@@ -3930,7 +3949,7 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
 
     // Persist across refresh. Key bumped to v16: huntLead removed (blind cops now go
     // straight to last-known, no forward projection).
-    this._persistPanel(gui, "gd_copTuning27"); // bumped: patrol band re-anchored to on-screen start/full (was sightRange-relative)
+    this._persistPanel(gui, "gd_copTuning28"); // bumped: uniform search (searchSpeed 300 + kinematic sweep)
 
     gui.domElement.style.position = "fixed";
     gui.domElement.style.top = "8px";
@@ -4486,6 +4505,9 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
         Phaser.Math.Distance.Between(cop.sprite.x, cop.sprite.y, px, py),
         state === PursuitState.ACTIVE,
       );
+      // Search profile: uniform brisk sweep (kinematic grip + cornerFloor). Overrides the rejoin
+      // band's handling for searchers; clears cornerFloor when not searching. See _applySearchProfile.
+      this._applySearchProfile(cop, slow);
 
       // Spawn ease-in: while a fresh cop is still far, cap it slow and ramp the cap up to your
       // speed as it closes; once it's within seNear it has "arrived" → clear the flag and let the

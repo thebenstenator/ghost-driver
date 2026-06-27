@@ -53,6 +53,10 @@ export class CopAI {
                                  // hard redirect, e.g. when you round a corner). Below this,
                                  // ordinary chase corrections aren't slowed.
     this.turnBrakeSpeed   = 160; // px/s — speed cap at a 90°+ turn (tight enough to stay on road)
+    this.cornerFloor      = 0;   // px/s — when >0, IGNORE corner/turn braking and hold at least this
+                                 // speed. GameScene sets it to searchSpeed during SEARCH (and hands the
+                                 // cop kinematic-ish grip) so searchers sweep at a UNIFORM brisk pace
+                                 // instead of braking to 110 at every intersection. 0 = normal braking.
 
     // Per-unit-type overrides (from the UnitDef's `ai` block). Curated tunable keys
     // only — applied here so they win over the defaults but never touch the internal
@@ -235,6 +239,12 @@ export class CopAI {
       const tf = Phaser.Math.Clamp((turnMag - this.turnBrakeAngle) / (Math.PI / 2 - this.turnBrakeAngle), 0, 1);
       limit = Math.min(limit, Phaser.Math.Linear(this.maxApproachSpeed, this.turnBrakeSpeed, tf));
     }
+
+    // Uniform-cruise floor (SEARCH): override all the corner/turn/look-ahead braking above and hold
+    // at least cornerFloor (clamped to the cap). The cop is handed kinematic-ish grip while searching,
+    // so it can corner at this speed cleanly — the braking that drops a physics cop to ~110 at each
+    // intersection just makes the sweep look sluggish and uneven, which is what this removes.
+    if (this.cornerFloor > 0) limit = Math.max(limit, Math.min(this.cornerFloor, this.speedCap));
 
     // --- Throttle toward desiredSpeed ---
     let mode;
