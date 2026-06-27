@@ -168,10 +168,10 @@ export class GameScene extends Phaser.Scene {
     this.oilLifetime = 30;      // s the patch stays on the road before fading out
     this.oilGripLost = 0.9;     // peak slipperiness (absolute ice grip) the instant a cop hits oil
     this.oilSpeedLost = 0;      // fraction of speed scrubbed on first contact (0 = keep momentum)
-    this.oilEffectTime = 5;     // s the slide lingers AFTER a cop leaves the oil, tapering full→normal.
-                                // While on the patch it stays full strength (refreshed each frame); the
-                                // taper only runs once the cop is off it, so the effect WEARS OFF instead
-                                // of locking the cop for the whole search. (Old 30 = a ~permanent lockout.)
+    this.oilEffectTime = 15;    // s the slide lasts at FULL strength after a cop hits oil, then snaps back
+                                // to normal (no decay — a taper was tried and felt wrong). While on the
+                                // patch the timer is refreshed each frame, so it stays oiled until 15s
+                                // after it leaves. (30 was too long — basically a whole-search lockout.)
 
     // --- Gadget: Nitro Boost (player) — a short burst that scales BOTH acceleration and top
     // speed for a few seconds (one charge). Applied non-destructively in the update loop: it
@@ -3544,7 +3544,7 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
     oil.add(this, "oilLifetime", 2, 30, 1).name("Patch lifetime (s)");
     oil.add(this, "oilGripLost", 0, 1, 0.05).name("Slide lock (0–1)");
     oil.add(this, "oilSpeedLost", 0, 1, 0.05).name("Speed lost on hit (0–1)");
-    oil.add(this, "oilEffectTime", 0.2, 30, 0.1).name("Wear-off time (s)");
+    oil.add(this, "oilEffectTime", 0.2, 30, 0.1).name("Effect duration (s)");
 
     const nitro = gui.addFolder("Nitro Boost (X)");
     nitro
@@ -3587,7 +3587,7 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
     spk.add({ test: () => this._blowTires() }, "test").name("Test blowout");
     spk.add({ repair: () => this._repairTires() }, "repair").name("Repair (clear)");
 
-    this._persistPanel(gui, "gd_gadgetTune_v11"); // bumped: oilEffectTime 30->5 + tapered wear-off
+    this._persistPanel(gui, "gd_gadgetTune_v12"); // bumped: oilEffectTime 15, full strength, no decay (taper reverted)
 
     // Anchored to the BOTTOM-RIGHT so the panel grows UPWARD when folders expand and stays
     // clear of the bottom-left spawn panel. CRITICAL: clear top/left to "auto" — lil-gui's
@@ -4508,17 +4508,12 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
       // AI's throttle/brake/steer result and keep the BALLISTIC velocity (same direction AND
       // speed, lightly dragged). It's on ice: no grip, no power, no brakes — it just carries its
       // momentum until it hits a wall or the effect ends. The body still steers (nose turns),
-      // but travel is locked. Blended by oilLock (= oilGripLost) so <1 leaves a little control.
-      // oilLock TAPERS with the remaining timer (_oilT/oilEffectTime): full strength while on the
-      // patch (timer pinned at max) and for the moment after, then it eases back as the timer runs
-      // out so the cop REGAINS control gradually — the effect wears off instead of snapping. This
-      // tapers the control LOCK only; the cop keeps its momentum (no speed-decay, which was removed).
+      // but travel is locked. Blended by oilLock (= oilGripLost) so <1 leaves a little control;
+      // FULL strength the whole time the cop is oiled, then it snaps back when the timer ends. A
+      // taper/decay was tried and felt wrong — flat full-strength for oilEffectTime is what works.
       const _oilPvx = cop.vx, _oilPvy = cop.vy;
       cop.update(delta, target);
-      const oilLock =
-        (cop._oilT || 0) > 0
-          ? this.oilGripLost * Math.min(1, cop._oilT / Math.max(0.001, this.oilEffectTime))
-          : 0;
+      const oilLock = (cop._oilT || 0) > 0 ? this.oilGripLost : 0;
       if (oilLock > 0.01 && Math.hypot(_oilPvx, _oilPvy) > 25) {
         // Maintain the cop's CURRENT velocity (direction AND speed) — no accel, no brakes, no
         // drag: it just carries its momentum across the oil at the speed it came in at.

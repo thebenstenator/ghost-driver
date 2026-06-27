@@ -164,7 +164,7 @@ export const TOOLTIPS = {
   oilLifetime: "Seconds the patch stays on the road before fading out. Raise to leave the hazard down longer.",
   oilGripLost: "How hard oil makes a cop COAST — ignoring throttle, brakes AND steering, just carrying its momentum (the body still turns, but travel is locked). 1 = full ice (no control at all: slides straight until it hits a wall or the effect ends), 0 = no effect. Full strength for the whole effect duration, then off.",
   oilSpeedLost: "Fraction of a cop's speed scrubbed the instant it touches oil. 0 = no slow, 1 = dead stop. Raise to make the hit slow them more.",
-  oilEffectTime: "Seconds the slide takes to WEAR OFF after a cop leaves the patch — full strength on contact, tapering back to normal control over this time. Raise to keep a cop clumsy longer; the cop never force-slows, it just regains grip gradually.",
+  oilEffectTime: "Seconds the slide lasts (at full strength) after a cop leaves the patch, then it snaps back to normal. Raise to keep a cop sliding longer.",
 
   // ── Gadget: Smoke Screen ────────────────────────────────────────────────────
   smokeMaxCharges: "How many smoke clouds you carry per run. (Changing this refills you.) Raise for more drops before you're empty.",
