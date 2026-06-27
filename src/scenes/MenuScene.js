@@ -205,6 +205,11 @@ export class MenuScene extends Phaser.Scene {
           color: "#9aa0b5",
         })
         .setOrigin(0.5);
+      // Click a filled slot to clear it (an invisible interactive rect under the drawn box).
+      this.add
+        .rectangle(sx, 414, this._slotSize, this._slotSize, 0x000000, 0)
+        .setInteractive({ useHandCursor: true })
+        .on("pointerdown", () => this._removeSlot(i));
     }
 
     // Available gadgets (bottom row) — icon box + name, hover for the tooltip, click to toggle.
@@ -225,7 +230,7 @@ export class MenuScene extends Phaser.Scene {
         })
         .setOrigin(0.5);
       const zone = this.add
-        .zone(px, 500, this._choiceSize + 10, this._choiceSize + 24)
+        .rectangle(px, 500, this._choiceSize + 10, this._choiceSize + 24, 0x000000, 0)
         .setInteractive({ useHandCursor: true });
       zone.on("pointerover", () => {
         this._hoverId = def.id;
@@ -259,6 +264,14 @@ export class MenuScene extends Phaser.Scene {
     if (idx >= 0) this.loadout.splice(idx, 1); // assigned → remove
     else if (this.loadout.length < MAX_LOADOUT) this.loadout.push(id); // → next open slot
     else return; // full — must remove one first
+    GameScene.setLoadout(this.loadout);
+    this._renderLoadout();
+  }
+
+  // Click a slot box to clear the gadget sitting in it.
+  _removeSlot(i) {
+    if (i >= this.loadout.length) return; // empty slot — nothing to clear
+    this.loadout.splice(i, 1);
     GameScene.setLoadout(this.loadout);
     this._renderLoadout();
   }
