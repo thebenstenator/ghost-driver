@@ -275,20 +275,21 @@ export class GameScene extends Phaser.Scene {
     this.rbGrip = 0.9; // grip (low & high) at full blend — near on-rails
     this.rbTurnMult = 1.6; // turn-rate multiplier at full blend
     this.rbSpeedBoost = 115; // px/s added to top speed at full blend
-    // Patrol rubber band: keeps a chasing PATROL (slow, 495 vs player 600) from being straight-lined
+    // Patrol rubber band: softens how fast a chasing PATROL (slow, 495 vs player 600) gets straight-lined
     // away in the early levels. Its top-speed cap ramps up toward patrolBandSpeed between patrolBandStart
-    // (no boost) and patrolBandFull (full boost) px behind you, so the gap holds at a VISIBLE distance.
+    // (no boost) and patrolBandFull (full boost) px behind you, so the bleed SLOWS at a VISIBLE distance.
     // CRITICAL: these are anchored to what you can SEE, not sightRange (900px). At full chase speed the
     // camera zoom-out shows ~510px behind you, so a band keyed off the 900px sight edge would only ever
-    // engage AFTER the cop left the screen — the boost happened but you never saw it pace. Start/full
-    // sit inside the visible band so the catch-up reads on-screen; equilibrium (where the boost matches
-    // your 600) lands ~patrolBandStart + 0.8·(full−start) ≈ 450px. bandSpeed a hair above 600 means a
-    // patrol pulls a touch closer rather than hugging the exact hold line, but never truly CLOSES — you
-    // still ditch by cornering / garages / gadgets. See _applyPatrolBand().
+    // engage AFTER the cop left the screen — the boost happened but you never saw it. Start/full sit
+    // inside the visible band so the slowed catch-up reads on-screen. bandSpeed is kept BELOW the player's
+    // 600, so a patrol never fully keeps pace — it just falls behind gently (~25px/s at full band instead
+    // of 105), drifting back rather than locking onto you. See _applyPatrolBand().
     this.patrolBandEnabled = true;
     this.patrolBandStart = 320;  // px behind you where the cap starts ramping up (no boost nearer than this)
     this.patrolBandFull  = 480;  // px behind you where the cap hits patrolBandSpeed (kept inside the visible edge)
-    this.patrolBandSpeed = 625;  // px/s — patrol top speed at full band (just above player 600 → gentle hold)
+    this.patrolBandSpeed = 575;  // px/s — patrol top speed at full band. BELOW the player's 600 on purpose:
+                                 // the band slows the bleed (falls behind ~25px/s instead of 105) but never
+                                 // lets a patrol fully keep pace, so it drifts back gradually, not locks on.
     // Spawn ease-in: a freshly placed/relocated cop EASES in rather than rocketing at you — capped
     // slow while far, ramping to match your speed as the gap closes, then it hands off to normal
     // chasing (the flag clears once it's within seNear). Caps maxSpeed via min() AFTER the rejoin
@@ -3965,7 +3966,7 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
 
     // Persist across refresh. Key bumped to v16: huntLead removed (blind cops now go
     // straight to last-known, no forward projection).
-    this._persistPanel(gui, "gd_copTuning28"); // bumped: uniform search (searchSpeed 300 + kinematic sweep)
+    this._persistPanel(gui, "gd_copTuning29"); // bumped: patrol band top speed 625->575 (falls behind slower, no hold)
 
     gui.domElement.style.position = "fixed";
     gui.domElement.style.top = "8px";
