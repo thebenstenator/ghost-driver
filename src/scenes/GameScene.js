@@ -577,7 +577,30 @@ export class GameScene extends Phaser.Scene {
   // cop toward an in-progress chase. CopAI routes there on the road network.
   _huntGoal() {
     const lk = this.pursuit.lastKnown;
-    return { x: lk.x, y: lk.y };
+    return this._smokeDriveThrough(lk.x, lk.y);
+  }
+
+  // If (x,y) sits INSIDE a smoke cloud, return the point advanced to that cloud's FAR edge along the
+  // player's last travel direction — so a blind cop heading for last-known drives THROUGH the smoke
+  // and out the side the player went, instead of stopping/circling in the blind zone (last-known
+  // can land inside the cloud since the radius exceeds the drop offset). NOT a guess at the player's
+  // position and NOT a sideways/around-corner projection (rule 3): it's the same last-known line,
+  // just advanced past the obstacle the player drove into — and blind cops NAVIGATE to it on the road
+  // network (rule 2), they don't beeline, so there's no corner-cut-into-a-wall risk. Only fires while
+  // smoke actually engulfs the point (a transient, player-created case).
+  _smokeDriveThrough(x, y) {
+    if (!this.smokes.length) return { x, y };
+    const cx = Math.cos(this.pursuit.lastKnownDir),
+      cy = Math.sin(this.pursuit.lastKnownDir);
+    let bx = x, by = y, far = 0;
+    for (const s of this.smokes) {
+      const r = this._cloudR(s);
+      if ((x - s.x) ** 2 + (y - s.y) ** 2 >= r * r) continue; // point not in this cloud
+      const ex = s.x + cx * (r + 25), ey = s.y + cy * (r + 25); // far edge along travel dir (+margin)
+      const proj = (ex - x) * cx + (ey - y) * cy; // how far forward this exit is
+      if (proj > far) { far = proj; bx = ex; by = ey; } // keep the furthest-forward exit
+    }
+    return { x: bx, y: by };
   }
 
   // Where a cop drives once it's lost the trail (SEARCH). It heads for the
@@ -596,7 +619,7 @@ export class GameScene extends Phaser.Scene {
     // resumes; only a genuinely lost trail fans them out.
     if (this._searchClock < this.searchDwell) {
       cop._searchNode = null;
-      return lk;
+      return this._smokeDriveThrough(lk.x, lk.y); // drive through the smoke, don't dwell inside it
     }
 
     const area = this._searchArea();
