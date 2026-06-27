@@ -90,8 +90,8 @@ export class MenuScene extends Phaser.Scene {
       })
       .setOrigin(0.5);
     const controls = [
-      "WASD / Arrows — Drive        Space — Handbrake        Shift - Brake",
-      "P — Pause        B - Nitro        O - Oil slick",
+      "Arrows — Drive        Space — Handbrake        Shift — Brake",
+      "Z Smoke    X Nitro    C Oil    V Repair        P — Pause",
     ].join("\n");
     this.add
       .text(cx, 605, controls, {

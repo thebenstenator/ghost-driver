@@ -175,6 +175,9 @@ export const TOOLTIPS = {
   smokeOpacity: "Peak draw opacity of the cloud (visual only — does not change the block). Lower if it obscures the road too much for you.",
   smokeDropOffset: "How far behind your car (px) the cloud spawns. Raise to drop it further back (between you and a tailing cop); lower to drop it closer under your tail.",
 
+  // ── Gadget: Repair Kit ──────────────────────────────────────────────────────
+  repairMaxCharges: "How many tire-repairs you carry per run. (Changing this refills you.) Each press instantly clears a spike blowout; it won't spend a charge if your tires aren't blown.",
+
   // ── Stealth (Kill Lights) ───────────────────────────────────────────────────
   killLightsRange: "Clear-LOS spotting range (px) for a SLOW, lights-off player. Lower = cops lose a blacked-out crawling car from closer in (easier ditch).",
   illumSpeedRef: "Speed (px/s) at which lights-off gives NO stealth — a dark car this fast is seen as if lit. Lower so you must crawl to benefit; raise to stay stealthy at speed.",

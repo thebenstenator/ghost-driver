@@ -166,6 +166,14 @@ export class GameScene extends Phaser.Scene {
     this.smokeDropOffset = 38;  // px behind the car centre the cloud spawns
     this.smokes = [];           // active clouds: { x, y, r, t, blobs }
 
+    // --- Gadget: Repair Kit (player) — instantly clears a spike BLOWOUT (the only player "damage"
+    // state today), restoring top speed / grip / killing the pull via _repairTires(). The intended
+    // counter to cop spikes. Won't spend a charge if there's nothing to repair. Levers in the
+    // Gadgets dev panel. ---
+    this.repairMaxCharges = 1;  // charges at the start of a run
+    this.repairCharges = this.repairMaxCharges;
+    this._repairFlashUntil = 0; // time.now until which the HUD pip flashes green (feedback)
+
     this.spikes = []; // deployed spike strips (cop hazard)
     this.spikeLifetime = 20; // s a dropped strip persists before it despawns
     this.spikeStripLen = 28; // px across — a cop-deployed strip is ~car-width (DODGEABLE). Roadblock
@@ -476,6 +484,7 @@ export class GameScene extends Phaser.Scene {
       this.oilText,
       this.nitroText,
       this.smokeText,
+      this.repairText,
       this.screenFx.gfx,
     ];
     if (this.debugText) hud.push(this.debugText);
@@ -1668,8 +1677,19 @@ export class GameScene extends Phaser.Scene {
     this.car.facing += (Math.random() * 2 - 1) * this.spikeWobble; // brief physical lurch
   }
 
-  // Clear a blowout instantly — the hook the (future) Repair Kit gadget calls.
+  // Clear a blowout instantly — the hook the Repair Kit gadget calls.
   _repairTires() { this.spikeCrippleTime = 0; }
+
+  // Gadget: Repair Kit — spend a charge to instantly clear a spike blowout. No-op (no charge spent)
+  // if your tires aren't blown, so it can't be wasted.
+  _useRepairKit() {
+    if (this.busted || this.paused) return;
+    if (this.repairCharges <= 0) return;
+    if (this.spikeCrippleTime <= 0) return; // nothing to repair — don't burn a charge
+    this.repairCharges--;
+    this._repairTires();
+    this._repairFlashUntil = this.time.now + 900; // brief green pip flash
+  }
 
   // Telegraph render: a spike cop actively working a deploy (director sets cop._spikesOut while it
   // overtakes / lines up) carries its strip visibly out behind its rear bumper — a row of warning
@@ -2749,8 +2769,10 @@ bleed: { fastFrac: ${b.fastFrac}, fastRate: ${b.fastRate}, slowRate: ${b.slowRat
   }
 
   _setupInput() {
-    this.cursors = this.input.keyboard.createCursorKeys(); // includes .space
-    this.wasd = this.input.keyboard.addKeys("W,A,S,D");
+    // Control scheme: RIGHT hand steers (arrows: ↑ accel, ↓ reverse, ←→ steer); LEFT hand brakes +
+    // gadgets (Shift brake, Space handbrake, Z/X/C/V gadget cluster). WASD steering is intentionally
+    // gone so the left hand is free for the gadget cluster.
+    this.cursors = this.input.keyboard.createCursorKeys(); // arrows + .space
     this.shiftKey = this.input.keyboard.addKey(
       Phaser.Input.Keyboard.KeyCodes.SHIFT,
     );
@@ -2769,20 +2791,20 @@ bleed: { fastFrac: ${b.fastFrac}, fastRate: ${b.fastRate}, slowRate: ${b.slowRat
     // Pause toggle
     this.input.keyboard.on("keydown-P", () => this._togglePause());
 
-    // Cop telemetry: press C to toggle throttled console logging of cop state. Works in
+    // Cop telemetry: press T to toggle throttled console logging of cop state. Works in
     // playtest mode too (console-only, no on-screen clutter) so traces can be captured
     // from the real, dev-tool-free experience.
     this.copLog = false;
     this._copLogTimer = 0;
-    this.input.keyboard.on("keydown-C", () => {
+    this.input.keyboard.on("keydown-T", () => {
       this.copLog = !this.copLog;
       console.log(`[cop telemetry] ${this.copLog ? "ON" : "OFF"}`);
     });
 
-    // Spectate: press V to cycle the camera through player → each cop. While
+    // Spectate: press G to cycle the camera through player → each cop. While
     // viewing a cop, the car is frozen so you can watch a search without driving.
     this.camFocusIndex = 0; // 0 = player, 1..N = cop index + 1
-    this.input.keyboard.on("keydown-V", () => {
+    this.input.keyboard.on("keydown-G", () => {
       this.camFocusIndex = (this.camFocusIndex + 1) % (1 + this.cops.length);
       const sprite =
         this.camFocusIndex === 0
@@ -2801,14 +2823,12 @@ bleed: { fastFrac: ${b.fastFrac}, fastRate: ${b.fastRate}, slowRate: ${b.slowRat
       this.car.lightsOff = !this.car.lightsOff;
     });
 
-    // Gadget — Oil Slick (O): drop a patch behind you (one charge per press).
-    this.input.keyboard.on("keydown-O", () => this._deployOilSlick());
-
-    // Gadget — Nitro Boost (B): a short burst of extra accel + top speed (one charge per press).
-    this.input.keyboard.on("keydown-B", () => this._fireNitro());
-
-    // Gadget — Smoke Screen (X): drop a sight-blocking cloud behind you (one charge per press).
-    this.input.keyboard.on("keydown-X", () => this._deploySmoke());
+    // Gadget cluster (left hand, one key each). Dev mode binds ALL gadgets so everything is testable;
+    // the player "pick ≤3" loadout will map onto Z/X/C on top of this. Order = Z X C V.
+    this.input.keyboard.on("keydown-Z", () => this._deploySmoke());     // Z — Smoke Screen
+    this.input.keyboard.on("keydown-X", () => this._fireNitro());       // X — Nitro Boost
+    this.input.keyboard.on("keydown-C", () => this._deployOilSlick());  // C — Oil Slick
+    this.input.keyboard.on("keydown-V", () => this._useRepairKit());    // V — Repair Kit
   }
 
   _setupDebugOverlay() {
@@ -2926,6 +2946,18 @@ bleed: { fastFrac: ${b.fastFrac}, fastRate: ${b.fastRate}, slowRate: ${b.slowRat
         fontSize: "15px",
         fontStyle: "bold",
         color: "#b9b9c2",
+      })
+      .setOrigin(0, 1)
+      .setScrollFactor(0)
+      .setDepth(100);
+
+    // Gadget charges (bottom-left, stacked above the smoke row) — Repair Kit count.
+    this.repairText = this.add
+      .text(16, this.scale.height - 76, "", {
+        fontFamily: "monospace",
+        fontSize: "15px",
+        fontStyle: "bold",
+        color: "#7dff9e",
       })
       .setOrigin(0, 1)
       .setScrollFactor(0)
@@ -3323,15 +3355,12 @@ bleed: { fastFrac: ${b.fastFrac}, fastRate: ${b.fastRate}, slowRate: ${b.slowRat
     if (this.car.isDrifting) lines.push("[HANDBRAKE DRIFT]");
     lines.push(
       "",
-      "WASD / Arrows — Drive",
-      "Space — Handbrake",
-      "Shift — Brake",
-      "P — Pause",
-      "C — Cop decision log",
-      "V — Cycle camera",
-      "H — Toggle stats",
-      "R — Restart",
-      "M — Menu",
+      "Arrows — Drive",
+      "Space — Handbrake   Shift — Brake",
+      "Z Smoke  X Nitro  C Oil  V Repair",
+      "L — Kill lights",
+      "P — Pause   R — Restart   M — Menu",
+      "T — Cop log   G — Cycle camera   H — Stats",
     );
     this.debugText.setText(lines);
     this._syncStatsHit();
@@ -3471,7 +3500,7 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
     this.gadgetGui = gui;
     gui.close();
 
-    const oil = gui.addFolder("Oil Slick (O)");
+    const oil = gui.addFolder("Oil Slick (C)");
     oil
       .add(this, "oilMaxCharges", 1, 10, 1)
       .name("Charges")
@@ -3482,7 +3511,7 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
     oil.add(this, "oilSpeedLost", 0, 1, 0.05).name("Speed lost on hit (0–1)");
     oil.add(this, "oilEffectTime", 0.2, 30, 0.1).name("Effect duration (s)");
 
-    const nitro = gui.addFolder("Nitro Boost (B)");
+    const nitro = gui.addFolder("Nitro Boost (X)");
     nitro
       .add(this, "nitroMaxCharges", 1, 10, 1)
       .name("Charges")
@@ -3491,7 +3520,7 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
     nitro.add(this, "nitroAccelMult", 1, 4, 0.05).name("Accel ×");
     nitro.add(this, "nitroSpeedMult", 1, 3, 0.05).name("Top speed ×");
 
-    const smoke = gui.addFolder("Smoke Screen (X)");
+    const smoke = gui.addFolder("Smoke Screen (Z)");
     smoke
       .add(this, "smokeMaxCharges", 1, 10, 1)
       .name("Charges")
@@ -3502,6 +3531,12 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
     smoke.add(this, "smokeFadeTime", 0.2, 6, 0.1).name("Fade time (s)");
     smoke.add(this, "smokeOpacity", 0.1, 1, 0.05).name("Opacity");
     smoke.add(this, "smokeDropOffset", 0, 120, 2).name("Drop offset behind (px)");
+
+    const repair = gui.addFolder("Repair Kit (V)");
+    repair
+      .add(this, "repairMaxCharges", 1, 5, 1)
+      .name("Charges")
+      .onChange((v) => (this.repairCharges = v)); // refill on tune (and on panel load)
 
     // Cop spike HAZARD effect (not a player gadget — the cripple you take from driving over a
     // strip). Lives here so it's tunable in normal pursuit playtest. A "Test blowout" button
@@ -3517,7 +3552,7 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
     spk.add({ test: () => this._blowTires() }, "test").name("Test blowout");
     spk.add({ repair: () => this._repairTires() }, "repair").name("Repair (clear)");
 
-    this._persistPanel(gui, "gd_gadgetTune_v9"); // bumped: added Smoke Screen levers
+    this._persistPanel(gui, "gd_gadgetTune_v10"); // bumped: added Repair Kit + control-scheme keys
 
     // Anchored to the BOTTOM-RIGHT so the panel grows UPWARD when folders expand and stays
     // clear of the bottom-left spawn panel. CRITICAL: clear top/left to "auto" — lil-gui's
@@ -4044,10 +4079,10 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
           brake: false,
         }
       : {
-          up: this.cursors.up.isDown || this.wasd.W.isDown,
-          down: this.cursors.down.isDown || this.wasd.S.isDown,
-          left: this.cursors.left.isDown || this.wasd.A.isDown,
-          right: this.cursors.right.isDown || this.wasd.D.isDown,
+          up: this.cursors.up.isDown,
+          down: this.cursors.down.isDown,
+          left: this.cursors.left.isDown,
+          right: this.cursors.right.isDown,
           handbrake: this.cursors.space.isDown,
           brake: this.shiftKey.isDown,
         };
@@ -4153,10 +4188,10 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
       this.spikeCrippleTime > 0 ? 0.55 + 0.45 * Math.abs(Math.sin(_time / 180)) : 0,
     );
 
-    // Gadget charges (bottom-left): filled/empty pips for the Oil Slick.
+    // Gadget charges (bottom-left): filled/empty pips, each prefixed with its key.
     this.oilText
       .setText(
-        "OIL " +
+        "C OIL " +
           "◉".repeat(this.oilCharges) +
           "○".repeat(Math.max(0, this.oilMaxCharges - this.oilCharges)),
       )
@@ -4165,7 +4200,7 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
     // Nitro Boost pips — brighten while a boost is actively firing.
     this.nitroText
       .setText(
-        "NITRO " +
+        "X NITRO " +
           "◉".repeat(this.nitroCharges) +
           "○".repeat(Math.max(0, this.nitroMaxCharges - this.nitroCharges)),
       )
@@ -4180,7 +4215,7 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
     // Smoke Screen pips — brighten while a cloud is actively out.
     this.smokeText
       .setText(
-        "SMOKE " +
+        "Z SMOKE " +
           "◉".repeat(this.smokeCharges) +
           "○".repeat(Math.max(0, this.smokeMaxCharges - this.smokeCharges)),
       )
@@ -4190,6 +4225,21 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
           : this.smokeCharges > 0
             ? "#b9b9c2"
             : "#55555c",
+      );
+
+    // Repair Kit pips — flash green briefly on use; dims to amber-ready / grey-empty otherwise.
+    this.repairText
+      .setText(
+        "V REPAIR " +
+          "◉".repeat(this.repairCharges) +
+          "○".repeat(Math.max(0, this.repairMaxCharges - this.repairCharges)),
+      )
+      .setColor(
+        this.time.now < this._repairFlashUntil
+          ? "#ffffff"
+          : this.repairCharges > 0
+            ? "#7dff9e"
+            : "#4a5a4e",
       );
 
     // --- Perception: a cop is AWARE of the player if it has a clear sight line
