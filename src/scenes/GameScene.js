@@ -62,9 +62,10 @@ export class GameScene extends Phaser.Scene {
   static getLoadout() {
     try {
       const raw = localStorage.getItem(GameScene.LOADOUT_KEY);
-      if (raw) {
-        const ids = JSON.parse(raw).filter((id) => gadgetById(id)).slice(0, MAX_LOADOUT);
-        if (ids.length) return ids;
+      // A saved loadout (even an empty "no gadgets" one) wins; fall back to the default only when
+      // nothing has been chosen yet.
+      if (raw != null) {
+        return JSON.parse(raw).filter((id) => gadgetById(id)).slice(0, MAX_LOADOUT);
       }
     } catch (e) {
       /* corrupt/unavailable — fall through */
