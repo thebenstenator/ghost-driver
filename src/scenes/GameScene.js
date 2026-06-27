@@ -294,12 +294,13 @@ export class GameScene extends Phaser.Scene {
     // slow while far, ramping to match your speed as the gap closes, then it hands off to normal
     // chasing (the flag clears once it's within seNear). Caps maxSpeed via min() AFTER the rejoin
     // band, so a fresh far cop reads as "arriving", not "teleport-rushing". Per-cop flag set in
-    // _placeCop. Distance-gated (you asked for "slow at first, match my speed once I'm closer").
+    // _placeCop. KEEP the cap NEAR your speed (seSlow high) — too low (0.5×) and a fresh patrol can't
+    // even keep pace, so it joins the chase sheepishly; the ease should soften the entry, not stall it.
     this.spawnEaseEnabled = true;
-    this.seFar = 1100;   // px: at/beyond this a fresh cop is at its slowest
+    this.seFar = 900;    // px: at/beyond this a fresh cop is at its slowest (smaller zone = engages sooner)
     this.seNear = 450;   // px: within this the ease ENDS — normal chase + rejoin band take over
-    this.seSlow = 0.5;   // fraction of YOUR current speed it's capped to when far
-    this.seFloor = 130;  // px/s floor on the cap, so it still creeps in when you're slow/stopped
+    this.seSlow = 0.85;  // fraction of YOUR current speed it's capped to when far (near-pace, not timid)
+    this.seFloor = 250;  // px/s floor on the cap, so it still drives in briskly when you're slow/stopped
     // Tier-2 rejoin (respawn): a cop that's far AND not chasing AND off-screen for a
     // sustained beat is relocated off-screen near the player rather than grinding the
     // whole way back. No handling tune can close a map-width gap; this does, and it
@@ -308,7 +309,8 @@ export class GameScene extends Phaser.Scene {
     this.respawnEnabled = true;
     this.respawnDist = 1400; // px from player beyond which a non-chasing cop is "lost"
     this.respawnTime = 4.0; // s a cop must stay lost+off-screen before it's relocated
-    this.respawnBandMin = 1000; // nearest it will reappear from the player
+    this.respawnBandMin = 750; // nearest it will reappear from the player (the off-camera gate below
+                               // still blocks any on-screen pop-in, so this can sit close to the edge)
     this.respawnBandMax = 1800; // farthest it will look for an off-screen spot
     this.respawnMargin = 110; // px a relocation spot must clear the camera view by
     this.respawnCooldown = 6.0; // s before a just-respawned cop can respawn again (anti-thrash —
@@ -3966,7 +3968,7 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
 
     // Persist across refresh. Key bumped to v16: huntLead removed (blind cops now go
     // straight to last-known, no forward projection).
-    this._persistPanel(gui, "gd_copTuning29"); // bumped: patrol band top speed 625->575 (falls behind slower, no hold)
+    this._persistPanel(gui, "gd_copTuning30"); // bumped: less-sheepish spawns (seSlow 0.85/seFloor 250/seFar 900)
 
     gui.domElement.style.position = "fixed";
     gui.domElement.style.top = "8px";
