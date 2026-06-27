@@ -228,11 +228,11 @@ export class GameScene extends Phaser.Scene {
     // cleanly. Blend ramps from rbStart (no change) to rbFull (max). Invisible in
     // practice — far cops are off-screen / screen-edge; you only feel that they
     // rejoin. This is the kinematic feel, used where it helps and can't be seen.
-    this.rbStart = 700; // px from player where the blend starts
-    this.rbFull = 1500; // px from player where the blend is maxed
+    this.rbStart = 550; // px from player where the blend starts
+    this.rbFull = 700; // px from player where the blend is maxed
     this.rbGrip = 0.9; // grip (low & high) at full blend — near on-rails
     this.rbTurnMult = 1.6; // turn-rate multiplier at full blend
-    this.rbSpeedBoost = 90; // px/s added to top speed at full blend
+    this.rbSpeedBoost = 115; // px/s added to top speed at full blend
     // Patrol sight-edge rubber band: keeps a chasing PATROL (slow, 495 vs player 600) from being
     // straight-lined out of sight in the early levels — its top-speed cap ramps up toward
     // patrolBandSpeed across the outer patrolBandWidth px of sightRange, so the gap holds at the
@@ -241,7 +241,7 @@ export class GameScene extends Phaser.Scene {
     // you still ditch by cornering. See _applyPatrolBand().
     this.patrolBandEnabled = true;
     this.patrolBandWidth = 70;   // px — outer shell of sightRange where the cap ramps 0→full
-    this.patrolBandSpeed = 615;  // px/s — patrol top speed at the sight edge (just above player 600)
+    this.patrolBandSpeed = 625;  // px/s — patrol top speed at the sight edge (just above player 600)
     // Spawn ease-in: a freshly placed/relocated cop EASES in rather than rocketing at you — capped
     // slow while far, ramping to match your speed as the gap closes, then it hands off to normal
     // chasing (the flag clears once it's within seNear). Caps maxSpeed via min() AFTER the rejoin
@@ -3443,7 +3443,7 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
     st.add(this, "illumSpeedRef", 100, 600, 10).name("Re-lit at speed (px/s)");
 
     // Persist across refresh (binds directly to the car, so load sets car fields).
-    this._persistPanel(gui, "gd_carTuning_v11"); // bumped: screechVol default 0.15
+    this._persistPanel(gui, "gd_carTuning_v12"); // bumped: engineVol default 0.3
 
     gui.domElement.style.position = "fixed";
     gui.domElement.style.top = "8px";
@@ -3882,7 +3882,7 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
 
     // Persist across refresh. Key bumped to v16: huntLead removed (blind cops now go
     // straight to last-known, no forward projection).
-    this._persistPanel(gui, "gd_copTuning25"); // bumped: added patrol sight-edge rubber band levers
+    this._persistPanel(gui, "gd_copTuning26"); // bumped: baked rejoin (550/700/+115) + patrol band top 625
 
     gui.domElement.style.position = "fixed";
     gui.domElement.style.top = "8px";
@@ -4121,8 +4121,18 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
       this._screechLastSp = sp;
     }
 
-    // Kill Lights stealth indicator (bottom-centre) follows the lights-off state.
-    this.killLightsText.setAlpha(this.car.lightsOff ? 1 : 0);
+    // Kill Lights: blacking out only hides a SLOW car — as you accelerate your lights physically
+    // come back on and cops re-acquire you (same illumSpeedRef curve as detection in _detectRange).
+    // lightReveal = 0 (crawling, truly dark/hidden) → 1 (at/over illumSpeedRef, fully re-lit). The
+    // CarLights fx reads it to fade the head/tail lamps back in; cops never set it (always lit).
+    this.car.lightReveal = this.car.lightsOff
+      ? Math.min(1, this.car.getSpeed() / this.illumSpeedRef)
+      : 0;
+    // Indicator is bright while you're actually dark and dims as speed re-lights you — a "slow down
+    // to stay hidden" tell, not just an armed light.
+    this.killLightsText.setAlpha(
+      this.car.lightsOff ? Phaser.Math.Linear(1, 0.2, this.car.lightReveal) : 0,
+    );
 
     // Blown-tires warning — visible while a spike blowout is active, pulsing for urgency.
     this.spikeText.setAlpha(

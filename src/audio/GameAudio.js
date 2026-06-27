@@ -42,7 +42,7 @@ export class GameAudio {
     // Live-tunable mix (bound by the car panel). Set BEFORE the no-audio bail so the
     // panel can bind to these fields even when WebAudio is unavailable (setters no-op).
     this.masterVolume = masterVolume;
-    this.engineVol = 0.5; // multiplier on engine gain (baked from playtest)
+    this.engineVol = 0.3; // multiplier on engine gain (baked from playtest)
     this.sirenVol = 1;    // multiplier on siren gain
     this.screechVol = 0.15; // multiplier on tire-screech gain (baked from playtest)
     const ctx = scene.sound && scene.sound.context;

@@ -126,6 +126,10 @@ export class CarLights {
     const cx = v.sprite.x, cy = v.sprite.y;
     const dead = !!v.disabled;
     const off = !!v.lightsOff;
+    // Kill-lights re-light: a blacked-out car's head/tail lamps fade BACK in as it speeds up
+    // (GameScene sets lightReveal 0=dark → 1=fully re-lit on the illumSpeedRef curve). `lit` is the
+    // lamp multiplier: normal driving = 1, lights-off+crawling = 0, lights-off+flooring it = 1.
+    const lit = off ? (v.lightReveal ?? 0) : 1;
     const braking = !!(v.controls && (v.controls.brake || v.controls.down));
 
     // Emergency-bar timing: classic double-blink, red and blue out of phase.
@@ -144,10 +148,10 @@ export class CarLights {
       if (dead) {
         alpha = 0;
       } else if (L.type === 'head') {
-        alpha = off ? 0 : (L.alpha ?? 0.9) * T.head;
+        alpha = (L.alpha ?? 0.9) * T.head * lit;
         sx2 = L.len * T.headLen; sy2 = L.wid * T.headWid;
       } else if (L.type === 'tail') {
-        alpha = off ? 0 : (braking ? 1.0 : 0.32) * T.brake;
+        alpha = (braking ? 1.0 : 0.32) * T.brake * lit;
         const sc = braking ? 1.35 : 1.0;
         sx2 = L.len * sc; sy2 = L.wid * sc;
       } else if (L.type === 'flashRed') {
