@@ -1,6 +1,12 @@
 import Phaser from "phaser";
 import { GAME_WIDTH, GAME_HEIGHT } from "../config.js";
 import { GameScene } from "./GameScene.js";
+import {
+  GADGETS,
+  PLAYER_SLOT_KEYS,
+  MAX_LOADOUT,
+  gadgetById,
+} from "../gadgets.js";
 
 // Playtest menu: choose how many cops to spawn, then launch the chase.
 export class MenuScene extends Phaser.Scene {
@@ -80,9 +86,12 @@ export class MenuScene extends Phaser.Scene {
       t.on("pointerdown", () => this._start(opt.n));
     });
 
+    // --- Loadout picker (player gadgets — dev mode binds all of them anyway) ---
+    this._buildLoadout(cx);
+
     // --- Controls reference ---
     this.add
-      .text(cx, 545, "CONTROLS", {
+      .text(cx, 590, "CONTROLS", {
         fontFamily: "monospace",
         fontSize: "18px",
         fontStyle: "bold",
@@ -90,16 +99,16 @@ export class MenuScene extends Phaser.Scene {
       })
       .setOrigin(0.5);
     const controls = [
-      "Arrows — Drive        Space — Handbrake        Shift — Brake",
-      "Z Smoke    X Nitro    C Oil    V Repair        P — Pause",
+      "Arrows — Drive      Space — Handbrake      Shift — Brake",
+      "Z / X / C — your gadgets      V — Repair      P — Pause",
     ].join("\n");
     this.add
-      .text(cx, 605, controls, {
+      .text(cx, 638, controls, {
         fontFamily: "monospace",
-        fontSize: "16px",
+        fontSize: "15px",
         color: "#c8c8d4",
         align: "center",
-        lineSpacing: 10,
+        lineSpacing: 8,
       })
       .setOrigin(0.5);
 
@@ -160,6 +169,129 @@ export class MenuScene extends Phaser.Scene {
     this.input.keyboard.on("keydown-ONE", () => this._start(1));
     this.input.keyboard.on("keydown-TWO", () => this._start(2));
     this.input.keyboard.on("keydown-THREE", () => this._start(3));
+  }
+
+  // Loadout picker: 3 slot boxes (keyed Z/X/C) above the available gadgets. Click a gadget to
+  // assign it to the next open slot; click an assigned one to remove it. Persisted via GameScene so
+  // the choice carries into the chase (dev mode still binds ALL gadgets regardless).
+  _buildLoadout(cx) {
+    this.loadout = GameScene.getLoadout();
+    this._hoverId = null;
+
+    this.add
+      .text(cx, 360, "LOADOUT — pick up to 3", {
+        fontFamily: "monospace",
+        fontSize: "18px",
+        fontStyle: "bold",
+        color: "#ffd23f",
+      })
+      .setOrigin(0.5);
+
+    // Slot boxes (top row) with their key label underneath.
+    this._slotSize = 56;
+    const sg = 22,
+      n = MAX_LOADOUT,
+      total = n * this._slotSize + (n - 1) * sg;
+    const x0 = cx - total / 2 + this._slotSize / 2;
+    this._slotPos = [];
+    for (let i = 0; i < n; i++) {
+      const sx = x0 + i * (this._slotSize + sg);
+      this._slotPos.push({ x: sx, y: 414 });
+      this.add
+        .text(sx, 414 + this._slotSize / 2 + 14, PLAYER_SLOT_KEYS[i], {
+          fontFamily: "monospace",
+          fontSize: "16px",
+          fontStyle: "bold",
+          color: "#9aa0b5",
+        })
+        .setOrigin(0.5);
+    }
+
+    // Available gadgets (bottom row) — icon box + name, hover for the tooltip, click to toggle.
+    this._choiceSize = 44;
+    const cg = 34,
+      cn = GADGETS.length,
+      ctotal = cn * this._choiceSize + (cn - 1) * cg;
+    const cx0 = cx - ctotal / 2 + this._choiceSize / 2;
+    this._choicePos = [];
+    GADGETS.forEach((def, i) => {
+      const px = cx0 + i * (this._choiceSize + cg);
+      this._choicePos.push({ x: px, y: 500 });
+      this.add
+        .text(px, 500 + this._choiceSize / 2 + 12, def.short, {
+          fontFamily: "monospace",
+          fontSize: "11px",
+          color: "#9aa0b5",
+        })
+        .setOrigin(0.5);
+      const zone = this.add
+        .zone(px, 500, this._choiceSize + 10, this._choiceSize + 24)
+        .setInteractive({ useHandCursor: true });
+      zone.on("pointerover", () => {
+        this._hoverId = def.id;
+        this._descText.setText(def.desc);
+        this._renderLoadout();
+      });
+      zone.on("pointerout", () => {
+        this._hoverId = null;
+        this._descText.setText("");
+        this._renderLoadout();
+      });
+      zone.on("pointerdown", () => this._toggleGadget(def.id));
+    });
+
+    this._descText = this.add
+      .text(cx, 544, "", {
+        fontFamily: "monospace",
+        fontSize: "13px",
+        color: "#9aa0b5",
+        align: "center",
+        wordWrap: { width: 820 },
+      })
+      .setOrigin(0.5, 0);
+
+    this.loadoutGfx = this.add.graphics();
+    this._renderLoadout();
+  }
+
+  _toggleGadget(id) {
+    const idx = this.loadout.indexOf(id);
+    if (idx >= 0) this.loadout.splice(idx, 1); // assigned → remove
+    else if (this.loadout.length < MAX_LOADOUT) this.loadout.push(id); // → next open slot
+    else return; // full — must remove one first
+    GameScene.setLoadout(this.loadout);
+    this._renderLoadout();
+  }
+
+  _renderLoadout() {
+    const g = this.loadoutGfx;
+    g.clear();
+    const ss = this._slotSize;
+    // Slot boxes — show the assigned gadget's icon + a coloured border, else an empty dashed-look box.
+    for (let i = 0; i < this._slotPos.length; i++) {
+      const p = this._slotPos[i];
+      const def = gadgetById(this.loadout[i]);
+      g.fillStyle(0x12121a, 1);
+      g.fillRoundedRect(p.x - ss / 2, p.y - ss / 2, ss, ss, 8);
+      g.lineStyle(2, def ? def.color : 0x3a3a4a, 1);
+      g.strokeRoundedRect(p.x - ss / 2, p.y - ss / 2, ss, ss, 8);
+      if (def) def.icon(g, p.x, p.y, ss * 0.78);
+    }
+    // Choices — icon in a box; green border when in the loadout, light on hover, dim otherwise.
+    const cs = this._choiceSize;
+    GADGETS.forEach((def, i) => {
+      const p = this._choicePos[i];
+      const on = this.loadout.includes(def.id);
+      g.fillStyle(0x12121a, 1);
+      g.fillRoundedRect(p.x - cs / 2, p.y - cs / 2, cs, cs, 6);
+      g.lineStyle(
+        2,
+        on ? 0x39ff14 : this._hoverId === def.id ? 0x9aa0b5 : 0x2a2a38,
+        1,
+      );
+      g.strokeRoundedRect(p.x - cs / 2, p.y - cs / 2, cs, cs, 6);
+      def.icon(g, p.x, p.y, cs * 0.78);
+    });
   }
 
   _start(copCount, pursuitMode = false) {

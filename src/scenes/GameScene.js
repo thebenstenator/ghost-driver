@@ -15,6 +15,14 @@ import { CarLights } from "../fx/CarLights.js";
 import { ScreenEdgeFx } from "../fx/ScreenEdgeFx.js";
 import { GameAudio } from "../audio/GameAudio.js";
 import {
+  GADGETS,
+  PLAYER_SLOT_KEYS,
+  DEV_GADGET_KEYS,
+  MAX_LOADOUT,
+  DEFAULT_LOADOUT,
+  gadgetById,
+} from "../gadgets.js";
+import {
   WORLD_WIDTH,
   WORLD_HEIGHT,
   GRID_COLS,
@@ -44,6 +52,28 @@ export class GameScene extends Phaser.Scene {
   static setDevMode(on) {
     try {
       localStorage.setItem(GameScene.DEV_KEY, on ? "1" : "0");
+    } catch (e) {
+      /* ignore */
+    }
+  }
+
+  // Player gadget loadout (≤3 gadget ids, in slot order). Persisted so the menu choice sticks.
+  static LOADOUT_KEY = "gd_loadout";
+  static getLoadout() {
+    try {
+      const raw = localStorage.getItem(GameScene.LOADOUT_KEY);
+      if (raw) {
+        const ids = JSON.parse(raw).filter((id) => gadgetById(id)).slice(0, MAX_LOADOUT);
+        if (ids.length) return ids;
+      }
+    } catch (e) {
+      /* corrupt/unavailable — fall through */
+    }
+    return [...DEFAULT_LOADOUT];
+  }
+  static setLoadout(ids) {
+    try {
+      localStorage.setItem(GameScene.LOADOUT_KEY, JSON.stringify(ids.slice(0, MAX_LOADOUT)));
     } catch (e) {
       /* ignore */
     }
@@ -137,7 +167,10 @@ export class GameScene extends Phaser.Scene {
     this.oilLifetime = 30;      // s the patch stays on the road before fading out
     this.oilGripLost = 0.9;     // peak slipperiness (absolute ice grip) the instant a cop hits oil
     this.oilSpeedLost = 0;      // fraction of speed scrubbed on first contact (0 = keep momentum)
-    this.oilEffectTime = 30;    // s the slide takes to DECAY from full strength back to normal
+    this.oilEffectTime = 5;     // s the slide lingers AFTER a cop leaves the oil, tapering full→normal.
+                                // While on the patch it stays full strength (refreshed each frame); the
+                                // taper only runs once the cop is off it, so the effect WEARS OFF instead
+                                // of locking the cop for the whole search. (Old 30 = a ~permanent lockout.)
 
     // --- Gadget: Nitro Boost (player) — a short burst that scales BOTH acceleration and top
     // speed for a few seconds (one charge). Applied non-destructively in the update loop: it
@@ -435,6 +468,7 @@ export class GameScene extends Phaser.Scene {
     this.smokeGfx = this.add.graphics().setDepth(9.5);
     this.worldLayer.add(this.smokeGfx);
 
+    this._resolveGadgets(); // active gadget list (dev = all, player = loadout) — drives keys + HUD
     this._setupHud();
 
     // Pursuit screen-edge glow — driven by the pursuit state each frame (see update + ScreenEdgeFx).
@@ -483,10 +517,7 @@ export class GameScene extends Phaser.Scene {
       this.killLightsText,
       this.spikeText,
       this.garageText,
-      this.oilText,
-      this.nitroText,
-      this.smokeText,
-      this.repairText,
+      ...this.gadgetTexts,
       this.screenFx.gfx,
     ];
     if (this.debugText) hud.push(this.debugText);
@@ -1710,6 +1741,24 @@ export class GameScene extends Phaser.Scene {
     this._repairFlashUntil = this.time.now + 900; // brief green pip flash
   }
 
+  // Resolve which gadgets are live this run and on which keys: DEV binds every gadget (so all are
+  // testable); PLAYER binds only the chosen loadout (≤3), mapped onto Z/X/C by slot. Result drives
+  // both the keybinds (_setupInput) and the HUD pips (_setupHud/update). Each entry: { def, key }.
+  _resolveGadgets() {
+    if (this.devMode) {
+      this._activeGadgets = GADGETS.map((def, i) => ({ def, key: DEV_GADGET_KEYS[i] }))
+        .filter((e) => e.key);
+    } else {
+      this._activeGadgets = GameScene.getLoadout()
+        .map((id, i) => {
+          const def = gadgetById(id);
+          return def ? { def, key: PLAYER_SLOT_KEYS[i] } : null;
+        })
+        .filter(Boolean)
+        .slice(0, MAX_LOADOUT);
+    }
+  }
+
   // Telegraph render: a spike cop actively working a deploy (director sets cop._spikesOut while it
   // overtakes / lines up) carries its strip visibly out behind its rear bumper — a row of warning
   // teeth across its travel that pulses for readability. The overtake IS the warning; it drops the
@@ -2842,12 +2891,11 @@ bleed: { fastFrac: ${b.fastFrac}, fastRate: ${b.fastRate}, slowRate: ${b.slowRat
       this.car.lightsOff = !this.car.lightsOff;
     });
 
-    // Gadget cluster (left hand, one key each). Dev mode binds ALL gadgets so everything is testable;
-    // the player "pick ≤3" loadout will map onto Z/X/C on top of this. Order = Z X C V.
-    this.input.keyboard.on("keydown-Z", () => this._deploySmoke());     // Z — Smoke Screen
-    this.input.keyboard.on("keydown-X", () => this._fireNitro());       // X — Nitro Boost
-    this.input.keyboard.on("keydown-C", () => this._deployOilSlick());  // C — Oil Slick
-    this.input.keyboard.on("keydown-V", () => this._useRepairKit());    // V — Repair Kit
+    // Gadget cluster (left hand, one key each), from the resolved loadout — DEV binds all gadgets on
+    // Z/X/C/V; PLAYER binds only its chosen ≤3 on Z/X/C. See _resolveGadgets.
+    for (const { def, key } of this._activeGadgets) {
+      this.input.keyboard.on(`keydown-${key}`, () => this[def.deploy]());
+    }
   }
 
   _setupDebugOverlay() {
@@ -2934,53 +2982,20 @@ bleed: { fastFrac: ${b.fastFrac}, fastRate: ${b.fastRate}, slowRate: ${b.slowRat
       .setDepth(100)
       .setAlpha(0);
 
-    // Gadget charges (bottom-left) — Oil Slick count.
-    this.oilText = this.add
-      .text(16, this.scale.height - 16, "", {
-        fontFamily: "monospace",
-        fontSize: "15px",
-        fontStyle: "bold",
-        color: "#d8c27a",
-      })
-      .setOrigin(0, 1)
-      .setScrollFactor(0)
-      .setDepth(100);
-
-    // Gadget charges (bottom-left, stacked above the oil row) — Nitro Boost count.
-    this.nitroText = this.add
-      .text(16, this.scale.height - 36, "", {
-        fontFamily: "monospace",
-        fontSize: "15px",
-        fontStyle: "bold",
-        color: "#7fd8ff",
-      })
-      .setOrigin(0, 1)
-      .setScrollFactor(0)
-      .setDepth(100);
-
-    // Gadget charges (bottom-left, stacked above the nitro row) — Smoke Screen count.
-    this.smokeText = this.add
-      .text(16, this.scale.height - 56, "", {
-        fontFamily: "monospace",
-        fontSize: "15px",
-        fontStyle: "bold",
-        color: "#b9b9c2",
-      })
-      .setOrigin(0, 1)
-      .setScrollFactor(0)
-      .setDepth(100);
-
-    // Gadget charges (bottom-left, stacked above the smoke row) — Repair Kit count.
-    this.repairText = this.add
-      .text(16, this.scale.height - 76, "", {
-        fontFamily: "monospace",
-        fontSize: "15px",
-        fontStyle: "bold",
-        color: "#7dff9e",
-      })
-      .setOrigin(0, 1)
-      .setScrollFactor(0)
-      .setDepth(100);
+    // Gadget charge pips (bottom-left), one row per ACTIVE gadget (loadout/dev — see _resolveGadgets),
+    // stacked upward. Each row "KEY NAME ◉◉" is refreshed each frame in update().
+    this.gadgetTexts = this._activeGadgets.map((slot, i) =>
+      this.add
+        .text(16, this.scale.height - 16 - i * 20, "", {
+          fontFamily: "monospace",
+          fontSize: "15px",
+          fontStyle: "bold",
+          color: slot.def.hudColor,
+        })
+        .setOrigin(0, 1)
+        .setScrollFactor(0)
+        .setDepth(100),
+    );
 
     // Heat / pursuit-level meter (Pursuit Mode only) — a thin bar under the status
     // showing progress toward the next level. Drawn each frame by _drawHeatBar.
@@ -3528,7 +3543,7 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
     oil.add(this, "oilLifetime", 2, 30, 1).name("Patch lifetime (s)");
     oil.add(this, "oilGripLost", 0, 1, 0.05).name("Slide lock (0–1)");
     oil.add(this, "oilSpeedLost", 0, 1, 0.05).name("Speed lost on hit (0–1)");
-    oil.add(this, "oilEffectTime", 0.2, 30, 0.1).name("Effect duration (s)");
+    oil.add(this, "oilEffectTime", 0.2, 30, 0.1).name("Wear-off time (s)");
 
     const nitro = gui.addFolder("Nitro Boost (X)");
     nitro
@@ -3571,7 +3586,7 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
     spk.add({ test: () => this._blowTires() }, "test").name("Test blowout");
     spk.add({ repair: () => this._repairTires() }, "repair").name("Repair (clear)");
 
-    this._persistPanel(gui, "gd_gadgetTune_v10"); // bumped: added Repair Kit + control-scheme keys
+    this._persistPanel(gui, "gd_gadgetTune_v11"); // bumped: oilEffectTime 30->5 + tapered wear-off
 
     // Anchored to the BOTTOM-RIGHT so the panel grows UPWARD when folders expand and stays
     // clear of the bottom-left spawn panel. CRITICAL: clear top/left to "auto" — lil-gui's
@@ -4207,59 +4222,22 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
       this.spikeCrippleTime > 0 ? 0.55 + 0.45 * Math.abs(Math.sin(_time / 180)) : 0,
     );
 
-    // Gadget charges (bottom-left): filled/empty pips, each prefixed with its key.
-    this.oilText
-      .setText(
-        "C OIL " +
-          "◉".repeat(this.oilCharges) +
-          "○".repeat(Math.max(0, this.oilMaxCharges - this.oilCharges)),
-      )
-      .setColor(this.oilCharges > 0 ? "#d8c27a" : "#6a6450");
-
-    // Nitro Boost pips — brighten while a boost is actively firing.
-    this.nitroText
-      .setText(
-        "X NITRO " +
-          "◉".repeat(this.nitroCharges) +
-          "○".repeat(Math.max(0, this.nitroMaxCharges - this.nitroCharges)),
-      )
-      .setColor(
-        this.nitroTimer > 0
-          ? "#ffffff"
-          : this.nitroCharges > 0
-            ? "#7fd8ff"
-            : "#4a5a66",
-      );
-
-    // Smoke Screen pips — brighten while a cloud is actively out.
-    this.smokeText
-      .setText(
-        "Z SMOKE " +
-          "◉".repeat(this.smokeCharges) +
-          "○".repeat(Math.max(0, this.smokeMaxCharges - this.smokeCharges)),
-      )
-      .setColor(
-        this.smokes.length > 0
-          ? "#ffffff"
-          : this.smokeCharges > 0
-            ? "#b9b9c2"
-            : "#55555c",
-      );
-
-    // Repair Kit pips — flash green briefly on use; dims to amber-ready / grey-empty otherwise.
-    this.repairText
-      .setText(
-        "V REPAIR " +
-          "◉".repeat(this.repairCharges) +
-          "○".repeat(Math.max(0, this.repairMaxCharges - this.repairCharges)),
-      )
-      .setColor(
-        this.time.now < this._repairFlashUntil
-          ? "#ffffff"
-          : this.repairCharges > 0
-            ? "#7dff9e"
-            : "#4a5a4e",
-      );
+    // Gadget charge pips (bottom-left): "KEY NAME ◉○" per active gadget; white while active, the
+    // gadget's colour when ready, dim grey when empty.
+    for (let i = 0; i < this.gadgetTexts.length; i++) {
+      const { def, key } = this._activeGadgets[i];
+      const cur = def.charges(this);
+      const max = def.max(this);
+      this.gadgetTexts[i]
+        .setText(
+          `${key} ${def.short} ` +
+            "◉".repeat(cur) +
+            "○".repeat(Math.max(0, max - cur)),
+        )
+        .setColor(
+          def.active(this) ? "#ffffff" : cur > 0 ? def.hudColor : "#55555c",
+        );
+    }
 
     // --- Perception: a cop is AWARE of the player if it has a clear sight line
     // within range, OR the player is within close proximity (omnidirectional —
@@ -4529,11 +4507,17 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
       // AI's throttle/brake/steer result and keep the BALLISTIC velocity (same direction AND
       // speed, lightly dragged). It's on ice: no grip, no power, no brakes — it just carries its
       // momentum until it hits a wall or the effect ends. The body still steers (nose turns),
-      // but travel is locked. Blended by oilLock (= oilGripLost) so <1 leaves a little control;
-      // FULL strength the whole time the cop is oiled (no decay).
+      // but travel is locked. Blended by oilLock (= oilGripLost) so <1 leaves a little control.
+      // oilLock TAPERS with the remaining timer (_oilT/oilEffectTime): full strength while on the
+      // patch (timer pinned at max) and for the moment after, then it eases back as the timer runs
+      // out so the cop REGAINS control gradually — the effect wears off instead of snapping. This
+      // tapers the control LOCK only; the cop keeps its momentum (no speed-decay, which was removed).
       const _oilPvx = cop.vx, _oilPvy = cop.vy;
       cop.update(delta, target);
-      const oilLock = (cop._oilT || 0) > 0 ? this.oilGripLost : 0;
+      const oilLock =
+        (cop._oilT || 0) > 0
+          ? this.oilGripLost * Math.min(1, cop._oilT / Math.max(0.001, this.oilEffectTime))
+          : 0;
       if (oilLock > 0.01 && Math.hypot(_oilPvx, _oilPvy) > 25) {
         // Maintain the cop's CURRENT velocity (direction AND speed) — no accel, no brakes, no
         // drag: it just carries its momentum across the oil at the speed it came in at.
