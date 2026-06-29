@@ -119,6 +119,7 @@ const G_DOOR = 104;  // entrance gap width
 const GARAGE_CELLS = [
   { row: 2, col: 7 },
   { row: 6, col: 4 },
+  { row: 2, col: 2 }, // top-left — doubles as the mission Safehouse (far from the bottom-right Drop)
 ];
 export const GARAGES = [];
 for (const { row, col } of GARAGE_CELLS) {
@@ -150,10 +151,19 @@ const roadXY = (col, row) => ({
   x: MARGIN + col * GRID_STEP + BLOCK + ROAD / 2,
   y: MARGIN + row * GRID_STEP + BLOCK + ROAD / 2,
 });
+// Centre of cell (col,row) — used to drop a POI INSIDE a garage (an "actual safehouse" you pull into,
+// reusing the garage hide structure) rather than on open road.
+const cellCenter = (col, row) => ({
+  x: MARGIN + col * GRID_STEP + BLOCK / 2,
+  y: MARGIN + row * GRID_STEP + BLOCK / 2,
+});
 export const POIS = [
-  { id: 'drop',      name: 'The Drop',      ...roadXY(9, 9), r: 80 },
-  { id: 'safehouse', name: 'The Safehouse', ...roadXY(1, 9), r: 80 },
-  { id: 'docks',     name: 'The Docks',     ...roadXY(9, 1), r: 80 },
+  // The Drop sits on an OPEN intersection (you secure it in the open). The Safehouse is the
+  // top-left GARAGE — you pull in to finish — placed at the opposite corner from the Drop so the
+  // two legs span the map. r kept small there so the trigger only fires once you're inside.
+  { id: 'drop',      name: 'The Drop',      ...roadXY(9, 9),    r: 80 },
+  { id: 'safehouse', name: 'The Safehouse', ...cellCenter(2, 2), r: 64 },
+  { id: 'docks',     name: 'The Docks',     ...roadXY(9, 1),    r: 80 },
 ];
 export const poiById = (id) => POIS.find((p) => p.id === id) || null;
 

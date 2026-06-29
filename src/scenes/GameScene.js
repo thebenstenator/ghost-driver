@@ -620,12 +620,27 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
-  // Drop secured → the cops are tipped to the location. Re-arm the chase from the drop so they
-  // converge on you, and sound the "spotted" alert. Now the player has to lose them AGAIN and
-  // make the safehouse. No-op outside a mission.
-  _alertCopsTo(poi) {
-    this.pursuit.begin(poi.x, poi.y);
-    if (this.audio && this.audio.playSpotted) this.audio.playSpotted(0);
+  // Drop secured → a patrolling cop happens upon you. Spawn one just off-screen and re-arm the
+  // chase from your position so it (and the pack) converges. Reads as "a patrol spotted you" rather
+  // than a magic alert — and gives the player a beat to bolt for the safehouse. No-op without cops.
+  _dropDiscovered(px, py) {
+    this._spawnPatrolOffscreen(px, py);
+    this.pursuit.begin(px, py); // area goes hot — the patrol called it in
+  }
+
+  // Place a fresh PATROL at a nearby off-screen road node facing the player (the off-camera gate in
+  // _tryRespawnCop prevents any visible pop-in). Mirrors the reinforcement-dispatch placement.
+  _spawnPatrolOffscreen(px, py) {
+    const cop = this._spawnCop(px, py, "patrol");
+    if (this.pursuitLevel) cop.ai.reactionTime = this.pursuitLevel.cfg().reaction;
+    const a = Math.random() * Math.PI * 2;
+    cop.sprite.setPosition(px + Math.cos(a) * this.respawnBandMax, py + Math.sin(a) * this.respawnBandMax);
+    if (!this._tryRespawnCop(cop, px, py)) {
+      const x = Phaser.Math.Clamp(px + Math.cos(a) * this.respawnBandMin, 120, WORLD_WIDTH - 120);
+      const y = Phaser.Math.Clamp(py + Math.sin(a) * this.respawnBandMin, 120, WORLD_HEIGHT - 120);
+      const p = this.navGrid.pos(this.navGrid.nearestNode(x, y));
+      this._placeCop(cop, p.x, p.y, px, py);
+    }
   }
 
   // Drop into the live chase: spawn the starting cop(s) from their approach points and arm the
@@ -4528,9 +4543,6 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
     // chase — no ditch/search/return — keeping a unit always exercising its behavior
     // while you tune it. lastKnown still only moves on a REAL sighting, so blind-nav is
     // unchanged. (Cops still navigate to last-known when they personally lose sight.)
-    // Capture the cooling state BEFORE the update — a re-spot resets `ditched` to false
-    // inside update(), so this is the only place to know heat WAS bleeding (full ditch).
-    const wasBleeding = this.pursuit.ditched;
     const state = this.pursuit.update(
       this.sandbox || anyAware,
       anyLOS,
@@ -4565,22 +4577,7 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
       );
       for (const cop of this.cops) cop._searchNode = lkNode;
     }
-    // Re-spotted after a real ditch: a cop regained sight while the heat was COOLING (ditched/
-    // bleeding) and snapped the pursuit back to ACTIVE — the "oh crap, found again" moment.
-    // Gated on wasBleeding so a brief LOS flicker mid-chase (pre-ditch SEARCH, heat merely held)
-    // doesn't fire it every time you round a corner.
-    if (state === PursuitState.ACTIVE && this._prevState === PursuitState.SEARCH && wasBleeding) {
-      // Pan the alert onto the cop that re-spotted you (nearest one with real LOS) so it
-      // sits in the mix with the sirens rather than playing dead-centre/detached.
-      let spotter = null, sd = Infinity;
-      for (const cop of this.cops) {
-        if (!cop.hasLOS) continue;
-        const d = Phaser.Math.Distance.Between(cop.sprite.x, cop.sprite.y, px, py);
-        if (d < sd) { sd = d; spotter = cop; }
-      }
-      const pan = spotter ? Phaser.Math.Clamp((spotter.sprite.x - px) / 900, -1, 1) : 0;
-      this.audio.playSpotted(pan);
-    }
+    // (The "re-spotted after a ditch" air-horn alert was removed — it read as cheesy.)
     this._prevState = state;
 
     // Pursuit Mode: advance heat/level and dispatch/retire reinforcements. Runs before
@@ -4839,8 +4836,9 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
         this.bust.isBusted,
         delta / 1000,
       );
-      // Drop just secured → tip the cops to the location (re-aggro from the drop + spotted alert).
-      if (this.mission.justSecuredDrop) this._alertCopsTo(this.mission.drop);
+      // Drop just secured → a patrol "happens upon" you: spawn one just off-screen and let the
+      // area go hot so it (and the pack) closes in. Diegetic, not a telepathic alert.
+      if (this.mission.justSecuredDrop) this._dropDiscovered(px, py);
       if (this.mission.isOver) {
         this._onMissionEnd();
         return;
