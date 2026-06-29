@@ -4438,18 +4438,14 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
       this._screechLastSp = sp;
     }
 
-    // Kill Lights: blacking out only hides a SLOW car — as you accelerate your lights physically
-    // come back on and cops re-acquire you (same illumSpeedRef curve as detection in _detectRange).
-    // lightReveal = 0 (crawling, truly dark/hidden) → 1 (at/over illumSpeedRef, fully re-lit). The
-    // CarLights fx reads it to fade the head/tail lamps back in; cops never set it (always lit).
-    this.car.lightReveal = this.car.lightsOff
-      ? Math.min(1, this.car.getSpeed() / this.illumSpeedRef)
-      : 0;
-    // Indicator is bright while you're actually dark and dims as speed re-lights you — a "slow down
-    // to stay hidden" tell, not just an armed light.
-    this.killLightsText.setAlpha(
-      this.car.lightsOff ? Phaser.Math.Linear(1, 0.2, this.car.lightReveal) : 0,
-    );
+    // Kill Lights: blacking out only hides a SLOW car. The moment you hit illumSpeedRef the lights
+    // SNAP back on (no fade) and the kill-lights state is cancelled — you have to press L again to
+    // go dark. So you can only run lights-off at a crawl; flooring it gives you away instantly.
+    if (this.car.lightsOff && this.car.getSpeed() >= this.illumSpeedRef) {
+      this.car.lightsOff = false;
+    }
+    // Indicator shows only while you're actually blacked out (cleared the instant lights snap back).
+    this.killLightsText.setAlpha(this.car.lightsOff ? 1 : 0);
 
     // Blown-tires warning — visible while a spike blowout is active, pulsing for urgency.
     this.spikeText.setAlpha(

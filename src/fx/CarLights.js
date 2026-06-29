@@ -125,11 +125,9 @@ export class CarLights {
     const cf = Math.cos(f), sf = Math.sin(f);
     const cx = v.sprite.x, cy = v.sprite.y;
     const dead = !!v.disabled;
-    const off = !!v.lightsOff;
-    // Kill-lights re-light: a blacked-out car's head/tail lamps fade BACK in as it speeds up
-    // (GameScene sets lightReveal 0=dark → 1=fully re-lit on the illumSpeedRef curve). `lit` is the
-    // lamp multiplier: normal driving = 1, lights-off+crawling = 0, lights-off+flooring it = 1.
-    const lit = off ? (v.lightReveal ?? 0) : 1;
+    // Kill-lights is a hard on/off: head/tail lamps are fully on, or fully dark while v.lightsOff.
+    // (GameScene snaps lightsOff back to false at speed, so there's no fade to do here.)
+    const lit = v.lightsOff ? 0 : 1;
     const braking = !!(v.controls && (v.controls.brake || v.controls.down));
 
     // Emergency-bar timing: classic double-blink, red and blue out of phase.

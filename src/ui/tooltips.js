@@ -180,7 +180,7 @@ export const TOOLTIPS = {
 
   // ── Stealth (Kill Lights) ───────────────────────────────────────────────────
   killLightsRange: "Clear-LOS spotting range (px) for a SLOW, lights-off player. Lower = cops lose a blacked-out crawling car from closer in (easier ditch).",
-  illumSpeedRef: "Speed (px/s) at which lights-off gives NO stealth — a dark car this fast is seen as if lit. Lower so you must crawl to benefit; raise to stay stealthy at speed.",
+  illumSpeedRef: "Speed (px/s) at which a blacked-out car's lights SNAP back on and kill-lights cancels (you must press L again to go dark). So lights-off only works at a crawl. Lower to force a slower crawl; raise to stay dark at higher speed.",
 
   // ── Respawn-ahead / dispatch ────────────────────────────────────────────────
   respawnDist: "Distance you must out-run a non-chasing cop before it's 'lost' and relocated. Raise to relocate less eagerly.",
