@@ -139,6 +139,24 @@ for (const { row, col } of GARAGE_CELLS) {
   });
 }
 
+// --- Points of Interest (mission destinations) ---
+// Named, fixed locations a mission can send you to ("reach the Drop"). Placed on ROAD
+// INTERSECTIONS so they're always drivable (the gap after cell (col,row) is clear road by
+// the nav-safety invariant above). This is the lightweight stand-in for an authored map:
+// missions reference a POI by id, and a real Tiled map can later replace these coords
+// without touching mission logic. Player spawns at world centre, so these sit a few blocks
+// out for a real drive. `roadXY` returns the centre of the intersection past cell (col,row).
+const roadXY = (col, row) => ({
+  x: MARGIN + col * GRID_STEP + BLOCK + ROAD / 2,
+  y: MARGIN + row * GRID_STEP + BLOCK + ROAD / 2,
+});
+export const POIS = [
+  { id: 'drop',      name: 'The Drop',      ...roadXY(9, 9), r: 80 },
+  { id: 'safehouse', name: 'The Safehouse', ...roadXY(1, 9), r: 80 },
+  { id: 'docks',     name: 'The Docks',     ...roadXY(9, 1), r: 80 },
+];
+export const poiById = (id) => POIS.find((p) => p.id === id) || null;
+
 // --- Perimeter ---
 // The outer ring of buildings sits MARGIN px in from the world walls, leaving a drivable lane
 // all the way around the edge (you can loop the map). The NavGrid includes a matching ring of

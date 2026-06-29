@@ -33,6 +33,7 @@ import {
   GRID_STEP,
 } from "../config.js";
 import { BUILDINGS, GARAGES } from "../world/city.js";
+import { Mission, missionById } from "../systems/Mission.js";
 
 export class GameScene extends Phaser.Scene {
   constructor() {
@@ -80,6 +81,26 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
+  // Cash bank — a single running total persisted across runs (seeds the Phase 4 economy).
+  static BANK_KEY = "gd_bank";
+  static getBank() {
+    try {
+      const n = parseInt(localStorage.getItem(GameScene.BANK_KEY), 10);
+      return Number.isFinite(n) ? n : 0;
+    } catch (e) {
+      return 0;
+    }
+  }
+  static addBank(amount) {
+    const total = GameScene.getBank() + amount;
+    try {
+      localStorage.setItem(GameScene.BANK_KEY, String(total));
+    } catch (e) {
+      /* ignore */
+    }
+    return total;
+  }
+
   init(data) {
     // Cop count chosen in the menu (default 3 if launched directly)
     this.copCount = data && Number.isInteger(data.copCount) ? data.copCount : 3;
@@ -92,6 +113,13 @@ export class GameScene extends Phaser.Scene {
     // chosen unit TYPES by hand and tune their def live. Cops are pinned to a relentless
     // ACTIVE chase (no ditch/return/bust) so a unit is always exercising its behavior.
     this.sandbox = !!(data && data.sandbox);
+    // Mission (Phase 3 game loop): a mission id routes through the briefing → reach-the-drop →
+    // ditch → complete flow. A mission IMPLIES pursuit mode (escalating heat). Reached ONLY via
+    // the menu's Mission button; Free drive / Pursuit / sandbox pass no mission and are unaffected
+    // (every mission branch below gates on `this.mission`, which stays null for them).
+    this.missionId = data && data.mission ? data.mission : null;
+    if (this.missionId) this.pursuitMode = true;
+    this._inBriefing = false; // reset across restarts so a stale briefing can't freeze a fresh run
   }
 
   create() {
@@ -424,28 +452,16 @@ export class GameScene extends Phaser.Scene {
     // east, east faces west — instead of all facing north. Pursuit Mode starts with
     // ONE cop (spawnPts[0] = south, so the lone chaser comes from behind a north-bound
     // player) and escalates; legacy mode uses the menu's fixed count.
-    const cx = WORLD_WIDTH / 2,
-      cy = WORLD_HEIGHT / 2;
-    const spawnPts = [
-      { x: cx, y: cy + 504 }, // south (the Pursuit-Mode lone cop)
-      { x: cx - 504, y: cy }, // west
-      { x: cx + 504, y: cy }, // east
-    ];
-    const startCops = this.sandbox ? 0 : this.pursuitMode ? 1 : this.copCount;
-    for (let i = 0; i < startCops && i < spawnPts.length; i++) {
-      const cop = this._spawnCop(spawnPts[i].x, spawnPts[i].y);
-      cop.facing = Math.atan2(cy - spawnPts[i].y, cx - spawnPts[i].x); // face the player's start
-      cop.sprite.setRotation(cop.facing + Math.PI / 2);
-    }
     if (this.pursuitLevel) {
       // start the chase at the level-1 profile
       this.pursuit.cooldownDuration = this.pursuitLevel.cfg().cooldown;
       this._applyLevelTuning();
     }
 
-    // The chase is already underway when the mission starts (if there are cops)
-    if (this.cops.length)
-      this.pursuit.begin(this.car.sprite.x, this.car.sprite.y);
+    // Drop into the live chase — UNLESS this is a mission, which holds at its briefing card and
+    // calls _beginChase() the moment the player dismisses it (so they read the brief, then the
+    // cops are "already coming"). _beginChase spawns the starting cops + arms the pursuit.
+    if (!this.missionId) this._beginChase();
 
     // Lose condition
     this.bust = new BustMeter();
@@ -471,6 +487,15 @@ export class GameScene extends Phaser.Scene {
     // obscures the cops chasing through it while your own car stays visible on top. See _updateSmoke.
     this.smokeGfx = this.add.graphics().setDepth(9.5);
     this.worldLayer.add(this.smokeGfx);
+
+    // Mission (Phase 3): instantiate the loop + its on-road objective marker (world space, under
+    // cars). Screen-space mission UI (briefing card, objective tracker, beacon, result) is built in
+    // _setupHud so it joins the HUD camera. All gated on this.mission — null for non-mission modes.
+    this.mission = this.missionId ? new Mission(missionById(this.missionId)) : null;
+    if (this.mission) {
+      this.poiGfx = this.add.graphics().setDepth(6.5);
+      this.worldLayer.add(this.poiGfx);
+    }
 
     this._resolveGadgets(); // active gadget list (dev = all, player = loadout) — drives keys + HUD
     this._setupHud();
@@ -526,6 +551,8 @@ export class GameScene extends Phaser.Scene {
     ];
     if (this.debugText) hud.push(this.debugText);
     if (this.copCountText) hud.push(this.copCountText);
+    if (this.mission)
+      hud.push(this.objectiveText, this.beaconGfx, this.briefingText, this.resultText);
     this.cameras.main.ignore(hud); // world cam skips HUD
     this.uiCamera.ignore(this.worldLayer); // UI cam skips the world (and its future children)
 
@@ -543,9 +570,75 @@ export class GameScene extends Phaser.Scene {
       if (this.healthGui) this.healthGui.destroy();
     });
 
-    // Start paused on first load; launching from the menu (autostart) plays now.
+    // Start paused on first load; launching from the menu (autostart) plays now. A mission instead
+    // opens on its briefing card (frozen) regardless of autostart — the chase begins on dismiss.
     this.paused = false;
-    if (!this._autostart) this._togglePause();
+    if (this.mission) this._showBriefing();
+    else if (!this._autostart) this._togglePause();
+  }
+
+  // Mission briefing: freeze, show the card. Dismissed by SPACE/ENTER → _dismissBriefing drops you
+  // into the chase. (Physics is paused here, so SPACE-as-handbrake can't fire during the brief.)
+  _showBriefing() {
+    this._inBriefing = true;
+    this.physics.pause();
+    this.briefingText
+      .setText(
+        `${this.mission.def.name}\n\n${this.mission.def.briefing}\n\n[ SPACE to roll out ]`,
+      )
+      .setAlpha(1);
+  }
+
+  _dismissBriefing() {
+    if (!this._inBriefing) return;
+    this._inBriefing = false;
+    this.briefingText.setAlpha(0);
+    this.physics.resume();
+    this._beginChase(); // cops "already coming"
+    this.mission.begin(); // BRIEFING → GOTO_DROP
+  }
+
+  // Mission ended (win or lose): freeze the run (reuse the bust freeze + R/M handlers) and show the
+  // result. A win banks the reward and reports the new total.
+  _onMissionEnd() {
+    this.physics.pause();
+    this.busted = true; // freezes gameplay + input; R restarts, M menus (both ungated)
+    if (this.mission.won) {
+      const total = GameScene.addBank(this.mission.reward);
+      this.resultText
+        .setText(
+          `MISSION COMPLETE\n\n+ $${this.mission.reward.toLocaleString()}\n` +
+            `BANK  $${total.toLocaleString()}\n\npress R to run again   ·   M for menu`,
+        )
+        .setColor("#39ff14")
+        .setAlpha(1);
+    } else {
+      this.resultText
+        .setText("BUSTED\nMISSION FAILED\n\npress R to retry   ·   M for menu")
+        .setColor("#ff3b3b")
+        .setAlpha(1);
+    }
+  }
+
+  // Drop into the live chase: spawn the starting cop(s) from their approach points and arm the
+  // pursuit ("cops already coming"). Called immediately for non-mission runs, or on briefing
+  // dismissal for a mission. Idempotent-ish — only meaningful once per run.
+  _beginChase() {
+    const cx = WORLD_WIDTH / 2,
+      cy = WORLD_HEIGHT / 2;
+    const spawnPts = [
+      { x: cx, y: cy + 504 }, // south (the Pursuit-Mode lone cop)
+      { x: cx - 504, y: cy }, // west
+      { x: cx + 504, y: cy }, // east
+    ];
+    const startCops = this.sandbox ? 0 : this.pursuitMode ? 1 : this.copCount;
+    for (let i = 0; i < startCops && i < spawnPts.length; i++) {
+      const cop = this._spawnCop(spawnPts[i].x, spawnPts[i].y);
+      cop.facing = Math.atan2(cy - spawnPts[i].y, cx - spawnPts[i].x); // face the player's start
+      cop.sprite.setRotation(cop.facing + Math.PI / 2);
+    }
+    if (this.cops.length)
+      this.pursuit.begin(this.car.sprite.x, this.car.sprite.y);
   }
 
   _spawnCop(x, y, unitType = "patrol") {
@@ -2849,15 +2942,21 @@ bleed: { fastFrac: ${b.fastFrac}, fastRate: ${b.fastRate}, slowRate: ${b.slowRat
       Phaser.Input.Keyboard.KeyCodes.SHIFT,
     );
 
-    // Restart any time (same cop count); new run drops straight into play
+    // Restart any time (same cop count); new run drops straight into play. A mission run re-runs
+    // the SAME mission (re-shows its briefing), so the mission id has to ride along.
     this.input.keyboard.on("keydown-R", () =>
       this.scene.restart({
         copCount: this.copCount,
         autostart: true,
         pursuitMode: this.pursuitMode,
         sandbox: this.sandbox,
+        mission: this.missionId,
       }),
     );
+    // Briefing dismiss (SPACE / ENTER) — no-op outside a mission briefing, so it can't clash with
+    // SPACE-handbrake during play (that's polled separately, not a keydown).
+    this.input.keyboard.on("keydown-SPACE", () => this._dismissBriefing());
+    this.input.keyboard.on("keydown-ENTER", () => this._dismissBriefing());
     // Back to the menu
     this.input.keyboard.on("keydown-M", () => this.scene.start("MenuScene"));
     // Pause toggle
@@ -3112,10 +3211,57 @@ bleed: { fastFrac: ${b.fastFrac}, fastRate: ${b.fastRate}, slowRate: ${b.slowRat
       .setScrollFactor(0)
       .setDepth(101)
       .setAlpha(0);
+
+    // --- Mission UI (Phase 3) — only built for a mission run; null otherwise ---
+    if (this.mission) {
+      const h = this.scale.height;
+      // Objective tracker — just under the pursuit status line.
+      this.objectiveText = this.add
+        .text(width / 2, 58, "", {
+          fontFamily: "monospace",
+          fontSize: "16px",
+          fontStyle: "bold",
+          color: "#ffd23f",
+        })
+        .setOrigin(0.5, 0)
+        .setScrollFactor(0)
+        .setDepth(100);
+      // Off-screen beacon — arrow at the screen edge pointing to the objective POI (+ distance).
+      this.beaconGfx = this.add.graphics().setScrollFactor(0).setDepth(100);
+      // Briefing card (shown at start, dismissed with SPACE/ENTER to drop into the chase).
+      this.briefingText = this.add
+        .text(width / 2, h / 2, "", {
+          fontFamily: "monospace",
+          fontSize: "20px",
+          color: "#e8e8f0",
+          align: "center",
+          backgroundColor: "#0d0d14",
+          padding: { x: 30, y: 24 },
+          lineSpacing: 8,
+        })
+        .setOrigin(0.5)
+        .setScrollFactor(0)
+        .setDepth(102)
+        .setAlpha(0);
+      // Result overlay (MISSION COMPLETE / MISSION FAILED).
+      this.resultText = this.add
+        .text(width / 2, h / 2, "", {
+          fontFamily: "monospace",
+          fontSize: "44px",
+          fontStyle: "bold",
+          color: "#39ff14",
+          align: "center",
+          lineSpacing: 6,
+        })
+        .setOrigin(0.5)
+        .setScrollFactor(0)
+        .setDepth(102)
+        .setAlpha(0);
+    }
   }
 
   _togglePause() {
-    if (this.busted) return;
+    if (this.busted || this._inBriefing) return;
     this.paused = !this.paused;
     if (this.paused) {
       this.physics.pause();
@@ -3161,6 +3307,61 @@ bleed: { fastFrac: ${b.fastFrac}, fastRate: ${b.fastRate}, slowRate: ${b.slowRat
       duration: 1500,
       ease: "Cubic.easeOut",
     });
+  }
+
+  // Mission HUD each frame: the objective line, the on-road POI ring (world space), and an
+  // off-screen beacon arrow at the screen edge pointing to the current target POI. Only the
+  // GOTO_DROP state has a target; ESCAPE clears the ring/beacon (the objective is just "ditch").
+  _updateMissionHud() {
+    const m = this.mission;
+    const px = this.car.sprite.x,
+      py = this.car.sprite.y;
+    const poi = m.targetPoi;
+    this.poiGfx.clear();
+    this.beaconGfx.clear();
+
+    if (!poi) {
+      this.objectiveText.setText(m.objectiveLabel ? `◉ ${m.objectiveLabel}` : "");
+      return;
+    }
+
+    const dist = Math.round(Math.hypot(poi.x - px, poi.y - py));
+    this.objectiveText.setText(`◉ ${m.objectiveLabel}   ${dist}m`);
+
+    // World-space pulsing ring on the road at the objective.
+    const pulse = 0.5 + 0.5 * Math.sin((this.time.now % 1200) / 1200 * Math.PI * 2);
+    const g = this.poiGfx;
+    g.fillStyle(0xffd23f, 0.1);
+    g.fillCircle(poi.x, poi.y, poi.r);
+    g.lineStyle(4, 0xffd23f, 0.4 + 0.45 * pulse);
+    g.strokeCircle(poi.x, poi.y, poi.r);
+    g.lineStyle(2, 0xffd23f, 0.3);
+    g.strokeCircle(poi.x, poi.y, poi.r * (0.45 + 0.55 * pulse));
+
+    // Screen-space beacon — draw only while the POI is off the visible view.
+    const v = this.cameras.main.worldView;
+    const onScreen = poi.x >= v.x && poi.x <= v.right && poi.y >= v.y && poi.y <= v.bottom;
+    if (onScreen) return;
+    const sw = this.scale.width,
+      sh = this.scale.height,
+      cx = sw / 2,
+      cy = sh / 2,
+      margin = 64;
+    const ang = Math.atan2(poi.y - py, poi.x - px);
+    // March from screen centre out to the edge (minus margin) along the bearing to the POI.
+    const rad = Math.min(
+      (sw / 2 - margin) / (Math.abs(Math.cos(ang)) || 1e-3),
+      (sh / 2 - margin) / (Math.abs(Math.sin(ang)) || 1e-3),
+    );
+    const ax = cx + Math.cos(ang) * rad,
+      ay = cy + Math.sin(ang) * rad,
+      s = 16;
+    this.beaconGfx.fillStyle(0xffd23f, 0.9);
+    this.beaconGfx.fillTriangle(
+      ax + Math.cos(ang) * s, ay + Math.sin(ang) * s,
+      ax + Math.cos(ang + 2.5) * s, ay + Math.sin(ang + 2.5) * s,
+      ax + Math.cos(ang - 2.5) * s, ay + Math.sin(ang - 2.5) * s,
+    );
   }
 
   // Per-level heat-bar fill colours. Distinct hue per level so they read apart at a
@@ -4086,7 +4287,7 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
   update(_time, delta) {
     // Frozen after a bust (R restarts) or while paused (P resumes) — both keys
     // are handled by their keydown listeners, so just hold here.
-    if (this.busted || this.paused) {
+    if (this.busted || this.paused || this._inBriefing) {
       // Idle the engine + cut sirens so audio doesn't drone on a frozen scene.
       if (this.audio) {
         this.audio.updateEngine(0, this.car.maxSpeed, false);
@@ -4611,13 +4812,26 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
       }
     }
     this.bust.update(pinned, pinCount, delta / 1000);
+
+    // Mission loop tick (win/lose framing). Reaches COMPLETE on a ditch AFTER the drop is reached,
+    // or FAILED on a bust. _onMissionEnd shows the result + freezes; it OWNS the bust outcome in a
+    // mission run, so we skip the plain BUSTED overlay below. Gated on this.mission (null otherwise).
+    if (this.mission && !this.mission.isOver) {
+      this.mission.update(px, py, this.pursuit.ditched, this.bust.isBusted);
+      if (this.mission.isOver) {
+        this._onMissionEnd();
+        return;
+      }
+    }
+
     if (this.bust.isBusted) {
       this.busted = true;
-      this.bustedText.setAlpha(1);
+      if (!this.mission) this.bustedText.setAlpha(1);
       this.physics.pause();
       return;
     }
     this._drawBustBar();
+    if (this.mission) this._updateMissionHud();
     this._drawHeatBar(state);
     // Screen-edge pursuit glow — mode mirrors the heat-bar phase. PURSUE flashes red on a NEW
     // chase / a re-spot AFTER a ditch (not on a brief HOLD re-acquire); HOLD is the blue lost-sight

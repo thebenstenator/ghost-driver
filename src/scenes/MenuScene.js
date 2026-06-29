@@ -35,9 +35,19 @@ export class MenuScene extends Phaser.Scene {
       })
       .setOrigin(0.5);
 
-    // --- Pursuit Mode (the escalating heat/level chase) ---
-    const pm = this.add
-      .text(cx, 196, "▶ PURSUIT MODE", {
+    // --- Bank (persisted cash total) — top-right ---
+    this.add
+      .text(GAME_WIDTH - 16, 20, `BANK  $${GameScene.getBank().toLocaleString()}`, {
+        fontFamily: "monospace",
+        fontSize: "16px",
+        fontStyle: "bold",
+        color: "#ffd23f",
+      })
+      .setOrigin(1, 0);
+
+    // --- MISSION (the Phase 3 game loop — the real thing) ---
+    const ms = this.add
+      .text(cx, 172, "▶ MISSION", {
         fontFamily: "monospace",
         fontSize: "28px",
         fontStyle: "bold",
@@ -45,46 +55,51 @@ export class MenuScene extends Phaser.Scene {
         backgroundColor: "#39ff14",
         align: "center",
         fixedWidth: 300,
-        padding: { x: 0, y: 12 },
+        padding: { x: 0, y: 10 },
       })
       .setOrigin(0.5)
       .setInteractive({ useHandCursor: true });
-    pm.on("pointerover", () => pm.setBackgroundColor("#5fff4a"));
-    pm.on("pointerout", () => pm.setBackgroundColor("#39ff14"));
-    pm.on("pointerdown", () => this._start(1, true));
+    ms.on("pointerover", () => ms.setBackgroundColor("#5fff4a"));
+    ms.on("pointerout", () => ms.setBackgroundColor("#39ff14"));
+    ms.on("pointerdown", () => this._start(1, true, "m1"));
     this.add
-      .text(cx, 240, "starts at 1 cop — escalates with heat", {
+      .text(cx, 200, "reach the drop · lose the cops · get paid", {
         fontFamily: "monospace",
         fontSize: "13px",
         color: "#6a6a7a",
       })
       .setOrigin(0.5);
 
-    // --- Legacy free-test: fixed cop count, no escalation ---
-    this.add
-      .text(cx, 286, "Get a feel for the car without pressure", {
+    // --- Pursuit Mode (endless escalating chase, no objective) ---
+    const pm = this.add
+      .text(cx, 240, "▶ PURSUIT MODE", {
         fontFamily: "monospace",
-        fontSize: "13px",
-        color: "#6a6a7a",
+        fontSize: "20px",
+        fontStyle: "bold",
+        color: "#c8c8d4",
+        backgroundColor: "#1a1a24",
+        align: "center",
+        fixedWidth: 260,
+        padding: { x: 0, y: 8 },
       })
-      .setOrigin(0.5);
-    const options = [{ label: "Free drive", n: 0 }];
-    options.forEach((opt, i) => {
-      const t = this.add
-        .text(cx, 320 + i * 46, opt.label, {
-          fontFamily: "monospace",
-          fontSize: "20px",
-          color: "#ffffff",
-          backgroundColor: "#1a1a24",
-          align: "center",
-          fixedWidth: 200,
-        })
-        .setOrigin(0.5)
-        .setInteractive({ useHandCursor: true });
-      t.on("pointerover", () => t.setColor("#ffd23f"));
-      t.on("pointerout", () => t.setColor("#ffffff"));
-      t.on("pointerdown", () => this._start(opt.n));
-    });
+      .setOrigin(0.5)
+      .setInteractive({ useHandCursor: true });
+    pm.on("pointerover", () => pm.setColor("#ffd23f"));
+    pm.on("pointerout", () => pm.setColor("#c8c8d4"));
+    pm.on("pointerdown", () => this._start(1, true));
+
+    // --- Free drive (no pressure) ---
+    const fd = this.add
+      .text(cx, 290, "Free drive", {
+        fontFamily: "monospace",
+        fontSize: "15px",
+        color: "#9aa0b5",
+      })
+      .setOrigin(0.5)
+      .setInteractive({ useHandCursor: true });
+    fd.on("pointerover", () => fd.setColor("#ffd23f"));
+    fd.on("pointerout", () => fd.setColor("#9aa0b5"));
+    fd.on("pointerdown", () => this._start(0));
 
     // --- Loadout picker (player gadgets — dev mode binds all of them anyway) ---
     this._buildLoadout(cx);
@@ -307,7 +322,7 @@ export class MenuScene extends Phaser.Scene {
     });
   }
 
-  _start(copCount, pursuitMode = false) {
-    this.scene.start("GameScene", { copCount, autostart: true, pursuitMode });
+  _start(copCount, pursuitMode = false, mission = null) {
+    this.scene.start("GameScene", { copCount, autostart: true, pursuitMode, mission });
   }
 }
