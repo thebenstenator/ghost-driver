@@ -47,7 +47,7 @@ export class MenuScene extends Phaser.Scene {
 
     // --- MISSION (the Phase 3 game loop — the real thing) ---
     const ms = this.add
-      .text(cx, 172, "▶ MISSION", {
+      .text(cx, 170, "▶ MISSION", {
         fontFamily: "monospace",
         fontSize: "28px",
         fontStyle: "bold",
@@ -63,7 +63,7 @@ export class MenuScene extends Phaser.Scene {
     ms.on("pointerout", () => ms.setBackgroundColor("#39ff14"));
     ms.on("pointerdown", () => this._start(1, true, "m1"));
     this.add
-      .text(cx, 200, "reach the drop · lose the cops · get paid", {
+      .text(cx, 214, "reach the drop · lose the cops · get paid", {
         fontFamily: "monospace",
         fontSize: "13px",
         color: "#6a6a7a",
@@ -72,7 +72,7 @@ export class MenuScene extends Phaser.Scene {
 
     // --- Pursuit Mode (endless escalating chase, no objective) ---
     const pm = this.add
-      .text(cx, 240, "▶ PURSUIT MODE", {
+      .text(cx, 252, "▶ PURSUIT MODE", {
         fontFamily: "monospace",
         fontSize: "20px",
         fontStyle: "bold",
@@ -90,7 +90,7 @@ export class MenuScene extends Phaser.Scene {
 
     // --- Free drive (no pressure) ---
     const fd = this.add
-      .text(cx, 290, "Free drive", {
+      .text(cx, 300, "Free drive", {
         fontFamily: "monospace",
         fontSize: "15px",
         color: "#9aa0b5",
