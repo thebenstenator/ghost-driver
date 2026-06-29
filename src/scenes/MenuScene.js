@@ -70,36 +70,39 @@ export class MenuScene extends Phaser.Scene {
       })
       .setOrigin(0.5);
 
+    // A secondary (dark, bordered) menu button — shared style for Pursuit + Free drive.
+    const secondaryBtn = (y, label, onClick) => {
+      const b = this.add
+        .text(cx, y, label, {
+          fontFamily: "monospace",
+          fontSize: "20px",
+          fontStyle: "bold",
+          color: "#c8c8d4",
+          backgroundColor: "#1a1a24",
+          align: "center",
+          fixedWidth: 260,
+          padding: { x: 0, y: 8 },
+        })
+        .setOrigin(0.5)
+        .setInteractive({ useHandCursor: true });
+      b.on("pointerover", () => b.setColor("#ffd23f"));
+      b.on("pointerout", () => b.setColor("#c8c8d4"));
+      b.on("pointerdown", onClick);
+      return b;
+    };
+
     // --- Pursuit Mode (endless escalating chase, no objective) ---
-    const pm = this.add
-      .text(cx, 252, "▶ PURSUIT MODE", {
+    secondaryBtn(250, "▶ PURSUIT MODE", () => this._start(1, true));
+    this.add
+      .text(cx, 278, "endless — difficulty escalates with the heat", {
         fontFamily: "monospace",
-        fontSize: "20px",
-        fontStyle: "bold",
-        color: "#c8c8d4",
-        backgroundColor: "#1a1a24",
-        align: "center",
-        fixedWidth: 260,
-        padding: { x: 0, y: 8 },
+        fontSize: "13px",
+        color: "#6a6a7a",
       })
-      .setOrigin(0.5)
-      .setInteractive({ useHandCursor: true });
-    pm.on("pointerover", () => pm.setColor("#ffd23f"));
-    pm.on("pointerout", () => pm.setColor("#c8c8d4"));
-    pm.on("pointerdown", () => this._start(1, true));
+      .setOrigin(0.5);
 
     // --- Free drive (no pressure) ---
-    const fd = this.add
-      .text(cx, 300, "Free drive", {
-        fontFamily: "monospace",
-        fontSize: "15px",
-        color: "#9aa0b5",
-      })
-      .setOrigin(0.5)
-      .setInteractive({ useHandCursor: true });
-    fd.on("pointerover", () => fd.setColor("#ffd23f"));
-    fd.on("pointerout", () => fd.setColor("#9aa0b5"));
-    fd.on("pointerdown", () => this._start(0));
+    secondaryBtn(316, "▶ FREE DRIVE", () => this._start(0));
 
     // --- Loadout picker (player gadgets — dev mode binds all of them anyway) ---
     this._buildLoadout(cx);

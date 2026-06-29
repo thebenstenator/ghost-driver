@@ -620,6 +620,14 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
+  // Drop secured → the cops are tipped to the location. Re-arm the chase from the drop so they
+  // converge on you, and sound the "spotted" alert. Now the player has to lose them AGAIN and
+  // make the safehouse. No-op outside a mission.
+  _alertCopsTo(poi) {
+    this.pursuit.begin(poi.x, poi.y);
+    if (this.audio && this.audio.playSpotted) this.audio.playSpotted(0);
+  }
+
   // Drop into the live chase: spawn the starting cop(s) from their approach points and arm the
   // pursuit ("cops already coming"). Called immediately for non-mission runs, or on briefing
   // dismissal for a mission. Idempotent-ish — only meaningful once per run.
@@ -3337,6 +3345,12 @@ bleed: { fastFrac: ${b.fastFrac}, fastRate: ${b.fastRate}, slowRate: ${b.slowRat
     g.strokeCircle(poi.x, poi.y, poi.r);
     g.lineStyle(2, 0xffd23f, 0.3);
     g.strokeCircle(poi.x, poi.y, poi.r * (0.45 + 0.55 * pulse));
+    // Dwell progress: a green core that grows as the drop secures (resets if seen / you leave).
+    const frac = this.mission.dwellFrac;
+    if (frac > 0) {
+      g.fillStyle(0x39ff14, 0.35);
+      g.fillCircle(poi.x, poi.y, poi.r * frac);
+    }
 
     // Screen-space beacon — draw only while the POI is off the visible view.
     const v = this.cameras.main.worldView;
@@ -4817,7 +4831,16 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
     // or FAILED on a bust. _onMissionEnd shows the result + freezes; it OWNS the bust outcome in a
     // mission run, so we skip the plain BUSTED overlay below. Gated on this.mission (null otherwise).
     if (this.mission && !this.mission.isOver) {
-      this.mission.update(px, py, this.pursuit.ditched, this.bust.isBusted);
+      this.mission.update(
+        px,
+        py,
+        this.pursuit.ditched,
+        state === PursuitState.ACTIVE,
+        this.bust.isBusted,
+        delta / 1000,
+      );
+      // Drop just secured → tip the cops to the location (re-aggro from the drop + spotted alert).
+      if (this.mission.justSecuredDrop) this._alertCopsTo(this.mission.drop);
       if (this.mission.isOver) {
         this._onMissionEnd();
         return;
