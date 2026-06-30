@@ -240,6 +240,11 @@ export class GameScene extends Phaser.Scene {
     this.tireBackOffset = 22;     // px behind car centre where the rear axle sits
     this.tireSideOffset = 12;     // px lateral from centre to each rear tyre
     this._tireSmokeAcc = 0;       // emission-rate accumulator
+    // Crash guard for the screech: a collision shoves the car sideways (drift-angle spike) which would
+    // otherwise trip the "corner/brake" screech. A real impact sheds a big chunk of speed in ONE frame
+    // (driving only sheds a few px/s/frame), so a hard one-frame drop briefly mutes the screech.
+    this.crashScreechDrop = 55;   // px/s lost in a single frame that counts as an impact
+    this._screechQuietT = 0;      // s remaining of post-impact screech mute
 
     // --- Gadget: Repair Kit (player) — instantly clears a spike BLOWOUT (the only player "damage"
     // state today), restoring top speed / grip / killing the pull via _repairTires(). The intended
@@ -4523,10 +4528,16 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
       const cornering = !c.handbrake && !kicking && da > 0.32 && sp > 220;
       const launching = c.up && sp < 45 && (this._screechLastSp || 0) < 12;
 
-      if (kicking   && !s.kicking)   this.audio.playScreech("handbrake");
-      if (braking   && !s.braking)   this.audio.playScreech("brake");
-      if (cornering && !s.cornering) this.audio.playScreech("corner", { gain: 0.5, cooldown: 0.8 });
-      if (launching)                 this.audio.playScreech("launch"); // cooldown gates repeats
+      // Crash guard: a big one-frame speed drop = an impact (wall/cop), not a slide → mute the screech
+      // briefly so the collision's drift-angle spike can't trip the corner/brake clip. Smoke is left on.
+      this._screechQuietT = Math.max(0, this._screechQuietT - delta / 1000);
+      if ((this._screechLastSp || 0) - sp > this.crashScreechDrop) this._screechQuietT = 0.25;
+      const quiet = this._screechQuietT > 0;
+
+      if (kicking   && !s.kicking   && !quiet) this.audio.playScreech("handbrake");
+      if (braking   && !s.braking   && !quiet) this.audio.playScreech("brake");
+      if (cornering && !s.cornering && !quiet) this.audio.playScreech("corner", { gain: 0.5, cooldown: 0.8 });
+      if (launching                 && !quiet) this.audio.playScreech("launch"); // cooldown gates repeats
 
       s.kicking = kicking; s.braking = braking; s.cornering = cornering;
       this._screechLastSp = sp;
