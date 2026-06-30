@@ -4531,10 +4531,15 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
       s.kicking = kicking; s.braking = braking; s.cornering = cornering;
       this._screechLastSp = sp;
 
-      // Tire smoke — emit continuously WHILE the tyres are slipping (drift slide / handbrake / hard
-      // brake at speed / launch wheelspin), the visual partner to the screech. Throttled by rate.
+      // Tire smoke — emit continuously WHILE the tyres are slipping. A handbrake turn scrubs speed
+      // fast, so a single high speed gate cut the smoke off after the entry kick; instead, a HELD
+      // handbrake smokes all the way down through the pivot (low speed floor), the drift-angle slide
+      // and brake-lockup keep their higher floors. The visual partner to the screech; throttled by rate.
       if (this.tireSmokeOn) {
-        const sliding = sp > 130 && (c.handbrake || da > 0.30 || ((c.brake || c.down) && sp > 220));
+        const sliding =
+          (c.handbrake && sp > 50) ||
+          (da > 0.22 && sp > 90) ||
+          ((c.brake || c.down) && sp > 200);
         if (sliding || launching) {
           this._tireSmokeAcc += delta / 1000;
           while (this._tireSmokeAcc >= this.tireSmokeRate) {
