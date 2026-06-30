@@ -553,13 +553,7 @@ export class GameScene extends Phaser.Scene {
     if (this.debugText) hud.push(this.debugText);
     if (this.copCountText) hud.push(this.copCountText);
     if (this.mission)
-      hud.push(
-        this.objectiveText,
-        this.beaconGfx,
-        this.tipText,
-        this.briefingText,
-        this.resultText,
-      );
+      hud.push(this.objectiveText, this.beaconGfx, this.briefingText, this.resultText);
     this.cameras.main.ignore(hud); // world cam skips HUD
     this.uiCamera.ignore(this.worldLayer); // UI cam skips the world (and its future children)
 
@@ -591,7 +585,9 @@ export class GameScene extends Phaser.Scene {
     this.physics.pause();
     this.briefingText
       .setText(
-        `${this.mission.def.name}\n\n${this.mission.def.briefing}\n\n[ SPACE to roll out ]`,
+        `${this.mission.def.name}\n\n${this.mission.def.briefing}\n\n` +
+          `TIP: cut your lights (L) while you sit on the drop — a blacked-out car is only spotted up close\n\n` +
+          `[ SPACE to roll out ]`,
       )
       .setAlpha(1);
   }
@@ -3266,20 +3262,6 @@ bleed: { fastFrac: ${b.fastFrac}, fastRate: ${b.fastRate}, slowRate: ${b.slowRat
         .setDepth(100);
       // Off-screen beacon — arrow at the screen edge pointing to the objective POI (+ distance).
       this.beaconGfx = this.add.graphics().setScrollFactor(0).setDepth(100);
-      // Contextual tip card (bottom centre) — shown during the drop leg to teach kill-lights.
-      this.tipText = this.add
-        .text(width / 2, h - 104, "", {
-          fontFamily: "monospace",
-          fontSize: "13px",
-          color: "#9aa0b5",
-          align: "center",
-          backgroundColor: "#0d0d14",
-          padding: { x: 12, y: 7 },
-        })
-        .setOrigin(0.5, 1)
-        .setScrollFactor(0)
-        .setDepth(100)
-        .setAlpha(0);
       // Briefing card (shown at start, dismissed with SPACE/ENTER to drop into the chase).
       this.briefingText = this.add
         .text(width / 2, h / 2, "", {
@@ -3371,16 +3353,6 @@ bleed: { fastFrac: ${b.fastFrac}, fastRate: ${b.fastRate}, slowRate: ${b.slowRat
     const poi = m.targetPoi;
     this.poiGfx.clear();
     this.beaconGfx.clear();
-
-    // Kill-lights tip — only as you arrive at / wait on the drop (not the whole drive there), since
-    // that's the moment lying low unseen actually matters.
-    const nearDrop =
-      poi === m.drop && Math.hypot(m.drop.x - px, m.drop.y - py) <= m.drop.r + 240;
-    this.tipText.setAlpha(nearDrop ? 1 : 0);
-    if (nearDrop)
-      this.tipText.setText(
-        "TIP: cut your lights (L) while you wait — a blacked-out car is only spotted up close",
-      );
 
     if (!poi) {
       this.objectiveText.setText(m.objectiveLabel ? `◉ ${m.objectiveLabel}` : "");
