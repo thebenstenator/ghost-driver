@@ -3372,10 +3372,12 @@ bleed: { fastFrac: ${b.fastFrac}, fastRate: ${b.fastRate}, slowRate: ${b.slowRat
     this.poiGfx.clear();
     this.beaconGfx.clear();
 
-    // Kill-lights tip — only on the drop leg, where lying low unseen is the whole puzzle.
-    const onDropLeg = poi === m.drop;
-    this.tipText.setAlpha(onDropLeg ? 1 : 0);
-    if (onDropLeg)
+    // Kill-lights tip — only as you arrive at / wait on the drop (not the whole drive there), since
+    // that's the moment lying low unseen actually matters.
+    const nearDrop =
+      poi === m.drop && Math.hypot(m.drop.x - px, m.drop.y - py) <= m.drop.r + 240;
+    this.tipText.setAlpha(nearDrop ? 1 : 0);
+    if (nearDrop)
       this.tipText.setText(
         "TIP: cut your lights (L) while you wait — a blacked-out car is only spotted up close",
       );
