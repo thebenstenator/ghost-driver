@@ -320,15 +320,18 @@ export class GameScene extends Phaser.Scene {
                                  // lets a patrol fully keep pace, so it drifts back gradually, not locks on.
     // Spawn ease-in: a freshly placed/relocated cop EASES in rather than rocketing at you — capped
     // slow while far, ramping to match your speed as the gap closes, then it hands off to normal
-    // chasing (the flag clears once it's within seNear). Caps maxSpeed via min() AFTER the rejoin
-    // band, so a fresh far cop reads as "arriving", not "teleport-rushing". Per-cop flag set in
-    // _placeCop. KEEP the cap NEAR your speed (seSlow high) — too low (0.5×) and a fresh patrol can't
-    // even keep pace, so it joins the chase sheepishly; the ease should soften the entry, not stall it.
+    // chasing. Caps maxSpeed via min() AFTER the rejoin band, so a fresh far cop reads as "arriving".
+    // CRITICAL — the ease MUST be time-bounded (seMaxTime): the cap is BELOW your speed while far, so
+    // a cop chasing a fleeing player can never reach seNear to end it on distance → the cap, and the
+    // shyness, becomes PERMANENT (it trails below your pace and can never close to ram). seMaxTime
+    // guarantees the ease is transient; once it ends the rejoin band's speed boost lets a far cop
+    // actually close. Per-cop flag + timer set in _placeCop.
     this.spawnEaseEnabled = true;
     this.seFar = 900;    // px: at/beyond this a fresh cop is at its slowest (smaller zone = engages sooner)
     this.seNear = 450;   // px: within this the ease ENDS — normal chase + rejoin band take over
     this.seSlow = 0.85;  // fraction of YOUR current speed it's capped to when far (near-pace, not timid)
     this.seFloor = 250;  // px/s floor on the cap, so it still drives in briskly when you're slow/stopped
+    this.seMaxTime = 2.0; // s: HARD cap on the ease — after this it's a full-speed chaser no matter the gap
     // Tier-2 rejoin (respawn): a cop that's far AND not chasing AND off-screen for a
     // sustained beat is relocated off-screen near the player rather than grinding the
     // whole way back. No handling tune can close a map-width gap; this does, and it
@@ -1164,6 +1167,7 @@ export class GameScene extends Phaser.Scene {
     a._goalNode = -1;
     a._aimHist = [];
     cop._spawnEase = this.spawnEaseEnabled; // ease this cop in (see the spawn-ease cap in update)
+    cop._spawnEaseT = 0; // age of the ease — it ends after seMaxTime so it can't become permanent
   }
 
   // --- Pursuit Mode: escalation + reinforcement (only runs when pursuitLevel exists) -
@@ -4166,6 +4170,7 @@ this.withdrawColor = ${hex(f.withdrawColor)};`;
     seF.add(this, "seNear", 100, 1200, 25).name("Ease ends within (px)");
     seF.add(this, "seSlow", 0, 1, 0.05).name("Far cap × your speed");
     seF.add(this, "seFloor", 0, 400, 10).name("Min crawl speed (px/s)");
+    seF.add(this, "seMaxTime", 0, 6, 0.25).name("Ease max time (s)");
 
     // Bust meter — bound straight to the live BustMeter (fill scales with crowding cops).
     const bustF = gui.addFolder("Bust meter");
@@ -4209,7 +4214,7 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
 
     // Persist across refresh. Key bumped to v16: huntLead removed (blind cops now go
     // straight to last-known, no forward projection).
-    this._persistPanel(gui, "gd_copTuning30"); // bumped: less-sheepish spawns (seSlow 0.85/seFloor 250/seFar 900)
+    this._persistPanel(gui, "gd_copTuning31"); // bumped: spawn-ease time cap (seMaxTime) — fixes permanent-shyness trap
 
     gui.domElement.style.position = "fixed";
     gui.domElement.style.top = "8px";
@@ -4714,9 +4719,10 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
       // speed as it closes; once it's within seNear it has "arrived" → clear the flag and let the
       // normal chase + rejoin band own it. Capped via min() so it can only ever SLOW the cop.
       if (cop._spawnEase) {
+        cop._spawnEaseT = (cop._spawnEaseT || 0) + delta / 1000;
         const d = Phaser.Math.Distance.Between(cop.sprite.x, cop.sprite.y, px, py);
-        if (d <= this.seNear) {
-          cop._spawnEase = false; // engaged — hand off to normal chasing
+        if (d <= this.seNear || cop._spawnEaseT >= this.seMaxTime) {
+          cop._spawnEase = false; // engaged (got close OR the ease timed out) — hand off to normal chasing
         } else {
           const t = Phaser.Math.Clamp((d - this.seNear) / Math.max(1, this.seFar - this.seNear), 0, 1);
           const ps = this.car.getSpeed();
