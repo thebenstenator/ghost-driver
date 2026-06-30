@@ -351,6 +351,7 @@ export class GameScene extends Phaser.Scene {
     // current distance, or it's not worth doing (skip and wait)
     this.respawnSpacing = 300; // a relocation spot must clear other cops by this much, so several
     // reinforcements don't all surface on the same road
+    this.dropHeatCops = 3; // mission: pack size that converges on you the instant the drop is secured
     this.interceptAheadDist = 850; // px down the player's travel that an 'ahead-of-travel'
     // unit (interceptor) spawns, to set up a head-on
     this.interceptEntrySpeed = 260; // px/s an ahead-spawned interceptor enters AT (rolling toward
@@ -552,7 +553,13 @@ export class GameScene extends Phaser.Scene {
     if (this.debugText) hud.push(this.debugText);
     if (this.copCountText) hud.push(this.copCountText);
     if (this.mission)
-      hud.push(this.objectiveText, this.beaconGfx, this.briefingText, this.resultText);
+      hud.push(
+        this.objectiveText,
+        this.beaconGfx,
+        this.tipText,
+        this.briefingText,
+        this.resultText,
+      );
     this.cameras.main.ignore(hud); // world cam skips HUD
     this.uiCamera.ignore(this.worldLayer); // UI cam skips the world (and its future children)
 
@@ -620,27 +627,35 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
-  // Drop secured → a patrolling cop happens upon you. Spawn one just off-screen and re-arm the
-  // chase from your position so it (and the pack) converges. Reads as "a patrol spotted you" rather
-  // than a magic alert — and gives the player a beat to bolt for the safehouse. No-op without cops.
+  // Drop secured → your cover is blown and the heat CONVERGES. A lone cop can't catch a player with
+  // a head start (equal top speed), so the second leg was dying with nobody finding you. Instead: top
+  // the pack up to dropHeatCops and relocate every OFF-SCREEN cop to a fresh off-screen road node
+  // spread around you (off-camera gated → no visible pop-in), then re-arm the chase from your spot.
+  // On-screen cops are already in contact, so they stay put. The ring of cops closing in makes the
+  // run for the safehouse a real chase. No-op without a pursuit.
   _dropDiscovered(px, py) {
-    this._spawnPatrolOffscreen(px, py);
-    this.pursuit.begin(px, py); // area goes hot — the patrol called it in
-  }
-
-  // Place a fresh PATROL at a nearby off-screen road node facing the player (the off-camera gate in
-  // _tryRespawnCop prevents any visible pop-in). Mirrors the reinforcement-dispatch placement.
-  _spawnPatrolOffscreen(px, py) {
-    const cop = this._spawnCop(px, py, "patrol");
-    if (this.pursuitLevel) cop.ai.reactionTime = this.pursuitLevel.cfg().reaction;
-    const a = Math.random() * Math.PI * 2;
-    cop.sprite.setPosition(px + Math.cos(a) * this.respawnBandMax, py + Math.sin(a) * this.respawnBandMax);
-    if (!this._tryRespawnCop(cop, px, py)) {
-      const x = Phaser.Math.Clamp(px + Math.cos(a) * this.respawnBandMin, 120, WORLD_WIDTH - 120);
-      const y = Phaser.Math.Clamp(py + Math.sin(a) * this.respawnBandMin, 120, WORLD_HEIGHT - 120);
-      const p = this.navGrid.pos(this.navGrid.nearestNode(x, y));
-      this._placeCop(cop, p.x, p.y, px, py);
+    // Top up with fresh patrols, seeded far so the relocate pass below treats them as off-screen.
+    const target = Math.max(this.cops.length, this.dropHeatCops);
+    while (this.cops.length < target) {
+      const c = this._spawnCop(px, py, "patrol");
+      c.sprite.setPosition(px + this.respawnBandMax, py);
     }
+    // Spread the off-screen cops around you so some come from ahead (toward the safehouse), not all
+    // from behind. _tryRespawnCop biases to each cop's seeded bearing and keeps them respawnSpacing apart.
+    let i = 0;
+    for (const cop of this.cops) {
+      if (!this._offCamera(cop.sprite.x, cop.sprite.y)) continue; // already near/on-screen — leave it
+      if (this.pursuitLevel) cop.ai.reactionTime = this.pursuitLevel.cfg().reaction;
+      const a = (i++ / target) * Math.PI * 2 + Math.random() * 0.6;
+      cop.sprite.setPosition(px + Math.cos(a) * this.respawnBandMax, py + Math.sin(a) * this.respawnBandMax);
+      if (!this._tryRespawnCop(cop, px, py)) {
+        const x = Phaser.Math.Clamp(px + Math.cos(a) * this.respawnBandMin, 120, WORLD_WIDTH - 120);
+        const y = Phaser.Math.Clamp(py + Math.sin(a) * this.respawnBandMin, 120, WORLD_HEIGHT - 120);
+        const p = this.navGrid.pos(this.navGrid.nearestNode(x, y));
+        this._placeCop(cop, p.x, p.y, px, py);
+      }
+    }
+    this.pursuit.begin(px, py); // area goes hot — they've made you
   }
 
   // Drop into the live chase: spawn the starting cop(s) from their approach points and arm the
@@ -3251,6 +3266,20 @@ bleed: { fastFrac: ${b.fastFrac}, fastRate: ${b.fastRate}, slowRate: ${b.slowRat
         .setDepth(100);
       // Off-screen beacon — arrow at the screen edge pointing to the objective POI (+ distance).
       this.beaconGfx = this.add.graphics().setScrollFactor(0).setDepth(100);
+      // Contextual tip card (bottom centre) — shown during the drop leg to teach kill-lights.
+      this.tipText = this.add
+        .text(width / 2, h - 104, "", {
+          fontFamily: "monospace",
+          fontSize: "13px",
+          color: "#9aa0b5",
+          align: "center",
+          backgroundColor: "#0d0d14",
+          padding: { x: 12, y: 7 },
+        })
+        .setOrigin(0.5, 1)
+        .setScrollFactor(0)
+        .setDepth(100)
+        .setAlpha(0);
       // Briefing card (shown at start, dismissed with SPACE/ENTER to drop into the chase).
       this.briefingText = this.add
         .text(width / 2, h / 2, "", {
@@ -3342,6 +3371,14 @@ bleed: { fastFrac: ${b.fastFrac}, fastRate: ${b.fastRate}, slowRate: ${b.slowRat
     const poi = m.targetPoi;
     this.poiGfx.clear();
     this.beaconGfx.clear();
+
+    // Kill-lights tip — only on the drop leg, where lying low unseen is the whole puzzle.
+    const onDropLeg = poi === m.drop;
+    this.tipText.setAlpha(onDropLeg ? 1 : 0);
+    if (onDropLeg)
+      this.tipText.setText(
+        "TIP: cut your lights (L) while you wait — a blacked-out car is only spotted up close",
+      );
 
     if (!poi) {
       this.objectiveText.setText(m.objectiveLabel ? `◉ ${m.objectiveLabel}` : "");
