@@ -326,12 +326,17 @@ export class GameScene extends Phaser.Scene {
     // shyness, becomes PERMANENT (it trails below your pace and can never close to ram). seMaxTime
     // guarantees the ease is transient; once it ends the rejoin band's speed boost lets a far cop
     // actually close. Per-cop flag + timer set in _placeCop.
-    this.spawnEaseEnabled = true;
+    this.spawnEaseEnabled = false; // OFF by default — playtested better (the ease read as cop shyness;
+                                   // off-camera respawn + rejoin band already soften the entry). Toggle
+                                   // it back on in the panel if a warped-in cop ever feels too abrupt.
     this.seFar = 900;    // px: at/beyond this a fresh cop is at its slowest (smaller zone = engages sooner)
     this.seNear = 450;   // px: within this the ease ENDS — normal chase + rejoin band take over
     this.seSlow = 0.85;  // fraction of YOUR current speed it's capped to when far (near-pace, not timid)
     this.seFloor = 250;  // px/s floor on the cap, so it still drives in briskly when you're slow/stopped
     this.seMaxTime = 2.0; // s: HARD cap on the ease — after this it's a full-speed chaser no matter the gap
+    // Spawn roll-in: every cop enters with a little speed along its facing (toward you) instead of from a
+    // dead stop, so it's immediately moving and doesn't read as hesitating. Applied to ALL cops.
+    this.copSpawnSpeed = 140; // px/s a freshly spawned/placed cop starts at (0 = dead stop, the old behaviour)
     // Tier-2 rejoin (respawn): a cop that's far AND not chasing AND off-screen for a
     // sustained beat is relocated off-screen near the player rather than grinding the
     // whole way back. No handling tune can close a map-width gap; this does, and it
@@ -673,6 +678,7 @@ export class GameScene extends Phaser.Scene {
       const cop = this._spawnCop(spawnPts[i].x, spawnPts[i].y);
       cop.facing = Math.atan2(cy - spawnPts[i].y, cx - spawnPts[i].x); // face the player's start
       cop.sprite.setRotation(cop.facing + Math.PI / 2);
+      this._giveSpawnSpeed(cop); // roll in, not from a dead stop
     }
     if (this.cops.length)
       this.pursuit.begin(this.car.sprite.x, this.car.sprite.y);
@@ -1153,10 +1159,9 @@ export class GameScene extends Phaser.Scene {
   // pass `facing` (radians) to override — e.g. a spike unit spawns facing the way you're driving.
   _placeCop(cop, x, y, px, py, facing = null) {
     cop.sprite.body.reset(x, y); // moves the body + zeroes its velocity
-    cop.vx = 0;
-    cop.vy = 0;
     cop.facing = facing != null ? facing : Math.atan2(py - y, px - x);
     cop.sprite.setRotation(cop.facing + Math.PI / 2);
+    this._giveSpawnSpeed(cop); // roll in with a little speed, not from a dead stop
     cop.pursuitMode = "LONE";
     cop._searchNode = null;
     const a = cop.ai;
@@ -1168,6 +1173,14 @@ export class GameScene extends Phaser.Scene {
     a._aimHist = [];
     cop._spawnEase = this.spawnEaseEnabled; // ease this cop in (see the spawn-ease cap in update)
     cop._spawnEaseT = 0; // age of the ease — it ends after seMaxTime so it can't become permanent
+  }
+
+  // Start a cop rolling along its facing (toward you) instead of from a dead stop. Sets both the
+  // custom vx/vy and the Arcade body so the first frame already has motion.
+  _giveSpawnSpeed(cop) {
+    cop.vx = Math.cos(cop.facing) * this.copSpawnSpeed;
+    cop.vy = Math.sin(cop.facing) * this.copSpawnSpeed;
+    cop.sprite.body.setVelocity(cop.vx, cop.vy);
   }
 
   // --- Pursuit Mode: escalation + reinforcement (only runs when pursuitLevel exists) -
@@ -3052,8 +3065,8 @@ bleed: { fastFrac: ${b.fastFrac}, fastRate: ${b.fastRate}, slowRate: ${b.slowRat
       .setDepth(100)
       .setInteractive({ useHandCursor: true });
     // Collapsible: click the box (or press H) to fold it to a one-line header — handy
-    // when the stats block covers the action during a playtest.
-    this._statsCollapsed = false;
+    // when the stats block covers the action during a playtest. Collapsed by DEFAULT (press H to open).
+    this._statsCollapsed = true;
     const toggle = () => {
       this._statsCollapsed = !this._statsCollapsed;
     };
@@ -4171,6 +4184,7 @@ this.withdrawColor = ${hex(f.withdrawColor)};`;
     seF.add(this, "seSlow", 0, 1, 0.05).name("Far cap × your speed");
     seF.add(this, "seFloor", 0, 400, 10).name("Min crawl speed (px/s)");
     seF.add(this, "seMaxTime", 0, 6, 0.25).name("Ease max time (s)");
+    seF.add(this, "copSpawnSpeed", 0, 400, 10).name("Spawn roll-in speed (px/s)");
 
     // Bust meter — bound straight to the live BustMeter (fill scales with crowding cops).
     const bustF = gui.addFolder("Bust meter");
@@ -4214,7 +4228,7 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
 
     // Persist across refresh. Key bumped to v16: huntLead removed (blind cops now go
     // straight to last-known, no forward projection).
-    this._persistPanel(gui, "gd_copTuning31"); // bumped: spawn-ease time cap (seMaxTime) — fixes permanent-shyness trap
+    this._persistPanel(gui, "gd_copTuning32"); // bumped: spawn ease OFF by default + cop spawn roll-in speed
 
     gui.domElement.style.position = "fixed";
     gui.domElement.style.top = "8px";
