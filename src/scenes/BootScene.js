@@ -40,6 +40,33 @@ export class BootScene extends Phaser.Scene {
   }
 
   create() {
+    this._softenVehicleTextures([
+      'player_car', 'cop_patrol', 'cop_interceptor', 'cop_heavy',
+    ]);
     this.scene.start('MenuScene');
+  }
+
+  // Moiré fix: the vehicle PNGs are ~128px tall but render at ~59px, so the GPU does a ~2x run-time
+  // downscale with no mipmaps (the art is non-power-of-two, so WebGL can't auto-mipmap it) — which
+  // shimmers/moirés on the fine body lines as the car rotates. Bake ONE high-quality half-size copy up
+  // front (browser canvas downscaling does a proper filtered shrink), giving ~1 texel per screen pixel
+  // so the run-time sampling is gentle and the moiré clears. Display size is set explicitly on each
+  // sprite, so the on-screen size is unchanged; no visible detail is lost at this render size.
+  _softenVehicleTextures(keys) {
+    for (const key of keys) {
+      if (!this.textures.exists(key)) continue;
+      const img = this.textures.get(key).getSourceImage();
+      const w = Math.max(1, Math.round(img.width / 2));
+      const h = Math.max(1, Math.round(img.height / 2));
+      const cv = document.createElement('canvas');
+      cv.width = w;
+      cv.height = h;
+      const ctx = cv.getContext('2d');
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = 'high';
+      ctx.drawImage(img, 0, 0, w, h);
+      this.textures.remove(key);
+      this.textures.addCanvas(key, cv);
+    }
   }
 }

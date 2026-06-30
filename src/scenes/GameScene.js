@@ -228,6 +228,19 @@ export class GameScene extends Phaser.Scene {
     this.smokeDropOffset = 38;  // px behind the car centre the cloud spawns
     this.smokes = [];           // active clouds: { x, y, r, t, blobs }
 
+    // --- Tire smoke: subtle puffs off the REAR tyres while the car is actually sliding (drifting /
+    // handbrake / brake lockup / launch wheelspin) — the visual partner to the tire-screech audio. ---
+    this.tireSmoke = [];          // active puffs: { x, y, vx, vy, r, maxR, t, life }
+    this.tireSmokeOn = true;
+    this.tireSmokeRate = 0.02;    // s between emissions (per rear-tyre pair) while sliding
+    this.tireSmokeR = 13;         // px peak puff radius
+    this.tireSmokeLife = 0.55;    // s a puff lives (grows + fades over this)
+    this.tireSmokeOpacity = 0.13; // peak alpha — kept low so it reads as a subtle haze
+    this.tireSmokeMax = 160;      // hard cap on live puffs
+    this.tireBackOffset = 22;     // px behind car centre where the rear axle sits
+    this.tireSideOffset = 12;     // px lateral from centre to each rear tyre
+    this._tireSmokeAcc = 0;       // emission-rate accumulator
+
     // --- Gadget: Repair Kit (player) — instantly clears a spike BLOWOUT (the only player "damage"
     // state today), restoring top speed / grip / killing the pull via _repairTires(). The intended
     // counter to cop spikes. Won't spend a charge if there's nothing to repair. Levers in the
@@ -496,6 +509,10 @@ export class GameScene extends Phaser.Scene {
     // obscures the cops chasing through it while your own car stays visible on top. See _updateSmoke.
     this.smokeGfx = this.add.graphics().setDepth(9.5);
     this.worldLayer.add(this.smokeGfx);
+
+    // Tire smoke — under the cars (a haze off the road), above oil/spikes. See _updateTireSmoke.
+    this.tireSmokeGfx = this.add.graphics().setDepth(8);
+    this.worldLayer.add(this.tireSmokeGfx);
 
     // Mission (Phase 3): instantiate the loop + its on-road objective marker (world space, under
     // cars). Screen-space mission UI (briefing card, objective tracker, beacon, result) is built in
@@ -2057,6 +2074,49 @@ export class GameScene extends Phaser.Scene {
       for (const b of s.blobs) g.fillCircle(s.x + b.dx * r, s.y + b.dy * r, b.rf * r);
       g.fillStyle(0xb9b9c2, 0.5 * a);
       for (const b of s.blobs) g.fillCircle(s.x + b.dx * r - b.rf * r * 0.2, s.y + b.dy * r - b.rf * r * 0.2, b.rf * r * 0.6);
+    }
+  }
+
+  // Spawn a puff at each rear tyre — born small at the contact patch, with a gentle backward drift
+  // (relative to travel) plus jitter so the pair billows out behind the sliding car.
+  _emitTireSmoke() {
+    const car = this.car, f = car.facing;
+    const cf = Math.cos(f), sf = Math.sin(f);
+    const cx = car.sprite.x, cy = car.sprite.y;
+    const jit = () => (Math.random() * 2 - 1);
+    for (const side of [-1, 1]) {
+      const fwd = -this.tireBackOffset, rgt = this.tireSideOffset * side;
+      this.tireSmoke.push({
+        x: cx + cf * fwd - sf * rgt,
+        y: cy + sf * fwd + cf * rgt,
+        vx: -cf * 22 + jit() * 16,   // drift back off the wheel + spread
+        vy: -sf * 22 + jit() * 16,
+        r: 2 + Math.random() * 2,
+        maxR: this.tireSmokeR * (0.7 + Math.random() * 0.6),
+        t: 0,
+        life: this.tireSmokeLife * (0.7 + Math.random() * 0.6),
+      });
+    }
+    const over = this.tireSmoke.length - this.tireSmokeMax;
+    if (over > 0) this.tireSmoke.splice(0, over); // drop oldest if we somehow overflow
+  }
+
+  // Age + redraw the tyre-smoke puffs: each grows from its contact-patch dot to maxR and fades out
+  // over its life, drifting on its (damped) velocity. Light grey, low alpha → a subtle haze.
+  _updateTireSmoke(dt) {
+    const g = this.tireSmokeGfx;
+    g.clear();
+    for (let i = this.tireSmoke.length - 1; i >= 0; i--) {
+      const p = this.tireSmoke[i];
+      p.t += dt;
+      if (p.t >= p.life) { this.tireSmoke.splice(i, 1); continue; }
+      p.x += p.vx * dt; p.y += p.vy * dt;
+      p.vx *= 0.9; p.vy *= 0.9; // settle quickly
+      const k = p.t / p.life;   // 0 → 1
+      const r = Phaser.Math.Linear(p.r, p.maxR, k);
+      const a = this.tireSmokeOpacity * (1 - k); // fade out as it grows
+      g.fillStyle(0xd8d8e0, a);
+      g.fillCircle(p.x, p.y, r);
     }
   }
 
@@ -3769,6 +3829,9 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
     ls.add(au, "sirenVol", 0, 2, 0.05).name("Siren volume");
     ls.add(au, "screechVol", 0, 2, 0.05).name("Tire screech volume");
     ls.add(au, "muted").name("Mute (N)").onChange((v) => au.setMuted(v));
+    ls.add(this, "tireSmokeOn").name("Tire smoke");
+    ls.add(this, "tireSmokeOpacity", 0, 0.5, 0.01).name("Tire smoke opacity");
+    ls.add(this, "tireSmokeR", 4, 30, 1).name("Tire smoke size (px)");
 
     // Stealth — Kill Lights (L) detection tuning.
     const st = gui.addFolder("Stealth (Kill Lights)");
@@ -3776,7 +3839,7 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
     st.add(this, "illumSpeedRef", 100, 600, 10).name("Re-lit at speed (px/s)");
 
     // Persist across refresh (binds directly to the car, so load sets car fields).
-    this._persistPanel(gui, "gd_carTuning_v12"); // bumped: engineVol default 0.3
+    this._persistPanel(gui, "gd_carTuning_v13"); // bumped: added tire-smoke levers
 
     gui.domElement.style.position = "fixed";
     gui.domElement.style.top = "8px";
@@ -4363,6 +4426,7 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
     this._updateSpikes(this.car.sprite.x, this.car.sprite.y, delta / 1000);
     this._updateOilSlicks(delta / 1000);
     this._updateSmoke(delta / 1000);
+    this._updateTireSmoke(delta / 1000);
 
     // While spectating a cop (camera not on the player), freeze the car so the
     // observer can't accidentally drive or re-trigger anything.
@@ -4466,6 +4530,21 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
 
       s.kicking = kicking; s.braking = braking; s.cornering = cornering;
       this._screechLastSp = sp;
+
+      // Tire smoke — emit continuously WHILE the tyres are slipping (drift slide / handbrake / hard
+      // brake at speed / launch wheelspin), the visual partner to the screech. Throttled by rate.
+      if (this.tireSmokeOn) {
+        const sliding = sp > 130 && (c.handbrake || da > 0.30 || ((c.brake || c.down) && sp > 220));
+        if (sliding || launching) {
+          this._tireSmokeAcc += delta / 1000;
+          while (this._tireSmokeAcc >= this.tireSmokeRate) {
+            this._tireSmokeAcc -= this.tireSmokeRate;
+            this._emitTireSmoke();
+          }
+        } else {
+          this._tireSmokeAcc = 0;
+        }
+      }
     }
 
     // Kill Lights: blacking out only hides a SLOW car. The moment you hit illumSpeedRef the lights
