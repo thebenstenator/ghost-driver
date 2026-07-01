@@ -147,6 +147,20 @@ export class MenuScene extends Phaser.Scene {
       this.scene.start("GameScene", { sandbox: true, autostart: true }),
     );
 
+    // --- Dev-only: Tiled map viewer (bottom-right, above the testbed). Loads the exported .tmj and
+    // draws its layout — a throwaway feasibility harness for the authored-map work, never live play. ---
+    const mt = this.add
+      .text(GAME_WIDTH - 16, GAME_HEIGHT - 42, "🗺 map test →", {
+        fontFamily: "monospace",
+        fontSize: "15px",
+        color: "#ffd23f",
+      })
+      .setOrigin(1, 0.5)
+      .setInteractive({ useHandCursor: true });
+    mt.on("pointerover", () => mt.setColor("#ffe98a"));
+    mt.on("pointerout", () => mt.setColor("#ffd23f"));
+    mt.on("pointerdown", () => this.scene.start("MapTestScene"));
+
     // --- Dev mode toggle (bottom-left corner) ---
     // Off by default. When on, the chase shows tuning panels + AI overlays; when off,
     // playtesters get a clean screen. Persisted, so it survives restarts.
@@ -172,6 +186,7 @@ export class MenuScene extends Phaser.Scene {
     };
     renderDev();
     tb.setVisible(this._devOn); // testbed entry only when dev mode is on
+    mt.setVisible(this._devOn); // map viewer likewise
     devBox.on("pointerover", () => renderDev(true));
     devBox.on("pointerout", () => renderDev(false));
     devBox.on("pointerdown", () => {
@@ -179,6 +194,7 @@ export class MenuScene extends Phaser.Scene {
       GameScene.setDevMode(this._devOn);
       renderDev(true);
       tb.setVisible(this._devOn);
+      mt.setVisible(this._devOn);
     });
 
     // --- Keyboard shortcuts ---

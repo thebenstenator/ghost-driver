@@ -3,3 +3,7 @@ dist/
 .claude/
 specs/
 CLAUDE.md
+
+# Tiled editor session state (transient UI state, not map source). The .tmx/.tsx/
+# .tiled-project source files in tiled-src/ ARE committed.
+*.tiled-session
