@@ -4523,9 +4523,14 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
       const sp = this.car.getSpeed(), c = controls;
       const da = Math.abs(this.car.driftAngle);
       const s = this._screechEdge || (this._screechEdge = {});
+      // Forward speed component (negative = reversing). The DOWN key is both brake AND reverse, and a
+      // reversing car's velocity opposes its facing (driftAngle ≈ 180°) — which would otherwise read as
+      // a hard brake + big slide and screech/smoke the whole time you back up. So gate slip on forward motion.
+      const fwd = this.car.vx * Math.cos(this.car.facing) + this.car.vy * Math.sin(this.car.facing);
+      const reversing = fwd < -10;
       const kicking   = this.car.isDriftKicking();
-      const braking   = (c.brake || c.down) && sp > 220;
-      const cornering = !c.handbrake && !kicking && da > 0.32 && sp > 220;
+      const braking   = (c.brake || c.down) && sp > 220 && !reversing;
+      const cornering = !c.handbrake && !kicking && da > 0.32 && sp > 220 && !reversing;
       const launching = c.up && sp < 45 && (this._screechLastSp || 0) < 12;
 
       // Crash guard: a big one-frame speed drop = an impact (wall/cop), not a slide → mute the screech
@@ -4548,9 +4553,10 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
       // and brake-lockup keep their higher floors. The visual partner to the screech; throttled by rate.
       if (this.tireSmokeOn) {
         const sliding =
-          (c.handbrake && sp > 50) ||
-          (da > 0.22 && sp > 90) ||
-          ((c.brake || c.down) && sp > 200);
+          !reversing &&
+          ((c.handbrake && sp > 50) ||
+            (da > 0.22 && sp > 90) ||
+            ((c.brake || c.down) && sp > 200));
         if (sliding || launching) {
           this._tireSmokeAcc += delta / 1000;
           while (this._tireSmokeAcc >= this.tireSmokeRate) {
