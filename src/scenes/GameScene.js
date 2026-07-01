@@ -4946,14 +4946,13 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
     }
     this.bust.update(pinned, pinCount, delta / 1000);
 
-    // Mission loop tick (win/lose framing). Reaches COMPLETE on a ditch AFTER the drop is reached,
-    // or FAILED on a bust. _onMissionEnd shows the result + freezes; it OWNS the bust outcome in a
+    // Mission loop tick (win/lose framing). Reaches COMPLETE when you reach the safehouse UNSEEN, or
+    // FAILED on a bust. _onMissionEnd shows the result + freezes; it OWNS the bust outcome in a
     // mission run, so we skip the plain BUSTED overlay below. Gated on this.mission (null otherwise).
     if (this.mission && !this.mission.isOver) {
       this.mission.update(
         px,
         py,
-        this.pursuit.ditched,
         state === PursuitState.ACTIVE,
         this.bust.isBusted,
         delta / 1000,

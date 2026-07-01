@@ -60,14 +60,12 @@ export class Mission {
 
   // Advance the machine. Called every frame once the chase is live.
   //   px,py   : player position
-  //   ditched : pursuit is in the ditched (escaped/safe) STATE — not the one-frame event. Using the
-  //             state means a player who loses the cops before reaching the safehouse, then arrives
-  //             while still safe, completes on arrival instead of soft-locking waiting for a fresh
-  //             ditch the now-withdrawn cops can't trigger.
-  //   active  : a cop currently has line of sight (pursuit ACTIVE) — blocks the drop dwell.
+  //   active  : a cop currently has line of sight (pursuit ACTIVE) — blocks the drop dwell AND the
+  //             safehouse. You don't have to wait out the ditch cooldown: reaching the Safehouse
+  //             (a garage that breaks sight) while NOT actively seen ends the mission right there.
   //   busted  : the bust meter just filled.
   //   dt      : seconds since last frame.
-  update(px, py, ditched, active, busted, dt) {
+  update(px, py, active, busted, dt) {
     this.justSecuredDrop = false;
     if (this.isOver) return this.state;
     if (busted) { this.state = MissionState.FAILED; return this.state; }
@@ -83,7 +81,9 @@ export class Mission {
         this.justSecuredDrop = true; // scene re-aggros the cops to the drop
       }
     } else if (this.state === MissionState.TO_SAFEHOUSE) {
-      if (this.reached(px, py, this.safe) && ditched) this.state = MissionState.COMPLETE;
+      // Reach the safehouse UNSEEN → done. No cooldown wait: pulling into the garage while no cop has
+      // eyes on you IS the escape (the garage breaks any remaining sight).
+      if (this.reached(px, py, this.safe) && !active) this.state = MissionState.COMPLETE;
     }
     return this.state;
   }
@@ -102,7 +102,7 @@ export class Mission {
         }
         return `Reach ${this.drop.name} and lie low`;
       case MissionState.TO_SAFEHOUSE:
-        return `Get to ${this.safe.name} — lose them`;
+        return `Reach ${this.safe.name} unseen`;
       default:
         return '';
     }
