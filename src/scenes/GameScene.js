@@ -197,8 +197,10 @@ export class GameScene extends Phaser.Scene {
     // Oil is real ICE now, driven THROUGH the Vehicle grip model (not a scripted coast): while oiled a
     // cop's grip drops so its velocity stops following its facing — it keeps its momentum and slides,
     // nose fishtailing wherever the AI steers — and its engine power is cut so it can't just drive out.
-    this.oilIceGrip = 0.05;     // grip while oiled (0 = frictionless ice, 1 = normal). Low = big slide.
-    this.oilAccelMult = 0.15;   // engine power multiplier while oiled (low = can't power out of the slide)
+    this.oilIceGrip = 0.03;     // grip while oiled (0 = frictionless ice, 1 = normal). Low = big slide.
+    this.oilAccelMult = 0.85;   // engine power while oiled. KEEP it high — the cop needs its momentum to
+                                // visibly slide; cutting power just decelerates it to a crawl (no slide,
+                                // it just tracks you slowly). Small cut = a touch sluggish, still fast.
     this.oilSpeedLost = 0;      // fraction of speed scrubbed on first contact (0 = keep momentum)
     this.oilEffectTime = 15;    // s the slide lasts at FULL strength after a cop hits oil, then snaps back
                                 // to normal (no decay — a taper was tried and felt wrong). While on the
@@ -3921,7 +3923,7 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
     spk.add({ test: () => this._blowTires() }, "test").name("Test blowout");
     spk.add({ repair: () => this._repairTires() }, "repair").name("Repair (clear)");
 
-    this._persistPanel(gui, "gd_gadgetTune_v13"); // bumped: oil is now grip-based ice (oilIceGrip + oilAccelMult)
+    this._persistPanel(gui, "gd_gadgetTune_v14"); // bumped: oil rebalanced — keep speed (0.85), lower grip (0.03)
 
     // Anchored to the BOTTOM-RIGHT so the panel grows UPWARD when folders expand and stays
     // clear of the bottom-left spawn panel. CRITICAL: clear top/left to "auto" — lil-gui's
