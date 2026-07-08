@@ -194,7 +194,11 @@ export class GameScene extends Phaser.Scene {
     this.oilCharges = this.oilMaxCharges;
     this.oilPatchRadius = 26;   // px radius (~1.5× car width across)
     this.oilLifetime = 30;      // s the patch stays on the road before fading out
-    this.oilGripLost = 0.9;     // peak slipperiness (absolute ice grip) the instant a cop hits oil
+    // Oil is real ICE now, driven THROUGH the Vehicle grip model (not a scripted coast): while oiled a
+    // cop's grip drops so its velocity stops following its facing — it keeps its momentum and slides,
+    // nose fishtailing wherever the AI steers — and its engine power is cut so it can't just drive out.
+    this.oilIceGrip = 0.05;     // grip while oiled (0 = frictionless ice, 1 = normal). Low = big slide.
+    this.oilAccelMult = 0.15;   // engine power multiplier while oiled (low = can't power out of the slide)
     this.oilSpeedLost = 0;      // fraction of speed scrubbed on first contact (0 = keep momentum)
     this.oilEffectTime = 15;    // s the slide lasts at FULL strength after a cop hits oil, then snaps back
                                 // to normal (no decay — a taper was tried and felt wrong). While on the
@@ -3871,7 +3875,8 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
       .onChange((v) => (this.oilCharges = v)); // refill on tune (and on panel load)
     oil.add(this, "oilPatchRadius", 10, 90, 1).name("Patch radius (px)");
     oil.add(this, "oilLifetime", 2, 30, 1).name("Patch lifetime (s)");
-    oil.add(this, "oilGripLost", 0, 1, 0.05).name("Slide lock (0–1)");
+    oil.add(this, "oilIceGrip", 0, 0.5, 0.01).name("Ice grip (0=slick)");
+    oil.add(this, "oilAccelMult", 0, 1, 0.05).name("Power on ice (×)");
     oil.add(this, "oilSpeedLost", 0, 1, 0.05).name("Speed lost on hit (0–1)");
     oil.add(this, "oilEffectTime", 0.2, 30, 0.1).name("Effect duration (s)");
 
@@ -3916,7 +3921,7 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
     spk.add({ test: () => this._blowTires() }, "test").name("Test blowout");
     spk.add({ repair: () => this._repairTires() }, "repair").name("Repair (clear)");
 
-    this._persistPanel(gui, "gd_gadgetTune_v12"); // bumped: oilEffectTime 15, full strength, no decay (taper reverted)
+    this._persistPanel(gui, "gd_gadgetTune_v13"); // bumped: oil is now grip-based ice (oilIceGrip + oilAccelMult)
 
     // Anchored to the BOTTOM-RIGHT so the panel grows UPWARD when folders expand and stays
     // clear of the bottom-left spawn panel. CRITICAL: clear top/left to "auto" — lil-gui's
@@ -4847,23 +4852,19 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
         }
       }
 
-      // Oil slick — COAST. Capture the cop's velocity BEFORE integrating; after, throw away the
-      // AI's throttle/brake/steer result and keep the BALLISTIC velocity (same direction AND
-      // speed, lightly dragged). It's on ice: no grip, no power, no brakes — it just carries its
-      // momentum until it hits a wall or the effect ends. The body still steers (nose turns),
-      // but travel is locked. Blended by oilLock (= oilGripLost) so <1 leaves a little control;
-      // FULL strength the whole time the cop is oiled, then it snaps back when the timer ends. A
-      // taper/decay was tried and felt wrong — flat full-strength for oilEffectTime is what works.
-      const _oilPvx = cop.vx, _oilPvy = cop.vy;
-      cop.update(delta, target);
-      const oilLock = (cop._oilT || 0) > 0 ? this.oilGripLost : 0;
-      if (oilLock > 0.01 && Math.hypot(_oilPvx, _oilPvy) > 25) {
-        // Maintain the cop's CURRENT velocity (direction AND speed) — no accel, no brakes, no
-        // drag: it just carries its momentum across the oil at the speed it came in at.
-        cop.vx = Phaser.Math.Linear(cop.vx, _oilPvx, oilLock);
-        cop.vy = Phaser.Math.Linear(cop.vy, _oilPvy, oilLock);
-        cop.sprite.body.setVelocity(cop.vx, cop.vy);
+      // Oil slick — ICE via the grip model. While oiled, drop the cop's grip so the Vehicle
+      // integrator stops pulling its velocity toward its facing (it keeps momentum and slides), and
+      // cut its engine power so it can't power out. The AI still steers/throttles at its target — it
+      // just can't make the car obey. Applied AFTER the rejoin/search grip writes so it wins; grip is
+      // rewritten from base next frame, so no restore needed — but acceleration ISN'T, so stash+restore.
+      if ((cop._oilT || 0) > 0) {
+        cop.gripLow = this.oilIceGrip;
+        cop.gripHigh = this.oilIceGrip;
+        cop._oilAccel = cop.acceleration;
+        cop.acceleration *= this.oilAccelMult;
       }
+      cop.update(delta, target);
+      if (cop._oilAccel != null) { cop.acceleration = cop._oilAccel; cop._oilAccel = null; }
       cop._lastVx = cop.vx;
       cop._lastVy = cop.vy; // pre-collision cache (see _updateCopDamage)
     }
