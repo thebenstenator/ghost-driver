@@ -164,6 +164,7 @@ export const TOOLTIPS = {
   oilLifetime: "Seconds the patch stays on the road before fading out. Raise to leave the hazard down longer.",
   oilIceGrip: "The cop's GRIP while oiled — how fast its velocity follows its facing. Low = ice: it keeps its momentum and slides, nose fishtailing wherever it steers. 0 = frictionless (slides straight until it hits a wall or the effect ends), higher = grippier / less slide.",
   oilAccelMult: "The cop's engine POWER while oiled. Low = it can't just accelerate out of the slide (wheelspin on ice). 0 = no power at all, 1 = full power (only grip is affected).",
+  oilDrag: "How far an oiled cop SLIDES before its momentum bleeds off (drag while on the ice). Closer to 1 = less friction = longer glide; lower = it slows to a stop sooner. Only applies to oiled cops.",
   oilSpeedLost: "Fraction of a cop's speed scrubbed the instant it touches oil. 0 = no slow, 1 = dead stop. Raise to make the hit slow them more.",
   oilEffectTime: "Seconds the slide lasts (at full strength) after a cop leaves the patch, then it snaps back to normal. Raise to keep a cop sliding longer.",
 

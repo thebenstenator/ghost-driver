@@ -61,6 +61,10 @@ export class Vehicle {
     this.coastDrag      = 0.992;
     this.accelDragBase  = 0.9975;
     this.accelDragCurve = 0.018; // subtracted as speedFraction² × this value
+    // Per-frame drag OVERRIDE (null = use the normal state-based drag above). GameScene sets this on an
+    // oiled cop so it keeps its momentum and slides FAR on the ice instead of decelerating; cleared each
+    // frame so it never sticks. Closer to 1 = less drag / longer slide.
+    this.iceDrag        = null;
 
     this.gripLow        = 0.14;  // grip at near-zero speed
     this.gripHigh       = 0.1;   // grip at gripSpeedRef (raised — the car bites at speed, less floaty)
@@ -233,6 +237,7 @@ export class Vehicle {
     if      (handbrake) dragBase = this.handBrakeDrag;
     else if (coasting)  dragBase = this.coastDrag;
     else                dragBase = this.accelDragBase - speedFraction * speedFraction * this.accelDragCurve;
+    if (this.iceDrag != null) dragBase = this.iceDrag; // oil override — keep momentum, slide far
     const drag = Math.pow(dragBase, dt * 60);
     this.vx *= drag;
     this.vy *= drag;

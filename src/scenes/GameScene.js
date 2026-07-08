@@ -203,6 +203,8 @@ export class GameScene extends Phaser.Scene {
                                 // (nose on you) and throttle, so at full power the thrust re-aims velocity
                                 // straight at you every frame, overpowering the grip. Cut it low so the cop
                                 // can't power toward you and instead just coasts/slides on its momentum.
+    this.oilDrag = 0.996;       // drag override while oiled (closer to 1 = less friction = slides FARTHER
+                                // before it bleeds momentum). Counters the "slides but decelerates fast" feel.
     this.oilSpeedLost = 0;      // fraction of speed scrubbed on first contact (0 = keep momentum)
     this.oilEffectTime = 15;    // s the slide lasts at FULL strength after a cop hits oil, then snaps back
                                 // to normal (no decay — a taper was tried and felt wrong). While on the
@@ -3881,6 +3883,7 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
     oil.add(this, "oilLifetime", 2, 30, 1).name("Patch lifetime (s)");
     oil.add(this, "oilIceGrip", 0, 0.5, 0.01).name("Ice grip (0=slick)");
     oil.add(this, "oilAccelMult", 0, 1, 0.05).name("Power on ice (×)");
+    oil.add(this, "oilDrag", 0.98, 1, 0.001).name("Slide distance (drag)");
     oil.add(this, "oilSpeedLost", 0, 1, 0.05).name("Speed lost on hit (0–1)");
     oil.add(this, "oilEffectTime", 0.2, 30, 0.1).name("Effect duration (s)");
 
@@ -3925,7 +3928,7 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
     spk.add({ test: () => this._blowTires() }, "test").name("Test blowout");
     spk.add({ repair: () => this._repairTires() }, "repair").name("Repair (clear)");
 
-    this._persistPanel(gui, "gd_gadgetTune_v15"); // bumped: oil — gate drive-at-player (accel 0.1) so grip slides
+    this._persistPanel(gui, "gd_gadgetTune_v16"); // bumped: added oilDrag (ice slide distance)
 
     // Anchored to the BOTTOM-RIGHT so the panel grows UPWARD when folders expand and stays
     // clear of the bottom-left spawn panel. CRITICAL: clear top/left to "auto" — lil-gui's
@@ -4866,9 +4869,11 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
         cop.gripHigh = this.oilIceGrip;
         cop._oilAccel = cop.acceleration;
         cop.acceleration *= this.oilAccelMult;
+        cop.iceDrag = this.oilDrag; // less drag → keeps momentum, slides far (cleared right after)
       }
       cop.update(delta, target);
       if (cop._oilAccel != null) { cop.acceleration = cop._oilAccel; cop._oilAccel = null; }
+      cop.iceDrag = null;
       cop._lastVx = cop.vx;
       cop._lastVy = cop.vy; // pre-collision cache (see _updateCopDamage)
     }
