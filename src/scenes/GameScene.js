@@ -197,10 +197,12 @@ export class GameScene extends Phaser.Scene {
     // Oil is real ICE now, driven THROUGH the Vehicle grip model (not a scripted coast): while oiled a
     // cop's grip drops so its velocity stops following its facing — it keeps its momentum and slides,
     // nose fishtailing wherever the AI steers — and its engine power is cut so it can't just drive out.
-    this.oilIceGrip = 0.03;     // grip while oiled (0 = frictionless ice, 1 = normal). Low = big slide.
-    this.oilAccelMult = 0.85;   // engine power while oiled. KEEP it high — the cop needs its momentum to
-                                // visibly slide; cutting power just decelerates it to a crawl (no slide,
-                                // it just tracks you slowly). Small cut = a touch sluggish, still fast.
+    this.oilIceGrip = 0.02;     // grip while oiled (0 = frictionless ice, 1 = normal). Near-0 = velocity
+                                // keeps its momentum direction (won't curve toward the nose = won't track).
+    this.oilAccelMult = 0.1;    // engine power while oiled — THE GATE on "drive at the player". Cops beeline
+                                // (nose on you) and throttle, so at full power the thrust re-aims velocity
+                                // straight at you every frame, overpowering the grip. Cut it low so the cop
+                                // can't power toward you and instead just coasts/slides on its momentum.
     this.oilSpeedLost = 0;      // fraction of speed scrubbed on first contact (0 = keep momentum)
     this.oilEffectTime = 15;    // s the slide lasts at FULL strength after a cop hits oil, then snaps back
                                 // to normal (no decay — a taper was tried and felt wrong). While on the
@@ -3923,7 +3925,7 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
     spk.add({ test: () => this._blowTires() }, "test").name("Test blowout");
     spk.add({ repair: () => this._repairTires() }, "repair").name("Repair (clear)");
 
-    this._persistPanel(gui, "gd_gadgetTune_v14"); // bumped: oil rebalanced — keep speed (0.85), lower grip (0.03)
+    this._persistPanel(gui, "gd_gadgetTune_v15"); // bumped: oil — gate drive-at-player (accel 0.1) so grip slides
 
     // Anchored to the BOTTOM-RIGHT so the panel grows UPWARD when folders expand and stays
     // clear of the bottom-left spawn panel. CRITICAL: clear top/left to "auto" — lil-gui's
