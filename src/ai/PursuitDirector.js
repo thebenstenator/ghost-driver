@@ -136,6 +136,10 @@ export class PursuitDirector {
     this.pitPowerFloor    = 0.45;  // force multiplier at the lowest enabled level (so L2 still pushes)
     this.pitYawRate       = 1.4;   // rad/s yaw at FULL force — compare to your high-speed turn (~0.95):
                                    // L5 overwhelms your countersteer, L2 (×floor) is easily held
+    this.pitLateral       = 650;   // px/s² sideways SHOVE at full force — the physical "weight" of the
+                                   // hit (velocity kicked off your line, same dir as the yaw). Tune by eye.
+    this.pitGripBreak     = 0.45;  // your grip WHILE being pressed (lower = slews out more / harder to hold;
+                                   // not full ice — you can still fight it). null-equivalent when not pressed.
     this._pitAttacker     = null;  // the single cop currently committed to a PIT
     this._pitCd           = 0;     // pack-wide cadence timer
 
@@ -441,7 +445,7 @@ export class PursuitDirector {
   _updatePit(cops, playerCar, px, py, h, speed, dt) {
     this._pitCd = Math.max(0, this._pitCd - dt);
     for (const c of cops) c._pitCd = Math.max(0, (c._pitCd || 0) - dt);
-    playerCar._pitYaw = 0; // cleared unless an active PIT pushes this frame
+    playerCar._pitYaw = 0; playerCar._pitLateral = 0; playerCar._pitGrip = null; // cleared unless a PIT pushes this frame
 
     if (!this.pitEnabled) { if (this._pitAttacker) this._endPit(); return null; }
 
@@ -458,6 +462,8 @@ export class PursuitDirector {
           const intensity = Phaser.Math.Clamp(a.getSpeed() / this.pitRefSpeed, 0, 1)
                           * Phaser.Math.Linear(this.pitPowerFloor, 1, Phaser.Math.Clamp(this.pitPower, 0, 1));
           playerCar._pitYaw = this.pitYawRate * intensity * dir; // countersteerable yaw push
+          playerCar._pitLateral = this.pitLateral * intensity * dir; // physical sideways shove (the weight)
+          playerCar._pitGrip = this.pitGripBreak; // break grip so the shove slews you out (a slide to fight)
         } else {
           a._pitLostT = (a._pitLostT || 0) + dt;
         }

@@ -2521,6 +2521,8 @@ this.interceptAheadDist = ${this.interceptAheadDist}; this.interceptEntrySpeed =
     ps.add(d, "pitRefSpeed", 100, 700, 10).name("Full-force speed (px/s)");
     ps.add(d, "pitPowerFloor", 0, 1, 0.05).name("Min-level force floor");
     ps.add(d, "pitYawRate", 0, 4, 0.05).name("Push yaw at full (rad/s)");
+    ps.add(d, "pitLateral", 0, 1500, 25).name("Push shove at full (px/s²)");
+    ps.add(d, "pitGripBreak", 0.05, 1, 0.05).name("Your grip while pressed");
     ps.close();
     pit.close();
 
@@ -2558,7 +2560,7 @@ this.interceptAheadDist = ${this.interceptAheadDist}; this.interceptEntrySpeed =
       .add({ copy: () => this._copyManeuverStats() }, "copy")
       .name("Copy Maneuvers → Console");
 
-    this._persistPanel(gui, "gd_maneuverTune_v22"); // bumped: ahead-unit aims ahead of itself (fix U-turn ram)
+    this._persistPanel(gui, "gd_maneuverTune_v23"); // bumped: PIT physical push (lateral shove + grip break)
 
     gui.domElement.style.position = "fixed";
     gui.domElement.style.top = "8px";
@@ -2658,7 +2660,7 @@ this.boxTriggerSpeed = ${d.boxTriggerSpeed}; this.boxReleaseSpeed = ${d.boxRelea
 this.pitMinLevel = ${d.pitMinLevel}; this.pitCooldown = ${d.pitCooldown}; this.pitUnitCooldown = ${d.pitUnitCooldown}; this.pitRange = ${d.pitRange}; this.pitMinSpeed = ${d.pitMinSpeed};
 this.pitMaxTime = ${d.pitMaxTime}; this.pitGiveUp = ${d.pitGiveUp}; this.pitBoost = ${d.pitBoost};
 this.pitContactDist = ${d.pitContactDist}; this.pitCoDirMin = ${d.pitCoDirMin}; this.pitRearMax = ${d.pitRearMax}; this.pitSideMin = ${d.pitSideMin}; this.pitSideMax = ${d.pitSideMax};
-this.pitRefSpeed = ${d.pitRefSpeed}; this.pitPowerFloor = ${d.pitPowerFloor}; this.pitYawRate = ${d.pitYawRate};
+this.pitRefSpeed = ${d.pitRefSpeed}; this.pitPowerFloor = ${d.pitPowerFloor}; this.pitYawRate = ${d.pitYawRate}; this.pitLateral = ${d.pitLateral}; this.pitGripBreak = ${d.pitGripBreak};
 // Spike run — trigger / approach
 this.spikeTrigSpeed = ${d.spikeTrigSpeed}; this.spikeDeployMinSpeed = ${d.spikeDeployMinSpeed}; this.spikeRange = ${d.spikeRange}; this.spikeBehind = ${d.spikeBehind};
 this.spikeAhead = ${d.spikeAhead}; this.spikeSide = ${d.spikeSide}; this.spikeBoost = ${d.spikeBoost};

@@ -147,10 +147,17 @@ export class Vehicle {
       if (b) { b.x += dx; b.y += dy; } // move the Arcade body too (capsule reads from the sprite centre)
     }
 
-    // PIT push: a cop pressing the rear quarter applies an external yaw (set by the director each
-    // frame). It ADDS to facing, so the player's steering above can fight it — countersteer cancels
-    // it, a strong (high-level) push overwhelms it. One-shot: applied then cleared.
+    // PIT push: a car pressing the rear quarter applies, each frame it's in contact (set by the
+    // director): a countersteerable YAW (rotates you — your steering above fights it), a lateral SHOVE
+    // (the physical weight of the hit — velocity kicked sideways), and a GRIP BREAK (so the shove SLEWS
+    // you out instead of grip snapping your velocity straight back). One-shot: applied then cleared.
     if (this._pitYaw) { this.facing += this._pitYaw * dt; this._pitYaw = 0; }
+    if (this._pitLateral) {
+      const rX = -Math.sin(this.facing), rY = Math.cos(this.facing); // car's right; sign carried by _pitLateral
+      this.vx += rX * this._pitLateral * dt;
+      this.vy += rY * this._pitLateral * dt;
+      this._pitLateral = 0;
+    }
 
     // Drift angle cap: during a handbrake, facing can't deviate more than
     // maxDriftAngle from the velocity vector. Simulates front-wheel grip
@@ -257,9 +264,12 @@ export class Vehicle {
     }
 
     // --- Grip: blend velocity toward intended travel direction ---
-    const gripBase = handbrake
+    let gripBase = handbrake
       ? this.gripHandbrake
       : Phaser.Math.Linear(this.gripLow, this.gripHigh, Math.min(speed / this.gripSpeedRef, 1));
+    // PIT grip break (set by the director while being pressed) — low grip so the lateral shove + yaw
+    // slew the rear out into a real slide you have to fight, not a clean pivot. One-shot, cleared here.
+    if (this._pitGrip != null) { gripBase = this._pitGrip; this._pitGrip = null; }
     const grip = 1 - Math.pow(1 - gripBase, dt * 60);
 
     if (speed > 5) {
