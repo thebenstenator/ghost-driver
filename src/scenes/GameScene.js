@@ -451,7 +451,11 @@ export class GameScene extends Phaser.Scene {
     this.pitTestLevel  = 5;      // sandbox-only stand-in for the pursuit level (drives PIT power)
     this.searchSpeed = 300; // UNIFORM cop speed while searching — they sweep at a flat brisk pace
                             // (kinematic grip + cornerFloor remove the per-intersection braking that
-                            // otherwise drops a physics searcher to ~110). See _applySearchProfile.
+                            // otherwise drops a physics searcher to ~110). See _applyNavProfile.
+    this.activeBlindFloor = 360; // px/s floor for an ACTIVE-but-BLIND (LONE) cop navigating the roads:
+                            // holds pace through corners so a lone cop KEEPS CONTACT while a teammate has
+                            // eyes on you, instead of corner-braking to ~220 and falling back (the "one-cop
+                            // chase" fix). Same mechanism as the search sweep. 0 = off (old behaviour).
     this.searchDepth = 2; // STARTING search radius (blocks out from last-known)
     this.searchMaxDepth = 10; // search grows out to this many blocks as ground is checked
     this.coverageTTL = 6; // s a searched node stays "covered" before it's worth re-checking
@@ -1016,21 +1020,26 @@ export class GameScene extends Phaser.Scene {
     cop.turnSpeed = cop.baseTurnSpeed * turnMult;
   }
 
-  // Search profile: while a cop is SEARCHING (or returning) it should sweep at a UNIFORM brisk pace,
-  // not the ragged 110-vs-230 a physics cop produces braking into every intersection. Two parts:
-  //   1. cornerFloor = searchSpeed → CopAI ignores its corner/turn braking and holds the flat cap.
-  //   2. kinematic-ish grip/turn (the same near-on-rails profile the rejoin band uses at full) so it
-  //      can actually round those corners at searchSpeed without washing into a wall.
-  // Applied to ALL searchers (near and far), so it OVERRIDES the rejoin band's distance-based handling
-  // for them — they're off the player's bumper (the chase is lost), so on-rails sweeping reads clean,
-  // not robotic. When not searching, cornerFloor → 0 and the rejoin band owns handling again next frame.
-  _applySearchProfile(cop, slow) {
-    if (!slow) { cop.ai.cornerFloor = 0; return; }
-    cop.ai.cornerFloor = this.searchSpeed;
-    cop.gripLow = this.rbGrip;
-    cop.gripHigh = this.rbGrip;
-    cop.turnSpeedLow = cop.baseTurnSpeedLow * this.rbTurnMult;
-    cop.turnSpeed = cop.baseTurnSpeed * this.rbTurnMult;
+  // Nav profile: a cop NAVIGATING the road graph (blind) otherwise brakes to a crawl at every
+  // intersection (the ragged 110-230 a physics cop produces). Give it a speed FLOOR so it holds a
+  // flat brisk pace, plus kinematic-ish grip/turn (the rejoin band's near-on-rails profile) so it can
+  // round those corners at that pace without washing into a wall. Two cases share the mechanism:
+  //   • slow (SEARCH/RETURNING) → floor = searchSpeed (uniform sweep).
+  //   • ACTIVE but this cop is BLIND (no LOS) → floor = activeBlindFloor, so a LONE cop keeps contact
+  //     while a teammate has eyes on you, instead of dropping to ~220 and falling back.
+  // A cop that can SEE you BEELINES (no corner braking), so it needs no floor. Overrides the rejoin
+  // band's grip for these cops; when neither case holds, cornerFloor → 0 and the rejoin band owns grip.
+  _applyNavProfile(cop, slow, active) {
+    let floor = 0;
+    if (slow) floor = this.searchSpeed;
+    else if (active && !cop.hasLOS) floor = this.activeBlindFloor;
+    cop.ai.cornerFloor = floor;
+    if (floor > 0) {
+      cop.gripLow = this.rbGrip;
+      cop.gripHigh = this.rbGrip;
+      cop.turnSpeedLow = cop.baseTurnSpeedLow * this.rbTurnMult;
+      cop.turnSpeed = cop.baseTurnSpeed * this.rbTurnMult;
+    }
   }
 
   // Patrol rubber band: a PATROL (495 top vs the player's 600) gets straight-lined off trivially
@@ -4058,6 +4067,7 @@ this.withdrawColor = ${hex(f.withdrawColor)};`;
       respawnDist: this.respawnDist,
       respawnTime: this.respawnTime,
       searchSpeed: this.searchSpeed,
+      activeBlindFloor: this.activeBlindFloor,
       searchDepth: this.searchDepth,
       searchMaxDepth: this.searchMaxDepth,
       coverageTTL: this.coverageTTL,
@@ -4180,6 +4190,10 @@ this.withdrawColor = ${hex(f.withdrawColor)};`;
     pack
       .add(this.copTuning, "searchSpeed", 80, 600, 10)
       .name("Search speed cap")
+      .onChange(apply);
+    pack
+      .add(this.copTuning, "activeBlindFloor", 0, 600, 10)
+      .name("Active-blind floor (0=off)")
       .onChange(apply);
     pack
       .add(this.copTuning, "searchDepth", 1, 6, 1)
@@ -4310,7 +4324,7 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
 
     // Persist across refresh. Key bumped to v16: huntLead removed (blind cops now go
     // straight to last-known, no forward projection).
-    this._persistPanel(gui, "gd_copTuning32"); // bumped: spawn ease OFF by default + cop spawn roll-in speed
+    this._persistPanel(gui, "gd_copTuning33"); // bumped: active-blind speed floor (lone cops keep contact)
 
     gui.domElement.style.position = "fixed";
     gui.domElement.style.top = "8px";
@@ -4413,6 +4427,7 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
     this.respawnDist = t.respawnDist;
     this.respawnTime = t.respawnTime;
     this.searchSpeed = t.searchSpeed;
+    this.activeBlindFloor = t.activeBlindFloor;
     this.searchDepth = t.searchDepth;
     this.searchMaxDepth = t.searchMaxDepth;
     this.coverageTTL = t.coverageTTL;
@@ -4840,9 +4855,9 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
         Phaser.Math.Distance.Between(cop.sprite.x, cop.sprite.y, px, py),
         state === PursuitState.ACTIVE,
       );
-      // Search profile: uniform brisk sweep (kinematic grip + cornerFloor). Overrides the rejoin
-      // band's handling for searchers; clears cornerFloor when not searching. See _applySearchProfile.
-      this._applySearchProfile(cop, slow);
+      // Nav profile: hold a speed floor through corners for cops navigating blind (searchers sweep at
+      // searchSpeed; ACTIVE-but-blind LONE cops hold activeBlindFloor to keep contact). See _applyNavProfile.
+      this._applyNavProfile(cop, slow, state === PursuitState.ACTIVE);
 
       // Spawn ease-in: while a fresh cop is still far, cap it slow and ramp the cap up to your
       // speed as it closes; once it's within seNear it has "arrived" → clear the flag and let the
