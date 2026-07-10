@@ -406,6 +406,12 @@ export class GameScene extends Phaser.Scene {
     // to box/block/overtake) — ordinary driving into a wall is free.
     this.ramThreshold = 150; // relative impact speed (px/s) below which a hit does NOTHING
     this.ramScale = 0.12; // cop damage per px/s of relative impact above the threshold
+    // Offensive PIT (YOU spin cops): when you press a cop's rear quarter co-directionally, apply the
+    // same physical push (yaw + shove + grip break) to the COP and tick damage so a committed PIT
+    // wrecks it. Push scales with playerMass/cop.mass (patrols spin easily, heavies barely); toughness
+    // is the cop's HEALTH. Player skill — always available (no level gate). See _updatePlayerPit.
+    this.playerPitEnabled = true;
+    this.pitDamage = 120; // cop health/sec drained while you're PITting it (patrol 100hp → ~1s committed)
     this.ramContactDist = 40; // px centre-distance counted as a player↔cop hit
     this.ramDmgCooldown = 0.7; // s between damage ticks on one cop (so a single ram = one tick)
     this.selfImpactDrop = 200; // px/s sudden speed loss in a frame that reads as a CRASH (> braking)
@@ -1553,6 +1559,42 @@ export class GameScene extends Phaser.Scene {
   // proximity gate (ramContactDist) fired AFTER the solver had already bled the closing speed,
   // so rams read as softer than they hit. This path only handles a cop crashing itself into a
   // wall / another cop mid-aggression. Reads velocities at the TOP of the frame (pre-physics).
+  // You PIT cops. For each cop, test whether YOU are pressed into its rear quarter, co-directional
+  // (the offensive mirror of the cop→player detector), and if so apply the SAME physical push to the
+  // cop — countersteerable yaw + lateral shove + grip break, so it slews out — plus a damage tick.
+  // Push force scales with playerMass/cop.mass (spin patrols easily, heavies barely); the cop's HEALTH
+  // is its toughness. The push fields self-clear in the cop's Vehicle.update. Disable is deferred to
+  // after the loop (it removes the cop from this.cops). No level gate — this is a player tool.
+  _updatePlayerPit(dt) {
+    if (!this.playerPitEnabled || this.busted || this.paused) return;
+    const d = this.director;
+    const px = this.car.sprite.x, py = this.car.sprite.y;
+    const pf = this.car.facing, pfx = Math.cos(pf), pfy = Math.sin(pf);
+    const pspeed = this.car.getSpeed();
+    if (pspeed < d.pitMinSpeed) return; // you must be moving to spin anyone
+    let toDisable = null;
+    for (const cop of this.cops) {
+      if (cop.disabled) continue;
+      const tf = cop.facing;
+      const fx = Math.cos(tf), fy = Math.sin(tf), rx = -Math.sin(tf), ry = Math.cos(tf);
+      const dx = px - cop.sprite.x, dy = py - cop.sprite.y;
+      if (Math.hypot(dx, dy) >= d.pitContactDist) continue;   // in contact
+      const alongT   = dx * fx + dy * fy;                     // <0 = you're behind the cop (its rear)
+      const lateralT = dx * rx + dy * ry;                     // which side of the cop you're on
+      const coDir    = pfx * fx + pfy * fy;                   // co-directional (PIT, not a head-on)
+      if (!(coDir > d.pitCoDirMin && alongT < d.pitRearMax &&
+            Math.abs(lateralT) > d.pitSideMin && Math.abs(lateralT) < d.pitSideMax)) continue;
+      const dir = -Math.sign(lateralT) || 1;                 // cop's rear swings AWAY from your side
+      const intensity = Phaser.Math.Clamp(pspeed / d.pitRefSpeed, 0, 1) * (this.playerMass / (cop.mass || 1));
+      cop._pitYaw     = d.pitYawRate  * intensity * dir;
+      cop._pitLateral = d.pitLateral  * intensity * dir;
+      cop._pitGrip    = d.pitGripBreak;
+      cop.health -= this.pitDamage * dt;
+      if (cop.health <= 0) (toDisable ||= []).push(cop);
+    }
+    if (toDisable) for (const cop of toDisable) this._disableCop(cop);
+  }
+
   _updateCopDamage(dt) {
     const px = this.car.sprite.x,
       py = this.car.sprite.y;
@@ -2602,6 +2644,10 @@ this.interceptAheadDist = ${this.interceptAheadDist}; this.interceptEntrySpeed =
     ram.add(this, "ramContactDist", 20, 100, 2).name("Contact distance (px)");
     ram.add(this, "ramDmgCooldown", 0.1, 2, 0.1).name("Hit cooldown (s)");
 
+    const opit = gui.addFolder("Offensive PIT (you spin cops)");
+    opit.add(this, "playerPitEnabled").name("Enabled");
+    opit.add(this, "pitDamage", 0, 400, 10).name("Damage/sec while PITting");
+
     const self = gui.addFolder("Cop self-damage (aggro crashes)");
     self
       .add(this, "selfImpactDrop", 10, 200, 5)
@@ -2623,7 +2669,7 @@ this.interceptAheadDist = ${this.interceptAheadDist}; this.interceptEntrySpeed =
       .add({ copy: () => this._copyHealthStats() }, "copy")
       .name("Copy Health → Console");
 
-    this._persistPanel(gui, "gd_healthTune_v8"); // bumped: disableReinforceMult inverted (faster refill)
+    this._persistPanel(gui, "gd_healthTune_v9"); // bumped: added offensive PIT (you spin cops) levers
 
     gui.domElement.style.position = "fixed";
     gui.domElement.style.top = "8px";
@@ -2644,6 +2690,7 @@ this.interceptAheadDist = ${this.interceptAheadDist}; this.interceptEntrySpeed =
 ${perType}
 // --- GameScene ram/disable model ---
 this.ramThreshold = ${this.ramThreshold}; this.ramScale = ${this.ramScale}; this.ramContactDist = ${this.ramContactDist}; this.ramDmgCooldown = ${this.ramDmgCooldown};
+this.pitDamage = ${this.pitDamage};
 this.selfImpactDrop = ${this.selfImpactDrop}; this.selfScale = ${this.selfScale};
 this.wreckDespawn = ${this.wreckDespawn}; this.wreckMass = ${this.wreckMass}; this.disableReinforceMult = ${this.disableReinforceMult};
 this.copHealthPerLevel = ${this.copHealthPerLevel};
@@ -4801,6 +4848,10 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
         if (seen >= area.length * 0.7) this._searchRadius++;
       }
     }
+
+    // You PIT cops: press a cop's rear quarter and spin it out (runs BEFORE the cop loop so the push
+    // lands the same frame the cop integrates; it may disable a cop, so this.cops shrinks first).
+    this._updatePlayerPit(delta / 1000);
 
     for (const cop of this.cops) {
       let target = null;
