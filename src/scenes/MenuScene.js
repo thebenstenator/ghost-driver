@@ -1,7 +1,12 @@
 import Phaser from "phaser";
 import { GAME_WIDTH, GAME_HEIGHT } from "../config.js";
 import { GameScene } from "./GameScene.js";
-import { NOIR, addNoirBackground, addPanel, addMenuItem } from "../ui/noirTheme.js";
+import {
+  NOIR,
+  addNoirBackground,
+  addPanel,
+  addMenuItem,
+} from "../ui/noirTheme.js";
 
 // Title screen: the noir cityscape as the backdrop, a big Cinzel title, and a slim right-side
 // nav (Oswald, semi-transparent → grows + opaques on hover). Loadout/economy lives in
@@ -22,7 +27,13 @@ export class MenuScene extends Phaser.Scene {
         fontStyle: "900",
         color: NOIR.white,
         letterSpacing: 6,
-        shadow: { offsetX: 0, offsetY: 3, color: "#000000", blur: 18, fill: true },
+        shadow: {
+          offsetX: 0,
+          offsetY: 3,
+          color: "#000000",
+          blur: 18,
+          fill: true,
+        },
       })
       .setOrigin(0.5);
 
@@ -31,7 +42,7 @@ export class MenuScene extends Phaser.Scene {
     // Panel behind the nav — sized to hug the menu column (right edge fixed at navX+40, since
     // hover-grow scales the text about its own right-aligned origin and never moves that edge).
     // Adjust the (x, y, w, h) args below to resize/reposition it.
-    addPanel(this, GAME_WIDTH - 400, 200, 360, 345, 0.4);
+    addPanel(this, GAME_WIDTH - 300, 200, 360, 345, 0.4);
 
     addMenuItem(this, navX, 226, "CAREER", {
       size: 36,
@@ -142,6 +153,11 @@ export class MenuScene extends Phaser.Scene {
   }
 
   _start(copCount, pursuitMode = false, mission = null) {
-    this.scene.start("GameScene", { copCount, autostart: true, pursuitMode, mission });
+    this.scene.start("GameScene", {
+      copCount,
+      autostart: true,
+      pursuitMode,
+      mission,
+    });
   }
 }

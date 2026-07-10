@@ -110,7 +110,7 @@ export class GameAudio {
 
     const voices = layout.map((l, i) => {
       const src = ctx.createBufferSource();
-      src.buffer = bufs[i];
+      src.buffer = this._declickLoop(bufs[i]);
       src.loop = true;
       const g = ctx.createGain(); g.gain.value = 0.0001;
       src.connect(g); g.connect(engineSum);
@@ -120,6 +120,33 @@ export class GameAudio {
 
     this.sampleEngine = { voices, onGain, offGain, engineMaster };
     return true;
+  }
+
+  // A recorded loop's last sample almost never matches its first, so every wrap is a tiny
+  // waveform discontinuity — a click. Normally masked by the crossfade/pitch motion between
+  // bands, but at sustained top speed one band plays alone with no pitch movement, so the
+  // same click repeats every ~1s and reads as an audible "tick." Fix: blend a short head/tail
+  // window across the wrap (equal-power crossfade, same curve as the band crossfade above) so
+  // the seam is smeared into an inaudible ~15ms instead of a hard edge. Cached on the source
+  // buffer since Phaser reuses the same decoded AudioBuffer across scene restarts.
+  _declickLoop(buf, ms = 15) {
+    if (buf._declicked) return buf._declicked;
+    const ctx = this.ctx;
+    const n = Math.min(Math.floor((ms / 1000) * buf.sampleRate), Math.floor(buf.length / 4));
+    const out = ctx.createBuffer(buf.numberOfChannels, buf.length - n, buf.sampleRate);
+    for (let ch = 0; ch < buf.numberOfChannels; ch++) {
+      const src = buf.getChannelData(ch);
+      const dst = out.getChannelData(ch);
+      for (let i = 0; i < n; i++) {
+        const t = i / n;
+        const fadeIn = Math.sin(t * 0.5 * Math.PI);
+        const fadeOut = Math.cos(t * 0.5 * Math.PI);
+        dst[i] = src[i] * fadeIn + src[buf.length - n + i] * fadeOut;
+      }
+      dst.set(src.subarray(n, buf.length - n), n);
+    }
+    buf._declicked = out;
+    return out;
   }
 
   _updateSampleEngine(speed, maxSpeed, throttle) {
