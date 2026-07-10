@@ -10,6 +10,7 @@ export class BootScene extends Phaser.Scene {
     this.load.image('cop_patrol',      'sprites/vehicles/cop_patrol.png');
     this.load.image('cop_interceptor', 'sprites/vehicles/cop_interceptor.png');
     this.load.image('cop_heavy',       'sprites/vehicles/cop_heavy.png');
+    this.load.image('title_bg',        'ui/title-screen.png');
 
     // Engine samples — decoded into the WebAudio context GameAudio reuses. Keys are
     // `eng_<car>_<band>`; GameAudio crossfades the bands by speed→RPM. If any are
@@ -39,11 +40,28 @@ export class BootScene extends Phaser.Scene {
     }
   }
 
-  create() {
+  async create() {
     this._softenVehicleTextures([
       'player_car', 'cop_patrol', 'cop_interceptor', 'cop_heavy',
     ]);
+    await this._loadFonts();
     this.scene.start('MenuScene');
+  }
+
+  // Phaser bakes Text objects to a canvas texture at creation time — if the webfont hasn't
+  // finished downloading yet, it silently falls back and bakes in the wrong glyphs permanently
+  // (no re-render later). Force both noir fonts to resolve before any scene draws text with them.
+  async _loadFonts() {
+    try {
+      await Promise.all([
+        document.fonts.load('900 60px "Cinzel"'),
+        document.fonts.load('700 32px "Cinzel"'),
+        document.fonts.load('600 20px "Oswald"'),
+        document.fonts.load('400 16px "Oswald"'),
+      ]);
+    } catch (e) {
+      // Fonts failed to load (offline, blocked, etc.) — fall back to system fonts rather than hang.
+    }
   }
 
   // Moiré fix: the vehicle PNGs are ~128px tall but render at ~59px, so the GPU does a ~2x run-time

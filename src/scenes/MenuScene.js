@@ -1,165 +1,107 @@
 import Phaser from "phaser";
 import { GAME_WIDTH, GAME_HEIGHT } from "../config.js";
 import { GameScene } from "./GameScene.js";
-import {
-  GADGETS,
-  PLAYER_SLOT_KEYS,
-  MAX_LOADOUT,
-  gadgetById,
-} from "../gadgets.js";
+import { NOIR, addNoirBackground, addPanel, addMenuItem } from "../ui/noirTheme.js";
 
-// Playtest menu: choose how many cops to spawn, then launch the chase.
+// Title screen: the noir cityscape as the backdrop, a big Cinzel title, and a slim right-side
+// nav (Oswald, semi-transparent → grows + opaques on hover). Loadout/economy lives in
+// GarageScene now; controls live in OptionsScene. Dev mode stays here, bottom-left.
 export class MenuScene extends Phaser.Scene {
   constructor() {
     super({ key: "MenuScene" });
   }
 
   create() {
-    this.cameras.main.setBackgroundColor("#0a0a0f");
-    const cx = GAME_WIDTH / 2;
+    addNoirBackground(this, 0.18);
 
     // --- Title ---
     this.add
-      .text(cx, 80, "GHOST DRIVER", {
-        fontFamily: "monospace",
-        fontSize: "60px",
-        fontStyle: "bold",
-        color: "#39ff14",
-      })
-      .setOrigin(0.5);
-    this.add
-      .text(cx, 132, "playtest — choose your pursuit", {
-        fontFamily: "monospace",
-        fontSize: "18px",
-        color: "#9aa0b5",
+      .text(GAME_WIDTH / 2, 96, "GHOST DRIVER", {
+        fontFamily: NOIR.titleFont,
+        fontSize: "68px",
+        fontStyle: "900",
+        color: NOIR.white,
+        letterSpacing: 6,
+        shadow: { offsetX: 0, offsetY: 3, color: "#000000", blur: 18, fill: true },
       })
       .setOrigin(0.5);
 
-    // --- Bank (persisted cash total) — top-right. Stored so a garage purchase can refresh it. ---
-    this._bankText = this.add
-      .text(GAME_WIDTH - 16, 20, "", {
-        fontFamily: "monospace",
-        fontSize: "16px",
-        fontStyle: "bold",
-        color: "#ffd23f",
-      })
-      .setOrigin(1, 0);
-    this._refreshBank();
+    // --- Right-side nav ---
+    const navX = GAME_WIDTH - 80;
+    // Panel behind the nav — sized to hug the menu column (right edge fixed at navX+40, since
+    // hover-grow scales the text about its own right-aligned origin and never moves that edge).
+    // Adjust the (x, y, w, h) args below to resize/reposition it.
+    addPanel(this, GAME_WIDTH - 400, 200, 360, 345, 0.4);
 
-    // --- MISSION (the Phase 3 game loop — the real thing) ---
-    const ms = this.add
-      .text(cx, 170, "▶ MISSION", {
-        fontFamily: "monospace",
-        fontSize: "28px",
-        fontStyle: "bold",
-        color: "#0a0a0f",
-        backgroundColor: "#39ff14",
-        align: "center",
-        fixedWidth: 300,
-        padding: { x: 0, y: 10 },
-      })
-      .setOrigin(0.5)
-      .setInteractive({ useHandCursor: true });
-    ms.on("pointerover", () => ms.setBackgroundColor("#5fff4a"));
-    ms.on("pointerout", () => ms.setBackgroundColor("#39ff14"));
-    ms.on("pointerdown", () => this._start(1, true, "m1"));
+    addMenuItem(this, navX, 226, "CAREER", {
+      size: 36,
+      onClick: () => this._start(1, true, "m1"),
+    });
     this.add
-      .text(cx, 214, "reach the drop · lose the cops · get paid", {
-        fontFamily: "monospace",
+      .text(navX, 262, "reach the drop · lose the cops · get paid", {
+        fontFamily: NOIR.uiFont,
         fontSize: "13px",
-        color: "#6a6a7a",
+        color: NOIR.dim,
       })
-      .setOrigin(0.5);
+      .setOrigin(1, 0)
+      .setAlpha(0.55);
 
-    // A secondary (dark, bordered) menu button — shared style for Pursuit + Free drive.
-    const secondaryBtn = (y, label, onClick) => {
-      const b = this.add
-        .text(cx, y, label, {
-          fontFamily: "monospace",
-          fontSize: "20px",
-          fontStyle: "bold",
-          color: "#c8c8d4",
-          backgroundColor: "#1a1a24",
-          align: "center",
-          fixedWidth: 260,
-          padding: { x: 0, y: 8 },
-        })
-        .setOrigin(0.5)
-        .setInteractive({ useHandCursor: true });
-      b.on("pointerover", () => b.setColor("#ffd23f"));
-      b.on("pointerout", () => b.setColor("#c8c8d4"));
-      b.on("pointerdown", onClick);
-      return b;
-    };
-
-    // --- Pursuit Mode (endless escalating chase, no objective) ---
-    secondaryBtn(250, "▶ PURSUIT MODE", () => this._start(1, true));
+    addMenuItem(this, navX, 330, "PURSUIT MODE", {
+      size: 26,
+      onClick: () => this._start(1, true),
+    });
     this.add
-      .text(cx, 278, "endless — difficulty escalates with the heat", {
-        fontFamily: "monospace",
-        fontSize: "13px",
-        color: "#6a6a7a",
+      .text(navX, 358, "endless — difficulty escalates with the heat", {
+        fontFamily: NOIR.uiFont,
+        fontSize: "12px",
+        color: NOIR.dim,
       })
-      .setOrigin(0.5);
+      .setOrigin(1, 0)
+      .setAlpha(0.5);
 
-    // --- Free drive (no pressure) ---
-    secondaryBtn(316, "▶ FREE DRIVE", () => this._start(0));
+    addMenuItem(this, navX, 412, "FREE DRIVE", {
+      size: 26,
+      onClick: () => this._start(0),
+    });
 
-    // --- Loadout picker (player gadgets — dev mode binds all of them anyway) ---
-    this._buildLoadout(cx);
+    addMenuItem(this, navX, 470, "GARAGE", {
+      size: 26,
+      onClick: () => this.scene.start("GarageScene"),
+    });
 
-    // --- Controls reference ---
-    this.add
-      .text(cx, 590, "CONTROLS", {
-        fontFamily: "monospace",
-        fontSize: "18px",
-        fontStyle: "bold",
-        color: "#ffd23f",
-      })
-      .setOrigin(0.5);
-    const controls = [
-      "Arrows — Drive      Space — Handbrake      Shift — Brake",
-      "Z / X / C — your gadgets      V — Repair      P — Pause",
-    ].join("\n");
-    this.add
-      .text(cx, 638, controls, {
-        fontFamily: "monospace",
-        fontSize: "15px",
-        color: "#c8c8d4",
-        align: "center",
-        lineSpacing: 8,
-      })
-      .setOrigin(0.5);
+    addMenuItem(this, navX, 518, "OPTIONS", {
+      size: 26,
+      onClick: () => this.scene.start("OptionsScene"),
+    });
 
-    // --- Dev-only: Cop Testbed (sandbox) entry, bottom-right. Spawn + tune individual
-    // cop unit types with no pursuit level in the loop. Only meaningful with dev panels,
-    // so it shows/hides with the dev toggle. ---
+    // --- Dev-only: Cop Testbed (sandbox) entry, bottom-right. ---
     const tb = this.add
       .text(GAME_WIDTH - 16, GAME_HEIGHT - 18, "🔧 cop testbed →", {
-        fontFamily: "monospace",
+        fontFamily: NOIR.uiFont,
         fontSize: "15px",
-        color: "#ffd23f",
+        color: NOIR.amber,
       })
       .setOrigin(1, 0.5)
+      .setAlpha(0.75)
       .setInteractive({ useHandCursor: true });
-    tb.on("pointerover", () => tb.setColor("#ffe98a"));
-    tb.on("pointerout", () => tb.setColor("#ffd23f"));
+    tb.on("pointerover", () => tb.setAlpha(1));
+    tb.on("pointerout", () => tb.setAlpha(0.75));
     tb.on("pointerdown", () =>
       this.scene.start("GameScene", { sandbox: true, autostart: true }),
     );
 
-    // --- Dev-only: Tiled map viewer (bottom-right, above the testbed). Loads the exported .tmj and
-    // draws its layout — a throwaway feasibility harness for the authored-map work, never live play. ---
+    // --- Dev-only: Tiled map viewer, bottom-right above the testbed. ---
     const mt = this.add
       .text(GAME_WIDTH - 16, GAME_HEIGHT - 42, "🗺 map test →", {
-        fontFamily: "monospace",
+        fontFamily: NOIR.uiFont,
         fontSize: "15px",
-        color: "#ffd23f",
+        color: NOIR.amber,
       })
       .setOrigin(1, 0.5)
+      .setAlpha(0.75)
       .setInteractive({ useHandCursor: true });
-    mt.on("pointerover", () => mt.setColor("#ffe98a"));
-    mt.on("pointerout", () => mt.setColor("#ffd23f"));
+    mt.on("pointerover", () => mt.setAlpha(1));
+    mt.on("pointerout", () => mt.setAlpha(0.75));
     mt.on("pointerdown", () => this.scene.start("MapTestScene"));
 
     // --- Dev mode toggle (bottom-left corner) ---
@@ -168,22 +110,15 @@ export class MenuScene extends Phaser.Scene {
     this._devOn = GameScene.isDevMode();
     const devBox = this.add
       .text(16, GAME_HEIGHT - 18, "", {
-        fontFamily: "monospace",
+        fontFamily: NOIR.uiFont,
         fontSize: "15px",
       })
       .setOrigin(0, 0.5)
       .setInteractive({ useHandCursor: true });
     const renderDev = (hover = false) => {
       devBox.setText(`${this._devOn ? "[x]" : "[ ]"} dev mode`);
-      devBox.setColor(
-        this._devOn
-          ? hover
-            ? "#5fff4a"
-            : "#39ff14"
-          : hover
-            ? "#9aa0b5"
-            : "#6a6a7a",
-      );
+      devBox.setColor(this._devOn ? NOIR.amber : NOIR.faint);
+      devBox.setAlpha(hover ? 1 : 0.8);
     };
     renderDev();
     tb.setVisible(this._devOn); // testbed entry only when dev mode is on
@@ -204,189 +139,6 @@ export class MenuScene extends Phaser.Scene {
     this.input.keyboard.on("keydown-ONE", () => this._start(1));
     this.input.keyboard.on("keydown-TWO", () => this._start(2));
     this.input.keyboard.on("keydown-THREE", () => this._start(3));
-  }
-
-  // Garage: 3 loadout slots (keyed Z/X/C) above the gadget rack. A gadget you OWN toggles into/out of
-  // the loadout; a LOCKED gadget shows its price and buys with mission cash (then it's owned/equippable).
-  // Persisted via GameScene so the choices carry into the chase (dev mode still binds ALL gadgets).
-  _buildLoadout(cx) {
-    this.owned = GameScene.getOwned();
-    this.loadout = GameScene.getLoadout();
-    this._hoverId = null;
-
-    this.add
-      .text(cx, 360, "GARAGE — equip owned · buy locked", {
-        fontFamily: "monospace",
-        fontSize: "18px",
-        fontStyle: "bold",
-        color: "#ffd23f",
-      })
-      .setOrigin(0.5);
-
-    // Slot boxes (top row) with their key label underneath.
-    this._slotSize = 56;
-    const sg = 22,
-      n = MAX_LOADOUT,
-      total = n * this._slotSize + (n - 1) * sg;
-    const x0 = cx - total / 2 + this._slotSize / 2;
-    this._slotPos = [];
-    for (let i = 0; i < n; i++) {
-      const sx = x0 + i * (this._slotSize + sg);
-      this._slotPos.push({ x: sx, y: 414 });
-      this.add
-        .text(sx, 414 + this._slotSize / 2 + 14, PLAYER_SLOT_KEYS[i], {
-          fontFamily: "monospace",
-          fontSize: "16px",
-          fontStyle: "bold",
-          color: "#9aa0b5",
-        })
-        .setOrigin(0.5);
-      // Click a filled slot to clear it (an invisible interactive rect under the drawn box).
-      this.add
-        .rectangle(sx, 414, this._slotSize, this._slotSize, 0x000000, 0)
-        .setInteractive({ useHandCursor: true })
-        .on("pointerdown", () => this._removeSlot(i));
-    }
-
-    // Gadget rack (bottom row) — icon box + a label that reads the gadget NAME when owned or its PRICE
-    // when locked. Hover shows the tooltip; click equips (owned) or buys (locked).
-    this._choiceSize = 44;
-    const cg = 34,
-      cn = GADGETS.length,
-      ctotal = cn * this._choiceSize + (cn - 1) * cg;
-    const cx0 = cx - ctotal / 2 + this._choiceSize / 2;
-    this._choicePos = [];
-    this._choiceLabels = [];
-    GADGETS.forEach((def, i) => {
-      const px = cx0 + i * (this._choiceSize + cg);
-      this._choicePos.push({ x: px, y: 500 });
-      this._choiceLabels.push(
-        this.add
-          .text(px, 500 + this._choiceSize / 2 + 12, "", {
-            fontFamily: "monospace",
-            fontSize: "11px",
-            color: "#9aa0b5",
-          })
-          .setOrigin(0.5),
-      );
-      const zone = this.add
-        .rectangle(px, 500, this._choiceSize + 10, this._choiceSize + 24, 0x000000, 0)
-        .setInteractive({ useHandCursor: true });
-      zone.on("pointerover", () => {
-        this._hoverId = def.id;
-        const locked = !this.owned.includes(def.id);
-        this._descText
-          .setColor("#9aa0b5")
-          .setText(locked ? `${def.desc}   —   BUY for $${def.price.toLocaleString()}` : def.desc);
-        this._renderLoadout();
-      });
-      zone.on("pointerout", () => {
-        this._hoverId = null;
-        this._descText.setText("");
-        this._renderLoadout();
-      });
-      zone.on("pointerdown", () =>
-        this.owned.includes(def.id) ? this._toggleGadget(def.id) : this._buyGadget(def),
-      );
-    });
-
-    this._descText = this.add
-      .text(cx, 544, "", {
-        fontFamily: "monospace",
-        fontSize: "13px",
-        color: "#9aa0b5",
-        align: "center",
-        wordWrap: { width: 820 },
-      })
-      .setOrigin(0.5, 0);
-
-    this.loadoutGfx = this.add.graphics();
-    this._renderLoadout();
-  }
-
-  _refreshBank() {
-    this._bankText.setText(`BANK  $${GameScene.getBank().toLocaleString()}`);
-  }
-
-  // Buy a locked gadget with mission cash. On success it becomes owned + auto-equips (if there's a
-  // free slot); otherwise flash a "can't afford" note in the tooltip line.
-  _buyGadget(def) {
-    if (GameScene.buyGadget(def.id)) {
-      this.owned = GameScene.getOwned();
-      this._refreshBank();
-      if (this.loadout.length < MAX_LOADOUT) this._toggleGadget(def.id); // equip the new gadget
-      this._descText.setColor("#39ff14").setText(`Unlocked ${def.name}!`);
-      this._renderLoadout();
-    } else {
-      const short = GameScene.getBank() < def.price;
-      this._descText
-        .setColor("#ff6b6b")
-        .setText(short ? `Not enough cash — ${def.name} costs $${def.price.toLocaleString()}` : "");
-      // reset the colour on next hover
-    }
-  }
-
-  _toggleGadget(id) {
-    if (!this.owned.includes(id)) return; // can only equip what you own
-    this._descText.setColor("#9aa0b5");
-    const idx = this.loadout.indexOf(id);
-    if (idx >= 0) this.loadout.splice(idx, 1); // assigned → remove
-    else if (this.loadout.length < MAX_LOADOUT) this.loadout.push(id); // → next open slot
-    else return; // full — must remove one first
-    GameScene.setLoadout(this.loadout);
-    this._renderLoadout();
-  }
-
-  // Click a slot box to clear the gadget sitting in it.
-  _removeSlot(i) {
-    if (i >= this.loadout.length) return; // empty slot — nothing to clear
-    this.loadout.splice(i, 1);
-    GameScene.setLoadout(this.loadout);
-    this._renderLoadout();
-  }
-
-  _renderLoadout() {
-    const g = this.loadoutGfx;
-    g.clear();
-    const ss = this._slotSize;
-    // Slot boxes — show the assigned gadget's icon + a coloured border, else an empty dashed-look box.
-    for (let i = 0; i < this._slotPos.length; i++) {
-      const p = this._slotPos[i];
-      const def = gadgetById(this.loadout[i]);
-      g.fillStyle(0x12121a, 1);
-      g.fillRoundedRect(p.x - ss / 2, p.y - ss / 2, ss, ss, 8);
-      g.lineStyle(2, def ? def.color : 0x3a3a4a, 1);
-      g.strokeRoundedRect(p.x - ss / 2, p.y - ss / 2, ss, ss, 8);
-      if (def) def.icon(g, p.x, p.y, ss * 0.78);
-    }
-    // Rack — icon in a box. OWNED: green border when equipped, else neutral/hover. LOCKED: dim box +
-    // amber border, icon faded; the label shows the price. Label reads the name (owned) or "$price".
-    const cs = this._choiceSize;
-    GADGETS.forEach((def, i) => {
-      const p = this._choicePos[i];
-      const owned = this.owned.includes(def.id);
-      const on = this.loadout.includes(def.id);
-      const hover = this._hoverId === def.id;
-      g.fillStyle(owned ? 0x12121a : 0x0d0d12, 1);
-      g.fillRoundedRect(p.x - cs / 2, p.y - cs / 2, cs, cs, 6);
-      g.lineStyle(
-        2,
-        owned
-          ? on ? 0x39ff14 : hover ? 0x9aa0b5 : 0x2a2a38
-          : hover ? 0xffd23f : 0x54502e, // locked → amber (price) border
-        1,
-      );
-      g.strokeRoundedRect(p.x - cs / 2, p.y - cs / 2, cs, cs, 6);
-      def.icon(g, p.x, p.y, cs * 0.78);
-      if (!owned) {
-        g.fillStyle(0x0d0d12, 0.5); // dim overlay so a locked gadget's icon reads as unavailable
-        g.fillRoundedRect(p.x - cs / 2, p.y - cs / 2, cs, cs, 6);
-      }
-
-      const label = this._choiceLabels[i];
-      if (owned) label.setText(def.short).setColor(on ? "#39ff14" : "#9aa0b5");
-      else label.setText(`$${def.price.toLocaleString()}`).setColor(hover ? "#ffd23f" : "#6a6a4a");
-    });
   }
 
   _start(copCount, pursuitMode = false, mission = null) {
