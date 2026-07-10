@@ -35,15 +35,16 @@ export class MenuScene extends Phaser.Scene {
       })
       .setOrigin(0.5);
 
-    // --- Bank (persisted cash total) — top-right ---
-    this.add
-      .text(GAME_WIDTH - 16, 20, `BANK  $${GameScene.getBank().toLocaleString()}`, {
+    // --- Bank (persisted cash total) — top-right. Stored so a garage purchase can refresh it. ---
+    this._bankText = this.add
+      .text(GAME_WIDTH - 16, 20, "", {
         fontFamily: "monospace",
         fontSize: "16px",
         fontStyle: "bold",
         color: "#ffd23f",
       })
       .setOrigin(1, 0);
+    this._refreshBank();
 
     // --- MISSION (the Phase 3 game loop — the real thing) ---
     const ms = this.add
@@ -205,15 +206,16 @@ export class MenuScene extends Phaser.Scene {
     this.input.keyboard.on("keydown-THREE", () => this._start(3));
   }
 
-  // Loadout picker: 3 slot boxes (keyed Z/X/C) above the available gadgets. Click a gadget to
-  // assign it to the next open slot; click an assigned one to remove it. Persisted via GameScene so
-  // the choice carries into the chase (dev mode still binds ALL gadgets regardless).
+  // Garage: 3 loadout slots (keyed Z/X/C) above the gadget rack. A gadget you OWN toggles into/out of
+  // the loadout; a LOCKED gadget shows its price and buys with mission cash (then it's owned/equippable).
+  // Persisted via GameScene so the choices carry into the chase (dev mode still binds ALL gadgets).
   _buildLoadout(cx) {
+    this.owned = GameScene.getOwned();
     this.loadout = GameScene.getLoadout();
     this._hoverId = null;
 
     this.add
-      .text(cx, 360, "LOADOUT — pick up to 3", {
+      .text(cx, 360, "GARAGE — equip owned · buy locked", {
         fontFamily: "monospace",
         fontSize: "18px",
         fontStyle: "bold",
@@ -246,29 +248,36 @@ export class MenuScene extends Phaser.Scene {
         .on("pointerdown", () => this._removeSlot(i));
     }
 
-    // Available gadgets (bottom row) — icon box + name, hover for the tooltip, click to toggle.
+    // Gadget rack (bottom row) — icon box + a label that reads the gadget NAME when owned or its PRICE
+    // when locked. Hover shows the tooltip; click equips (owned) or buys (locked).
     this._choiceSize = 44;
     const cg = 34,
       cn = GADGETS.length,
       ctotal = cn * this._choiceSize + (cn - 1) * cg;
     const cx0 = cx - ctotal / 2 + this._choiceSize / 2;
     this._choicePos = [];
+    this._choiceLabels = [];
     GADGETS.forEach((def, i) => {
       const px = cx0 + i * (this._choiceSize + cg);
       this._choicePos.push({ x: px, y: 500 });
-      this.add
-        .text(px, 500 + this._choiceSize / 2 + 12, def.short, {
-          fontFamily: "monospace",
-          fontSize: "11px",
-          color: "#9aa0b5",
-        })
-        .setOrigin(0.5);
+      this._choiceLabels.push(
+        this.add
+          .text(px, 500 + this._choiceSize / 2 + 12, "", {
+            fontFamily: "monospace",
+            fontSize: "11px",
+            color: "#9aa0b5",
+          })
+          .setOrigin(0.5),
+      );
       const zone = this.add
         .rectangle(px, 500, this._choiceSize + 10, this._choiceSize + 24, 0x000000, 0)
         .setInteractive({ useHandCursor: true });
       zone.on("pointerover", () => {
         this._hoverId = def.id;
-        this._descText.setText(def.desc);
+        const locked = !this.owned.includes(def.id);
+        this._descText
+          .setColor("#9aa0b5")
+          .setText(locked ? `${def.desc}   —   BUY for $${def.price.toLocaleString()}` : def.desc);
         this._renderLoadout();
       });
       zone.on("pointerout", () => {
@@ -276,7 +285,9 @@ export class MenuScene extends Phaser.Scene {
         this._descText.setText("");
         this._renderLoadout();
       });
-      zone.on("pointerdown", () => this._toggleGadget(def.id));
+      zone.on("pointerdown", () =>
+        this.owned.includes(def.id) ? this._toggleGadget(def.id) : this._buyGadget(def),
+      );
     });
 
     this._descText = this.add
@@ -293,7 +304,31 @@ export class MenuScene extends Phaser.Scene {
     this._renderLoadout();
   }
 
+  _refreshBank() {
+    this._bankText.setText(`BANK  $${GameScene.getBank().toLocaleString()}`);
+  }
+
+  // Buy a locked gadget with mission cash. On success it becomes owned + auto-equips (if there's a
+  // free slot); otherwise flash a "can't afford" note in the tooltip line.
+  _buyGadget(def) {
+    if (GameScene.buyGadget(def.id)) {
+      this.owned = GameScene.getOwned();
+      this._refreshBank();
+      if (this.loadout.length < MAX_LOADOUT) this._toggleGadget(def.id); // equip the new gadget
+      this._descText.setColor("#39ff14").setText(`Unlocked ${def.name}!`);
+      this._renderLoadout();
+    } else {
+      const short = GameScene.getBank() < def.price;
+      this._descText
+        .setColor("#ff6b6b")
+        .setText(short ? `Not enough cash — ${def.name} costs $${def.price.toLocaleString()}` : "");
+      // reset the colour on next hover
+    }
+  }
+
   _toggleGadget(id) {
+    if (!this.owned.includes(id)) return; // can only equip what you own
+    this._descText.setColor("#9aa0b5");
     const idx = this.loadout.indexOf(id);
     if (idx >= 0) this.loadout.splice(idx, 1); // assigned → remove
     else if (this.loadout.length < MAX_LOADOUT) this.loadout.push(id); // → next open slot
@@ -324,20 +359,33 @@ export class MenuScene extends Phaser.Scene {
       g.strokeRoundedRect(p.x - ss / 2, p.y - ss / 2, ss, ss, 8);
       if (def) def.icon(g, p.x, p.y, ss * 0.78);
     }
-    // Choices — icon in a box; green border when in the loadout, light on hover, dim otherwise.
+    // Rack — icon in a box. OWNED: green border when equipped, else neutral/hover. LOCKED: dim box +
+    // amber border, icon faded; the label shows the price. Label reads the name (owned) or "$price".
     const cs = this._choiceSize;
     GADGETS.forEach((def, i) => {
       const p = this._choicePos[i];
+      const owned = this.owned.includes(def.id);
       const on = this.loadout.includes(def.id);
-      g.fillStyle(0x12121a, 1);
+      const hover = this._hoverId === def.id;
+      g.fillStyle(owned ? 0x12121a : 0x0d0d12, 1);
       g.fillRoundedRect(p.x - cs / 2, p.y - cs / 2, cs, cs, 6);
       g.lineStyle(
         2,
-        on ? 0x39ff14 : this._hoverId === def.id ? 0x9aa0b5 : 0x2a2a38,
+        owned
+          ? on ? 0x39ff14 : hover ? 0x9aa0b5 : 0x2a2a38
+          : hover ? 0xffd23f : 0x54502e, // locked → amber (price) border
         1,
       );
       g.strokeRoundedRect(p.x - cs / 2, p.y - cs / 2, cs, cs, 6);
       def.icon(g, p.x, p.y, cs * 0.78);
+      if (!owned) {
+        g.fillStyle(0x0d0d12, 0.5); // dim overlay so a locked gadget's icon reads as unavailable
+        g.fillRoundedRect(p.x - cs / 2, p.y - cs / 2, cs, cs, 6);
+      }
+
+      const label = this._choiceLabels[i];
+      if (owned) label.setText(def.short).setColor(on ? "#39ff14" : "#9aa0b5");
+      else label.setText(`$${def.price.toLocaleString()}`).setColor(hover ? "#ffd23f" : "#6a6a4a");
     });
   }
 

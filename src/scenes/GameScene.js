@@ -20,6 +20,7 @@ import {
   DEV_GADGET_KEYS,
   MAX_LOADOUT,
   DEFAULT_LOADOUT,
+  STARTER_GADGETS,
   gadgetById,
 } from "../gadgets.js";
 import {
@@ -66,7 +67,11 @@ export class GameScene extends Phaser.Scene {
       // A saved loadout (even an empty "no gadgets" one) wins; fall back to the default only when
       // nothing has been chosen yet.
       if (raw != null) {
-        return JSON.parse(raw).filter((id) => gadgetById(id)).slice(0, MAX_LOADOUT);
+        // Only equip gadgets you actually OWN (a save could name one you've since… never owned).
+        const owned = GameScene.getOwned();
+        return JSON.parse(raw)
+          .filter((id) => gadgetById(id) && owned.includes(id))
+          .slice(0, MAX_LOADOUT);
       }
     } catch (e) {
       /* corrupt/unavailable — fall through */
@@ -99,6 +104,45 @@ export class GameScene extends Phaser.Scene {
       /* ignore */
     }
     return total;
+  }
+  // Deduct from the bank if affordable; returns true on success (false = can't afford).
+  static spendBank(amount) {
+    const bank = GameScene.getBank();
+    if (amount > bank) return false;
+    try {
+      localStorage.setItem(GameScene.BANK_KEY, String(bank - amount));
+    } catch (e) {
+      /* ignore */
+    }
+    return true;
+  }
+
+  // Owned gadgets — starters are free/always owned; the rest are unlocked in the garage with cash.
+  static OWNED_KEY = "gd_owned";
+  static getOwned() {
+    let ids = [];
+    try {
+      const raw = localStorage.getItem(GameScene.OWNED_KEY);
+      if (raw != null) ids = JSON.parse(raw).filter((id) => gadgetById(id));
+    } catch (e) {
+      /* fall through */
+    }
+    return [...new Set([...STARTER_GADGETS, ...ids])]; // starters always included
+  }
+  static setOwned(ids) {
+    try {
+      localStorage.setItem(GameScene.OWNED_KEY, JSON.stringify([...new Set(ids)]));
+    } catch (e) {
+      /* ignore */
+    }
+  }
+  // Buy (unlock) a gadget if it's affordable and not already owned. Returns true on success.
+  static buyGadget(id) {
+    const def = gadgetById(id);
+    if (!def || GameScene.getOwned().includes(id)) return false;
+    if (!GameScene.spendBank(def.price || 0)) return false;
+    GameScene.setOwned([...GameScene.getOwned(), id]);
+    return true;
   }
 
   init(data) {

@@ -13,6 +13,7 @@ export const GADGETS = [
     id: "smoke",
     name: "Smoke Screen",
     short: "SMOKE",
+    price: 2500,
     deploy: "_deploySmoke",
     hudColor: "#b9b9c2",
     color: 0xb9b9c2,
@@ -32,6 +33,7 @@ export const GADGETS = [
     id: "nitro",
     name: "Nitro Boost",
     short: "NITRO",
+    price: 0, // starter
     deploy: "_fireNitro",
     hudColor: "#7fd8ff",
     color: 0x7fd8ff,
@@ -52,6 +54,7 @@ export const GADGETS = [
     id: "oil",
     name: "Oil Slick",
     short: "OIL",
+    price: 0, // starter
     deploy: "_deployOilSlick",
     hudColor: "#d8c27a",
     color: 0xd8c27a,
@@ -72,6 +75,7 @@ export const GADGETS = [
     id: "repair",
     name: "Repair Kit",
     short: "REPAIR",
+    price: 4000,
     deploy: "_useRepairKit",
     hudColor: "#7dff9e",
     color: 0x7dff9e,
@@ -92,7 +96,10 @@ export const GADGETS = [
 export const PLAYER_SLOT_KEYS = ["Z", "X", "C"]; // the 3 player loadout slots, in order
 export const DEV_GADGET_KEYS = ["Z", "X", "C", "V"]; // dev: every gadget on its own key (registry order)
 export const MAX_LOADOUT = 3;
-export const DEFAULT_LOADOUT = ["smoke", "nitro", "oil"]; // sensible starter 3
+// Gadgets you OWN at the start (price 0). The rest are bought in the garage with mission cash. The
+// default loadout is just the starters, since a fresh player can only equip what they own.
+export const STARTER_GADGETS = ["nitro", "oil"];
+export const DEFAULT_LOADOUT = [...STARTER_GADGETS];
 
 export function gadgetById(id) {
   return GADGETS.find((g) => g.id === id) || null;
