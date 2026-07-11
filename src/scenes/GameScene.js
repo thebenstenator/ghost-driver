@@ -1997,14 +1997,23 @@ export class GameScene extends Phaser.Scene {
     const phi0 = target.baseRot - Math.PI / 2;               // current length-axis angle (parked)
     const Lx0 = Math.cos(phi0), Ly0 = Math.sin(phi0);
     const grabSide = Lx0 * Math.cos(f) + Ly0 * Math.sin(f) > 0 ? -1 : 1; // the end pointing "back"
-    // Broadside end angle — whichever of f±90° is the shorter swing from parked.
+    const gsx = target.body.x + grabSide * halfLen * Lx0;   // grabbed point (start)
+    const gsy = target.body.y + grabSide * halfLen * Ly0;
+    // Drag direction of the grabbed point (its big translation to the drop centre).
+    let Dx = destX - gsx, Dy = destY - gsy;
+    const Dl = Math.hypot(Dx, Dy) || 1; Dx /= Dl; Dy /= Dl;
+    // Both broadside options (f±90°) look identical parked but swing OPPOSITE ways. Pick the one that
+    // makes the body TRAIL the grabbed corner (end on the −D side) — i.e. maximise grabSide·L̂(φ₁)·D —
+    // so it reads as pulled BY the corner, not opening out FROM it.
     const c1 = f + Math.PI / 2, c2 = f - Math.PI / 2;
-    const phi1 = Math.abs(Phaser.Math.Angle.Wrap(c1 - phi0)) <= Math.abs(Phaser.Math.Angle.Wrap(c2 - phi0)) ? c1 : c2;
+    const s1 = grabSide * (Math.cos(c1) * Dx + Math.sin(c1) * Dy);
+    const s2 = grabSide * (Math.cos(c2) * Dx + Math.sin(c2) * Dy);
+    const phi1 = s1 >= s2 ? c1 : c2;
     const Lx1 = Math.cos(phi1), Ly1 = Math.sin(phi1);
     target._pull = {
       t: 0,
-      gsx: target.body.x + grabSide * halfLen * Lx0, gsy: target.body.y + grabSide * halfLen * Ly0, // grab start
-      gex: destX + grabSide * halfLen * Lx1, gey: destY + grabSide * halfLen * Ly1,                 // grab end
+      gsx, gsy,                                                                       // grab start
+      gex: destX + grabSide * halfLen * Lx1, gey: destY + grabSide * halfLen * Ly1,   // grab end
       phi0, dphi: Phaser.Math.Angle.Wrap(phi1 - phi0), phi1, grabSide, halfLen, smokeAcc: 0,
     };
     target.mass = this.grappleLandMass; // shovable once it lands
