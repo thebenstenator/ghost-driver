@@ -86,8 +86,10 @@ export class GameAudio {
     // (500rpm steps) topping out lower — redline's exact rpm is a placeholder guess
     // (continuing the 500-step pattern); if the last crossfade's pitch bend sounds off,
     // nudge this number to match the recording.
+    // `boost` = per-band gain multiplier (default 1) baked from playtest — idle sits a
+    // touch quiet against the on-load bands, so it's nudged up.
     const layout = [
-      { key: `eng_${car}_idle`,    frac: 0.0,  rpm: 800 },
+      { key: `eng_${car}_idle`,    frac: 0.0,  rpm: 800,  boost: 1.15 },
       { key: `eng_${car}_1500`,    frac: 0.13, rpm: 1500 },
       { key: `eng_${car}_2000`,    frac: 0.25, rpm: 2000 },
       { key: `eng_${car}_2500`,    frac: 0.38, rpm: 2500 },
@@ -119,7 +121,7 @@ export class GameAudio {
       const g = ctx.createGain(); g.gain.value = 0.0001;
       src.connect(g); g.connect(engineSum);
       src.start();
-      return { src, g, frac: l.frac, rpm: l.rpm };
+      return { src, g, frac: l.frac, rpm: l.rpm, boost: l.boost ?? 1 };
     });
 
     this.sampleEngine = { voices, onGain, offGain, engineMaster };
@@ -172,7 +174,7 @@ export class GameAudio {
       let g = 0.0001;
       if (i === lo) g = hasHi ? Math.cos(t * 0.5 * Math.PI) : 1;
       else if (i === lo + 1) g = Math.sin(t * 0.5 * Math.PI);
-      v[i].g.gain.setTargetAtTime(Math.max(0.0001, g), now, 0.06);
+      v[i].g.gain.setTargetAtTime(Math.max(0.0001, g * v[i].boost), now, 0.06);
     }
 
     // Pitch the two audible bands to a SHARED target rpm (lerp across the segment) so they

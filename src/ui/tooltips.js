@@ -180,6 +180,10 @@ export const TOOLTIPS = {
   // ── Gadget: Repair Kit ──────────────────────────────────────────────────────
   repairMaxCharges: "How many tire-repairs you carry per run. (Changing this refills you.) Each press instantly clears a spike blowout; it won't spend a charge if your tires aren't blown.",
 
+  // ── Parked cars (grapple targets) ───────────────────────────────────────────
+  parkedDensity: "Chance a building gets a curbside parked car (re-scatters on change). Raise for more grapple targets around the map; lower for sparser streets.",
+  parkedCarMass: "How heavy a parked car is in collisions. Raise so bumping one barely moves it (reads as truly parked); lower to shove them around more easily.",
+
   // ── Stealth (Kill Lights) ───────────────────────────────────────────────────
   killLightsRange: "Clear-LOS spotting range (px) for a SLOW, lights-off player. Lower = cops lose a blacked-out crawling car from closer in (easier ditch).",
   illumSpeedRef: "Speed (px/s) at which a blacked-out car's lights SNAP back on and kill-lights cancels (you must press L again to go dark). So lights-off only works at a crawl. Lower to force a slower crawl; raise to stay dark at higher speed.",

@@ -338,6 +338,15 @@ export class GameScene extends Phaser.Scene {
     // stops a shoved car flying off-road.
     this.roadblockGroup = this.physics.add.group();
     this.physics.add.collider(this.roadblockGroup, this.walls);
+
+    // Parked cars — inert civilian cars at the curbs. Same dynamic-body + rotating-capsule car
+    // objects as roadblocks (so they're solid + rammable via _resolveCapsules), but in their OWN
+    // list so the roadblock ram-damage/spin/despawn/count systems (which iterate this.roadblocks)
+    // leave them alone: planted, indestructible. They're the GRAPPLE HOOK's targets — the gadget
+    // (Stage 2) will yank one into the lane behind you as a blocker. Deterministic placement.
+    this.parkedCars = [];
+    this.parkedDensity = 0.3;   // chance a building gets a curbside car (sparse — one occasionally)
+    this.parkedCarMass = 8;     // heavy so a bump barely budges it (reads as "parked")
     this.sightRange = 900; // px — cop spotting range in clear line
     this.proximityRange = 70; // px — sensed THROUGH walls only at point-blank (can't
     // lose someone on your bumper). Kept small on purpose:
@@ -499,6 +508,7 @@ export class GameScene extends Phaser.Scene {
     this.rbSpinFactor  = 0.0004; // hit offset × your speed → spin impulse (÷ car mass)
     this.rbSpinDamp    = 0.93;   // per-frame spin decay (so a spun car settles)
     this.rbSpinMax     = 9;      // rad/s cap on a car's spin
+    this._spawnParkedCars();     // curbside cars (grapple targets) — needs rbCarDrag + parked* set above
     this.pitTestLevel  = 5;      // sandbox-only stand-in for the pursuit level (drives PIT power)
     this.searchSpeed = 300; // UNIFORM cop speed while searching — they sweep at a flat brisk pace
                             // (kinematic grip + cornerFloor remove the per-intersection braking that
@@ -1841,23 +1851,8 @@ export class GameScene extends Phaser.Scene {
         strips.push(this._dropSpike({ x: ix, y: iy, heading: snapped }, s.visL, this.rbLifetime));
         continue;
       }
-      // Small SQUARE dynamic body (drag + velocity integrator + wall backstop); the rotating
-      // capsule (capR/capHalfLen) does the real player/cop collision, so the body needn't be
-      // the car's full footprint — a square that can't block slip-through, like the cops.
-      const body = this.roadblockGroup.create(ix, iy, '_px').setDisplaySize(s.body, s.body);
-      body.setTintFill(0xff3b3b).setAlpha(this.devMode ? 0.18 : 0).setDepth(8);
-      body.body.setDrag(this.rbCarDrag, this.rbCarDrag);
-      body.body.mass = s.mass;
-      body.setCollideWorldBounds(true);
-      this.worldLayer.add(body);
-      const baseRot = perp + Math.PI / 2;          // broadside across the road
-      const img = this.add.image(ix, iy, s.tex)
-        .setDisplaySize(s.visW, s.visL).setDepth(9).setRotation(baseRot);
-      this.worldLayer.add(img);
-      const car = { body, img, baseRot, mass: s.mass, spin: 0, angVel: 0, _spinCd: 0,
-                    capR: s.capR, capHalfLen: s.capHalfLen, health: s.health, maxHealth: s.health };
-      body.rbCar = car;                            // so the spin trigger can find it
-      cars.push(car);
+      // Broadside across the road; the shared helper builds the dynamic body + capsule car object.
+      cars.push(this._makeCarObstacle(ix, iy, perp + Math.PI / 2, s));
     }
     const rb = { x, y, heading: snapped, cars, strips };
     this.roadblocks.push(rb);
@@ -1892,6 +1887,68 @@ export class GameScene extends Phaser.Scene {
 
   _clearRoadblocks() {
     for (const rb of [...this.roadblocks]) this._removeRoadblock(rb);
+  }
+
+  // Build ONE dynamic car obstacle (roadblock car OR parked car): a small square Arcade body
+  // (drag + mass + wall backstop) with a car sprite that follows it, plus the rotating-capsule
+  // fields _resolveCapsules reads. `rot` is the sprite rotation (car LENGTH points rot − π/2).
+  _makeCarObstacle(x, y, rot, spec, debugTint = 0xff3b3b) {
+    const body = this.roadblockGroup.create(x, y, '_px').setDisplaySize(spec.body, spec.body);
+    body.setTintFill(debugTint).setAlpha(this.devMode ? 0.18 : 0).setDepth(8);
+    body.body.setDrag(this.rbCarDrag, this.rbCarDrag);
+    body.body.mass = spec.mass;
+    body.setCollideWorldBounds(true);
+    this.worldLayer.add(body);
+    const img = this.add.image(x, y, spec.tex)
+      .setDisplaySize(spec.visW, spec.visL).setDepth(9).setRotation(rot);
+    this.worldLayer.add(img);
+    const car = { body, img, baseRot: rot, mass: spec.mass, spin: 0, angVel: 0, _spinCd: 0,
+                  capR: spec.capR, capHalfLen: spec.capHalfLen, health: spec.health, maxHealth: spec.health };
+    body.rbCar = car; // so the capsule resolver / spin trigger can find the car from its body
+    return car;
+  }
+
+  // Scatter inert parked cars at the curbs (deterministic — same spots each run). One occasionally,
+  // hugging a building's road edge, oriented ALONG the road. These are the grapple hook's targets.
+  _spawnParkedCars() {
+    this._clearParkedCars();
+    if (this.parkedDensity <= 0) return;
+    const spec = { tex: 'player_car', visW: 26, visL: 52, body: 24, capR: 11, capHalfLen: 15,
+                   mass: this.parkedCarMass, health: 1e9 };
+    const curbOff = spec.visW / 2 + 6; // sit just off the curb, in the road
+    const palette = [0x8a8f9c, 0x7a6f63, 0x5f6b78, 0x9c8a6a, 0x6a6f6a]; // muted civilian tints
+    const H = (n) => { const v = Math.sin(n * 91.7 + 47.3) * 43758.5453; return v - Math.floor(v); };
+    for (const b of BUILDINGS) {
+      const col = Math.round((b.x - MARGIN) / GRID_STEP);
+      const row = Math.round((b.y - MARGIN) / GRID_STEP);
+      const seed = row * GRID_COLS + col;
+      if (H(seed) > this.parkedDensity) continue; // sparse
+      const cellX = MARGIN + col * GRID_STEP, cellY = MARGIN + row * GRID_STEP;
+      const edges = []; // only interior road-facing edges (skip the outer margin)
+      if (col < GRID_COLS - 1) edges.push('R');
+      if (col > 0) edges.push('L');
+      if (row < GRID_ROWS - 1) edges.push('B');
+      if (row > 0) edges.push('T');
+      if (!edges.length) continue;
+      const edge = edges[Math.floor(H(seed + 1) * edges.length) % edges.length];
+      const f = 0.35 + H(seed + 2) * 0.3;       // along-segment fraction (clear of intersections)
+      const flip = H(seed + 3) < 0.5 ? 0 : Math.PI; // parked facing either way
+      let x, y, theta;
+      if (edge === 'R') { x = cellX + BLOCK + curbOff; y = cellY + BLOCK * f; theta = Math.PI / 2 + flip; }
+      else if (edge === 'L') { x = cellX - curbOff; y = cellY + BLOCK * f; theta = Math.PI / 2 + flip; }
+      else if (edge === 'B') { x = cellX + BLOCK * f; y = cellY + BLOCK + curbOff; theta = flip; }
+      else { x = cellX + BLOCK * f; y = cellY - curbOff; theta = flip; }
+      // sprite rotation so the car's LENGTH points along theta (the road direction).
+      const car = this._makeCarObstacle(x, y, theta + Math.PI / 2, spec, 0x39ff14);
+      car.img.setTint(palette[Math.floor(H(seed + 4) * palette.length) % palette.length]);
+      car.parked = true;
+      this.parkedCars.push(car);
+    }
+  }
+
+  _clearParkedCars() {
+    for (const c of this.parkedCars || []) { c.body.destroy(); c.img.destroy(); }
+    this.parkedCars = [];
   }
 
   // An OFF-CENTRE ram torques a block car so it spins out of the way (Arcade has no angular
@@ -2264,6 +2321,14 @@ export class GameScene extends Phaser.Scene {
       const b = c.body;
       agents.push({
         v: { sprite: b, facing: c.baseRot + c.spin - Math.PI / 2, vx: b.body.velocity.x, vy: b.body.velocity.y },
+        R: c.capR, hl: c.capHalfLen, m: c.mass, rbCar: c, preVx: b.body.velocity.x, preVy: b.body.velocity.y,
+      });
+    }
+    // Parked cars — same solid capsule shim (they don't spin), so you + cops collide with them.
+    for (const c of this.parkedCars) {
+      const b = c.body;
+      agents.push({
+        v: { sprite: b, facing: c.baseRot - Math.PI / 2, vx: b.body.velocity.x, vy: b.body.velocity.y },
         R: c.capR, hl: c.capHalfLen, m: c.mass, rbCar: c, preVx: b.body.velocity.x, preVy: b.body.velocity.y,
       });
     }
@@ -4028,7 +4093,17 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
     spk.add({ test: () => this._blowTires() }, "test").name("Test blowout");
     spk.add({ repair: () => this._repairTires() }, "repair").name("Repair (clear)");
 
-    this._persistPanel(gui, "gd_gadgetTune_v16"); // bumped: added oilDrag (ice slide distance)
+    // Parked cars (grapple-hook targets) — density + a respawn to re-scatter them.
+    const pk = gui.addFolder("Parked Cars (grapple targets)");
+    pk.add(this, "parkedDensity", 0, 1, 0.05)
+      .name("Density")
+      .onChange(() => this._spawnParkedCars()); // re-scatter with the new density
+    pk.add(this, "parkedCarMass", 1, 20, 0.5)
+      .name("Mass (planted-ness)")
+      .onChange((v) => { for (const c of this.parkedCars) { c.mass = v; c.body.body.mass = v; } });
+    pk.add({ respawn: () => this._spawnParkedCars() }, "respawn").name("Respawn");
+
+    this._persistPanel(gui, "gd_gadgetTune_v17"); // bumped: added Parked Cars levers
 
     // Anchored to the BOTTOM-RIGHT so the panel grows UPWARD when folders expand and stays
     // clear of the bottom-left spawn panel. CRITICAL: clear top/left to "auto" — lil-gui's
