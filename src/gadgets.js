@@ -99,9 +99,8 @@ export const GADGETS = [
     hudColor: "#ffb14a",
     color: 0xffb14a,
     desc: "Fires at the nearest parked car and yanks it into the road behind you — an instant blockade for the cops on your tail.",
-    charges: (s) => s.grappleCharges,
-    max: (s) => s.grappleMaxCharges,
     active: (s) => (s.thrownCars || []).some((c) => c._pull),
+    cooldown: (s) => s.grappleCdRemaining, // seconds until ready (0 = ready) → HUD shows a countdown
     icon: (g, x, y, s) => {
       g.fillStyle(0xffb14a, 1);
       const t = s * 0.07;

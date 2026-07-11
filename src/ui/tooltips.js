@@ -181,7 +181,7 @@ export const TOOLTIPS = {
   repairMaxCharges: "How many tire-repairs you carry per run. (Changing this refills you.) Each press instantly clears a spike blowout; it won't spend a charge if your tires aren't blown.",
 
   // ── Gadget: Grappling Hook ──────────────────────────────────────────────────
-  grappleMaxCharges: "How many grapples you carry per run. (Changing this refills you.) Each fires at the nearest parked car and yanks it into the road behind you.",
+  grappleCooldown: "Seconds between grapples. The hook is cooldown-based, not fixed uses — fire it, then wait this long before the next yank. (A failed grab, with no car in range, doesn't start the cooldown.)",
   grappleRange: "How close (px) a parked car must be to grab it. Raise to hook cars from further away.",
   grapplePullTime: "Seconds the yank takes — the car eases in/out as it swings around the grabbed corner to rest. Lower for a snappier whip; raise for a slower, heavier drag.",
   grappleTug: "How much of YOUR speed is shed per second while a car is being pulled (feel its weight). Raise for a stronger drag on you; 0 = no effect.",

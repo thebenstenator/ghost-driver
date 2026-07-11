@@ -353,8 +353,8 @@ export class GameScene extends Phaser.Scene {
     // grabbed car moves from parkedCars → thrownCars (a car being _pull'd, then a landed blocker with
     // a _life timer). Intangible to YOU while flying (won't knock you), solid to cops. ---
     this.thrownCars = [];          // grappled cars: while _pull → being yanked; after → landed blocker
-    this.grappleMaxCharges = 2;    // charges at the start of a run
-    this.grappleCharges = this.grappleMaxCharges;
+    this.grappleCooldown = 20;     // s between grapples (cooldown gadget, not fixed charges)
+    this.grappleCdRemaining = 0;   // s left on the cooldown (0 = ready)
     this.grappleRange = 260;       // px — the nearest parked car within this is grabbed
     this.grapplePullTime = 0.7;    // s the yank takes (ease-in-out); the car skids to rest over this
     this.grappleLandBehind = 60;   // px behind you the car lands (broadside across your lane)
@@ -1975,7 +1975,7 @@ export class GameScene extends Phaser.Scene {
   // behind you. Moves the car parkedCars → thrownCars with a _pull target; _updateGrapple drives it.
   _fireGrapple() {
     if (this.busted || this.paused) return;
-    if (this.grappleCharges <= 0) return;
+    if (this.grappleCdRemaining > 0) return; // still cooling down
     const px = this.car.sprite.x, py = this.car.sprite.y;
     // Nearest parked car within range (sparse placement → simple nearest is enough).
     let target = null, best = this.grappleRange * this.grappleRange;
@@ -1983,8 +1983,8 @@ export class GameScene extends Phaser.Scene {
       const d = (c.body.x - px) ** 2 + (c.body.y - py) ** 2;
       if (d < best) { best = d; target = c; }
     }
-    if (!target) return; // nothing in reach — don't spend a charge
-    this.grappleCharges--;
+    if (!target) return; // nothing in reach — don't start the cooldown
+    this.grappleCdRemaining = this.grappleCooldown;
     const f = this.car.getSpeed() > 40 ? Math.atan2(this.car.vy, this.car.vx) : this.car.facing;
     this.parkedCars = this.parkedCars.filter((c) => c !== target);
 
@@ -2026,6 +2026,7 @@ export class GameScene extends Phaser.Scene {
   // Drive grappled cars: animate a _pull'd car (ease-in-out swing around the grabbed corner) to its
   // drop point, land it as a timed blocker, age out landed blockers, draw the rope, and tug you.
   _updateGrapple(dt) {
+    if (this.grappleCdRemaining > 0) this.grappleCdRemaining = Math.max(0, this.grappleCdRemaining - dt);
     const g = this.grappleGfx;
     g.clear();
     const easeIO = (t) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
@@ -4238,10 +4239,7 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
       .onChange((v) => (this.repairCharges = v)); // refill on tune (and on panel load)
 
     const grapple = gui.addFolder("Grappling Hook (F)");
-    grapple
-      .add(this, "grappleMaxCharges", 1, 6, 1)
-      .name("Charges")
-      .onChange((v) => (this.grappleCharges = v)); // refill on tune (and on panel load)
+    grapple.add(this, "grappleCooldown", 3, 60, 1).name("Cooldown (s)");
     grapple.add(this, "grappleRange", 80, 500, 10).name("Grab range (px)");
     grapple.add(this, "grapplePullTime", 0.2, 2, 0.05).name("Pull time (s)");
     grapple.add(this, "grappleTug", 0, 2, 0.05).name("Tug drag (feel weight)");
@@ -4273,7 +4271,7 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
       .onChange((v) => { for (const c of this.parkedCars) { c.mass = v; c.body.body.mass = v; } });
     pk.add({ respawn: () => this._spawnParkedCars() }, "respawn").name("Respawn");
 
-    this._persistPanel(gui, "gd_gadgetTune_v19"); // bumped: grapple pull time + tug (was pull speed)
+    this._persistPanel(gui, "gd_gadgetTune_v20"); // bumped: grapple is a cooldown (was charges)
 
     // Anchored to the BOTTOM-RIGHT so the panel grows UPWARD when folders expand and stays
     // clear of the bottom-left spawn panel. CRITICAL: clear top/left to "auto" — lil-gui's
@@ -4947,21 +4945,23 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
       this.spikeCrippleTime > 0 ? 0.55 + 0.45 * Math.abs(Math.sin(_time / 180)) : 0,
     );
 
-    // Gadget charge pips (bottom-left): "KEY NAME ◉○" per active gadget; white while active, the
-    // gadget's colour when ready, dim grey when empty.
+    // Gadget readout (bottom-left), one row per active gadget: charge gadgets show "KEY NAME ◉○"
+    // pips; cooldown gadgets show "KEY NAME ●" when ready or a "…Ns" countdown while recharging.
     for (let i = 0; i < this.gadgetTexts.length; i++) {
       const { def, key } = this._activeGadgets[i];
-      const cur = def.charges(this);
-      const max = def.max(this);
-      this.gadgetTexts[i]
-        .setText(
-          `${key} ${def.short} ` +
-            "◉".repeat(cur) +
-            "○".repeat(Math.max(0, max - cur)),
-        )
-        .setColor(
-          def.active(this) ? "#ffffff" : cur > 0 ? def.hudColor : "#55555c",
+      const t = this.gadgetTexts[i];
+      if (def.cooldown) {
+        const rem = def.cooldown(this);
+        const ready = rem <= 0.05;
+        t.setText(`${key} ${def.short} ` + (ready ? "●" : `${Math.ceil(rem)}s`)).setColor(
+          def.active(this) ? "#ffffff" : ready ? def.hudColor : "#55555c",
         );
+      } else {
+        const cur = def.charges(this), max = def.max(this);
+        t.setText(
+          `${key} ${def.short} ` + "◉".repeat(cur) + "○".repeat(Math.max(0, max - cur)),
+        ).setColor(def.active(this) ? "#ffffff" : cur > 0 ? def.hudColor : "#55555c");
+      }
     }
 
     // --- Perception: a cop is AWARE of the player if it has a clear sight line
