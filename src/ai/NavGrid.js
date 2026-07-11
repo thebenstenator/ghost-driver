@@ -1,101 +1,179 @@
 import { GRID_COLS, GRID_ROWS, GRID_STEP, ROAD, MARGIN, WORLD_WIDTH, WORLD_HEIGHT } from '../config.js';
+import { BUILDINGS } from '../world/city.js';
 
-// Navigation graph of the city's road network. Nodes sit at every road
-// intersection; edges connect 4-neighbours along the streets. Cops pathfind
-// over this graph (BFS) and steer toward the next waypoint so they follow the
-// roads instead of beelining through buildings.
+// Navigation graph of the city's road network. Nodes sit on a lattice (road
+// centrelines + a perimeter ring); edges connect 4-neighbours. Cops pathfind over
+// this graph (BFS) and steer toward the next waypoint so they follow the roads
+// instead of beelining through buildings.
 //
-// The lattice lines fall in the road gaps: for a column/row index i, the road
-// centreline is at MARGIN + i*GRID_STEP - ROAD/2. Buildings are left-aligned and
-// never wider than BLOCK, so these lines always land on drivable road (alleys
-// included — they're just narrower roads).
-export class NavGrid {
-  constructor() {
-    // Node lines: the interior road centrelines (i = 1..n-1) PLUS a perimeter ring on
-    // the drivable margin lane that runs around the world edge. The perimeter nodes sit
-    // at MARGIN/2 from each wall (centred in the edge lane), so a cop can chase/search
-    // along the very edge instead of targeting a node through the outer buildings and
-    // wedging. Each margin lane connects cleanly to every interior road, so the ring is
-    // just the outer row/column of an otherwise-uniform lattice.
-    this.xs = [MARGIN / 2];
-    for (let i = 1; i < GRID_COLS; i++) this.xs.push(MARGIN + i * GRID_STEP - ROAD / 2);
-    this.xs.push(WORLD_WIDTH - MARGIN / 2);
+// ── EDGE-AWARE (read before editing) ─────────────────────────────────────────────────
+// Connectivity is DERIVED FROM GEOMETRY, not assumed. At construction we test every node
+// and every lattice segment against the building rectangles:
+//   • a node is VALID only if it isn't inside a building (a superblock swallows it), and
+//   • an edge exists only if the road segment between two valid nodes is CLEAR.
+// So the graph reflects the actual streets: superblocks prune nodes, deleted road segments
+// prune edges (dead-ends, T-junctions), and cops can never be routed across a wall. This
+// replaces the OLD "assume the full lattice is drivable" invariant — which only held because
+// every building stayed inside its cell envelope. That assumption is no longer required:
+// districts may lay out any block pattern they like, and nav stays correct.
+//
+// On the current uniform city this produces the SAME graph the assumed-full lattice did
+// (every node sits ≥64px from any building; every segment — alleys included, whose
+// centrelines stay clear by ≥32px — is clear), so behaviour is unchanged. The margins below
+// are deliberately small (< the 32px alley half-gap) so narrow drivable lanes survive.
+//
+// The lattice lines fall in the road gaps: for a column/row index i, the road centreline is
+// at MARGIN + i*GRID_STEP - ROAD/2, plus a perimeter ring on the drivable margin lane.
 
-    this.ys = [MARGIN / 2];
-    for (let j = 1; j < GRID_ROWS; j++) this.ys.push(MARGIN + j * GRID_STEP - ROAD / 2);
-    this.ys.push(WORLD_HEIGHT - MARGIN / 2);
+const NODE_MARGIN = 8; // a node this far inside a building counts as swallowed (invalid)
+const EDGE_MARGIN = 8; // a building this close to a segment's centreline blocks the edge
+
+// Point/segment vs axis-aligned rects. Every nav segment is axis-aligned, so the segment's
+// bounding box IS the segment — this AABB-overlap test is exact (not conservative).
+function blocked(ax, ay, bx, by, rects, m) {
+  const x0 = Math.min(ax, bx), x1 = Math.max(ax, bx);
+  const y0 = Math.min(ay, by), y1 = Math.max(ay, by);
+  for (const r of rects) {
+    if (r.x - m < x1 && r.x + r.w + m > x0 && r.y - m < y1 && r.y + r.h + m > y0) return true;
+  }
+  return false;
+}
+
+export class NavGrid {
+  // opts (all optional — default builds the live city):
+  //   xs, ys : lattice line positions (override for tests/other maps)
+  //   rects  : obstacle rectangles {x,y,w,h} (default: the city's BUILDINGS)
+  constructor(opts = {}) {
+    if (opts.xs && opts.ys) {
+      this.xs = opts.xs.slice();
+      this.ys = opts.ys.slice();
+    } else {
+      // Node lines: interior road centrelines (i = 1..n-1) PLUS a perimeter ring on the
+      // drivable margin lane around the world edge (nodes at MARGIN/2 from each wall), so a
+      // cop can chase/search along the very edge instead of wedging against the outer wall.
+      this.xs = [MARGIN / 2];
+      for (let i = 1; i < GRID_COLS; i++) this.xs.push(MARGIN + i * GRID_STEP - ROAD / 2);
+      this.xs.push(WORLD_WIDTH - MARGIN / 2);
+
+      this.ys = [MARGIN / 2];
+      for (let j = 1; j < GRID_ROWS; j++) this.ys.push(MARGIN + j * GRID_STEP - ROAD / 2);
+      this.ys.push(WORLD_HEIGHT - MARGIN / 2);
+    }
 
     this.cols = this.xs.length;
     this.rows = this.ys.length;
+
+    const rects = opts.rects || BUILDINGS;
+    this._buildConnectivity(rects);
+  }
+
+  // Derive node validity + the neighbour adjacency from obstacle geometry (once, at build).
+  _buildConnectivity(rects) {
+    const n = this.cols * this.rows;
+    this.valid = new Uint8Array(n);
+    this.nbr = new Array(n);
+
+    for (let j = 0; j < this.rows; j++) {
+      for (let i = 0; i < this.cols; i++) {
+        const idx = this.index(i, j);
+        this.valid[idx] = blocked(this.xs[i], this.ys[j], this.xs[i], this.ys[j], rects, NODE_MARGIN)
+          ? 0 : 1;
+      }
+    }
+
+    // Neighbours enumerated in the fixed order left, right, up, down — the SAME order the old
+    // assumed-full lattice used, so BFS breaks equal-length ties identically (a bit-for-bit
+    // no-op on the current map). Each edge is re-tested from both ends; cheap and order-exact.
+    for (let j = 0; j < this.rows; j++) {
+      for (let i = 0; i < this.cols; i++) {
+        const idx = this.index(i, j);
+        const list = [];
+        if (this.valid[idx]) {
+          if (i > 0)             this._link(idx, this.index(i - 1, j), rects, list);
+          if (i < this.cols - 1) this._link(idx, this.index(i + 1, j), rects, list);
+          if (j > 0)             this._link(idx, this.index(i, j - 1), rects, list);
+          if (j < this.rows - 1) this._link(idx, this.index(i, j + 1), rects, list);
+        }
+        this.nbr[idx] = list;
+      }
+    }
+  }
+
+  // Push b onto a's neighbour list iff b is a valid node reachable by a clear road segment.
+  _link(a, b, rects, aList) {
+    if (!this.valid[b]) return;
+    const pa = this.pos(a), pb = this.pos(b);
+    if (blocked(pa.x, pa.y, pb.x, pb.y, rects, EDGE_MARGIN)) return;
+    aList.push(b);
   }
 
   index(i, j) { return j * this.cols + i; }
   ij(idx)     { return { i: idx % this.cols, j: Math.floor(idx / this.cols) }; }
   pos(idx)    { const { i, j } = this.ij(idx); return { x: this.xs[i], y: this.ys[j] }; }
 
-  // Nearest lattice node to a world position
+  // Nearest VALID lattice node to a world position. Fast path: the separable nearest (nearest
+  // column ∩ nearest row) is valid in the common case (a cop on open road) — O(cols+rows). Only
+  // when that lands inside a building (a target snapped onto a superblock) do we scan for the
+  // nearest valid node by true distance.
   nearestNode(x, y) {
     let bi = 0, bj = 0, bdx = Infinity, bdy = Infinity;
-    for (let i = 0; i < this.cols; i++) {
-      const d = Math.abs(this.xs[i] - x);
-      if (d < bdx) { bdx = d; bi = i; }
+    for (let i = 0; i < this.cols; i++) { const d = Math.abs(this.xs[i] - x); if (d < bdx) { bdx = d; bi = i; } }
+    for (let j = 0; j < this.rows; j++) { const d = Math.abs(this.ys[j] - y); if (d < bdy) { bdy = d; bj = j; } }
+    const sep = this.index(bi, bj);
+    if (this.valid[sep]) return sep;
+
+    let best = sep, bestD = Infinity;
+    for (let idx = 0; idx < this.valid.length; idx++) {
+      if (!this.valid[idx]) continue;
+      const p = this.pos(idx);
+      const d = (p.x - x) * (p.x - x) + (p.y - y) * (p.y - y);
+      if (d < bestD) { bestD = d; best = idx; }
     }
-    for (let j = 0; j < this.rows; j++) {
-      const d = Math.abs(this.ys[j] - y);
-      if (d < bdy) { bdy = d; bj = j; }
-    }
-    return this.index(bi, bj);
+    return best;
   }
 
-  // Nearest node to (px,py) that lies AHEAD of origin (ox,oy) along direction
-  // `dir` — i.e. its offset from the origin has a positive component along dir.
-  // Used so the hunt prediction snaps forward of where the player was last seen,
-  // never to a node behind their travel direction. Falls back to nearestNode.
+  // Nearest VALID node to (px,py) that lies AHEAD of origin (ox,oy) along `dir` — its offset
+  // from the origin has a positive component along dir. Used so hunt prediction snaps forward
+  // of where the player was last seen, never behind their travel. Falls back to nearestNode.
   nearestNodeAhead(px, py, ox, oy, dir) {
     const dx = Math.cos(dir), dy = Math.sin(dir);
     let best = -1, bestD = Infinity;
     for (let j = 0; j < this.rows; j++) {
       for (let i = 0; i < this.cols; i++) {
+        const idx = this.index(i, j);
+        if (!this.valid[idx]) continue;
         const nx = this.xs[i], ny = this.ys[j];
         if ((nx - ox) * dx + (ny - oy) * dy < 0) continue; // behind the origin
         const d = (nx - px) * (nx - px) + (ny - py) * (ny - py);
-        if (d < bestD) { bestD = d; best = this.index(i, j); }
+        if (d < bestD) { bestD = d; best = idx; }
       }
     }
     return best >= 0 ? best : this.nearestNode(px, py);
   }
 
-  // BFS shortest path (in node count) from start to goal. Returns an array of
-  // node indices including both endpoints, or [start] if already there.
+  // BFS shortest path (in node count) from start to goal over real edges. Returns an array of
+  // node indices including both endpoints, [start] if already there, or [start] if unreachable
+  // (goal walled off) — callers treat a path that never arrives as "can't get there from here".
   findPath(start, goal) {
     if (start === goal) return [start];
 
-    const visited = new Uint8Array(this.cols * this.rows);
-    const prev    = new Int32Array(this.cols * this.rows).fill(-1);
+    const n = this.cols * this.rows;
+    const visited = new Uint8Array(n);
+    const prev    = new Int32Array(n).fill(-1);
     const queue   = [start];
     visited[start] = 1;
+    let reached = false;
 
     while (queue.length) {
       const cur = queue.shift();
-      if (cur === goal) break;
-
-      const { i, j } = this.ij(cur);
-      const neighbours = [];
-      if (i > 0)             neighbours.push(this.index(i - 1, j));
-      if (i < this.cols - 1) neighbours.push(this.index(i + 1, j));
-      if (j > 0)             neighbours.push(this.index(i, j - 1));
-      if (j < this.rows - 1) neighbours.push(this.index(i, j + 1));
-
-      for (const n of neighbours) {
-        if (!visited[n]) {
-          visited[n] = 1;
-          prev[n] = cur;
-          queue.push(n);
-        }
+      if (cur === goal) { reached = true; break; }
+      for (const nb of this.nbr[cur]) {
+        if (!visited[nb]) { visited[nb] = 1; prev[nb] = cur; queue.push(nb); }
       }
     }
 
-    // Reconstruct
+    if (!reached) return [start]; // goal unreachable over the road graph
+
     const path = [];
     let node = goal;
     while (node !== -1) {
@@ -106,12 +184,12 @@ export class NavGrid {
     return path;
   }
 
-  // Node indices within maxDepth steps of `start`, in BFS (outward) order,
-  // excluding the start itself. Used to build a search sweep radiating from a
-  // last-known position.
+  // Node indices within maxDepth steps of `start` over real edges, in BFS (outward) order,
+  // excluding start. Used to build a search sweep radiating from a last-known position.
   nodesInRange(start, maxDepth) {
-    const visited = new Uint8Array(this.cols * this.rows);
-    const depth   = new Int32Array(this.cols * this.rows);
+    const n = this.cols * this.rows;
+    const visited = new Uint8Array(n);
+    const depth   = new Int32Array(n);
     const queue   = [start];
     visited[start] = 1;
     const result = [];
@@ -120,20 +198,8 @@ export class NavGrid {
       const cur = queue.shift();
       if (cur !== start) result.push(cur);
       if (depth[cur] >= maxDepth) continue;
-
-      const { i, j } = this.ij(cur);
-      const neighbours = [];
-      if (i > 0)             neighbours.push(this.index(i - 1, j));
-      if (i < this.cols - 1) neighbours.push(this.index(i + 1, j));
-      if (j > 0)             neighbours.push(this.index(i, j - 1));
-      if (j < this.rows - 1) neighbours.push(this.index(i, j + 1));
-
-      for (const n of neighbours) {
-        if (!visited[n]) {
-          visited[n] = 1;
-          depth[n] = depth[cur] + 1;
-          queue.push(n);
-        }
+      for (const nb of this.nbr[cur]) {
+        if (!visited[nb]) { visited[nb] = 1; depth[nb] = depth[cur] + 1; queue.push(nb); }
       }
     }
     return result;

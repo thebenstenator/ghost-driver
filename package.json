@@ -6,7 +6,8 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "sim": "node sim/run.mjs"
+    "sim": "node sim/run.mjs",
+    "navtest": "node sim/nav-test.mjs"
   },
   "dependencies": {
     "phaser": "^3.87.0"
