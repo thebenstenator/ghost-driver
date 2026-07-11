@@ -34,6 +34,7 @@ import {
   GRID_STEP,
 } from "../config.js";
 import { BUILDINGS, GARAGES } from "../world/city.js";
+import { GROUND_COLOR, drawBuilding, drawArterialLanes } from "../world/cityRender.js";
 import { Mission, missionById } from "../systems/Mission.js";
 
 export class GameScene extends Phaser.Scene {
@@ -3074,7 +3075,7 @@ bleed: { fastFrac: ${b.fastFrac}, fastRate: ${b.fastRate}, slowRate: ${b.slowRat
           WORLD_HEIGHT / 2,
           WORLD_WIDTH,
           WORLD_HEIGHT,
-          0x1a1a24,
+          GROUND_COLOR,
         )
         .setDepth(0),
     );
@@ -3089,17 +3090,13 @@ bleed: { fastFrac: ${b.fastFrac}, fastRate: ${b.fastRate}, slowRate: ${b.slowRat
     this.walls = this.physics.add.staticGroup();
     this.losRects = []; // building footprints for line-of-sight checks
 
-    BUILDINGS.forEach(({ x, y, w, h }) => {
+    BUILDINGS.forEach((b) => {
+      const { x, y, w, h } = b;
       const cx = x + w / 2;
       const cy = y + h / 2;
 
-      // Visual building
-      this.worldLayer.add(
-        this.add
-          .rectangle(cx, cy, w, h, 0x2c2c3e)
-          .setStrokeStyle(1, 0x40405a)
-          .setDepth(2),
-      );
+      // Visual building — flat-shaded noir rendering (sidewalk halo + shadow + flat roof).
+      drawBuilding(this, this.worldLayer, b);
 
       // Physics body — scale the 1px texture to building size
       const body = this.walls.create(cx, cy, "_px");
@@ -3137,12 +3134,13 @@ bleed: { fastFrac: ${b.fastFrac}, fastRate: ${b.fastRate}, slowRate: ${b.slowRat
 
     // Road lane dashes on the two center roads (visual only)
     this._drawRoadMarkings();
+    drawArterialLanes(this, this.worldLayer);
   }
 
   _drawRoadMarkings() {
     const g = this.add.graphics().setDepth(1);
     this.worldLayer.add(g);
-    g.lineStyle(2, 0x3a3a4a, 0.6);
+    g.lineStyle(2, 0xcccccc, 0.85);
 
     // One centre-line per road gap between columns (vertical roads)
     // and per road gap between rows (horizontal roads)
