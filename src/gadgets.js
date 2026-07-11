@@ -91,10 +91,31 @@ export const GADGETS = [
       g.fillRect(x - a, y - t, 2 * a, 2 * t);
     },
   },
+  {
+    id: "grapple",
+    name: "Grappling Hook",
+    short: "GRAPPLE",
+    deploy: "_fireGrapple",
+    hudColor: "#ffb14a",
+    color: 0xffb14a,
+    desc: "Fires at the nearest parked car and yanks it into the road behind you — an instant blockade for the cops on your tail.",
+    charges: (s) => s.grappleCharges,
+    max: (s) => s.grappleMaxCharges,
+    active: (s) => (s.thrownCars || []).some((c) => c._pull),
+    icon: (g, x, y, s) => {
+      g.fillStyle(0xffb14a, 1);
+      const t = s * 0.07;
+      g.fillRect(x - t, y - s * 0.34, 2 * t, s * 0.46); // shaft
+      // three-pronged claw at the base
+      g.fillTriangle(x - t, y + s * 0.06, x - s * 0.3, y + s * 0.26, x - s * 0.13, y + s * 0.32);
+      g.fillTriangle(x + t, y + s * 0.06, x + s * 0.3, y + s * 0.26, x + s * 0.13, y + s * 0.32);
+      g.fillRect(x - t, y + s * 0.1, 2 * t, s * 0.2); // centre prong
+    },
+  },
 ];
 
 export const PLAYER_SLOT_KEYS = ["Z", "X", "C"]; // the 3 player loadout slots, in order
-export const DEV_GADGET_KEYS = ["Z", "X", "C", "V"]; // dev: every gadget on its own key (registry order)
+export const DEV_GADGET_KEYS = ["Z", "X", "C", "V", "F"]; // dev: every gadget on its own key (registry order)
 export const MAX_LOADOUT = 3;
 // Gadgets you OWN at the start (price 0). The rest are bought in the garage with mission cash. The
 // default loadout is just the starters, since a fresh player can only equip what they own.

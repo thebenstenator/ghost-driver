@@ -347,6 +347,20 @@ export class GameScene extends Phaser.Scene {
     this.parkedCars = [];
     this.parkedDensity = 0.3;   // chance a building gets a curbside car (sparse — one occasionally)
     this.parkedCarMass = 8;     // heavy so a bump barely budges it (reads as "parked")
+
+    // --- Gadget: Grappling Hook (player) — fire at the nearest parked car and YANK it into the road
+    // behind you, where it lands broadside as a shovable blocker for the cops on your tail. The
+    // grabbed car moves from parkedCars → thrownCars (a car being _pull'd, then a landed blocker with
+    // a _life timer). Intangible to YOU while flying (won't knock you), solid to cops. ---
+    this.thrownCars = [];          // grappled cars: while _pull → being yanked; after → landed blocker
+    this.grappleMaxCharges = 2;    // charges at the start of a run
+    this.grappleCharges = this.grappleMaxCharges;
+    this.grappleRange = 260;       // px — the nearest parked car within this is grabbed
+    this.grapplePullSpeed = 950;   // px/s the grabbed car is yanked toward the drop point
+    this.grappleLandBehind = 60;   // px behind you the car lands (broadside across your lane)
+    this.grappleLandMass = 3;      // landed-blocker mass — cops SHOVE through (slowed), not a wall
+    this.grappleLifetime = 12;     // s the landed blocker persists before it despawns
+    this._grappleMaxPull = 1.2;    // s safety cap on a pull (in case it can't reach the drop point)
     this.sightRange = 900; // px — cop spotting range in clear line
     this.proximityRange = 70; // px — sensed THROUGH walls only at point-blank (can't
     // lose someone on your bumper). Kept small on purpose:
@@ -593,6 +607,10 @@ export class GameScene extends Phaser.Scene {
     // Tire smoke — under the cars (a haze off the road), above oil/spikes. See _updateTireSmoke.
     this.tireSmokeGfx = this.add.graphics().setDepth(8);
     this.worldLayer.add(this.tireSmokeGfx);
+
+    // Grapple rope — drawn over the cars while a car is being yanked (see _updateGrapple).
+    this.grappleGfx = this.add.graphics().setDepth(10.5);
+    this.worldLayer.add(this.grappleGfx);
 
     // Mission (Phase 3): instantiate the loop + its on-road objective marker (world space, under
     // cars). Screen-space mission UI (briefing card, objective tracker, beacon, result) is built in
@@ -1953,6 +1971,74 @@ export class GameScene extends Phaser.Scene {
     this.parkedCars = [];
   }
 
+  // Gadget: Grappling Hook — grab the nearest parked car within range and yank it into the road
+  // behind you. Moves the car parkedCars → thrownCars with a _pull target; _updateGrapple drives it.
+  _fireGrapple() {
+    if (this.busted || this.paused) return;
+    if (this.grappleCharges <= 0) return;
+    const px = this.car.sprite.x, py = this.car.sprite.y;
+    // Nearest parked car within range (sparse placement → simple nearest is enough).
+    let target = null, best = this.grappleRange * this.grappleRange;
+    for (const c of this.parkedCars) {
+      const d = (c.body.x - px) ** 2 + (c.body.y - py) ** 2;
+      if (d < best) { best = d; target = c; }
+    }
+    if (!target) return; // nothing in reach — don't spend a charge
+    this.grappleCharges--;
+    // Drop point: behind you along your travel, landing broadside across the lane.
+    const f = this.car.getSpeed() > 40 ? Math.atan2(this.car.vy, this.car.vx) : this.car.facing;
+    this.parkedCars = this.parkedCars.filter((c) => c !== target);
+    target._pull = {
+      dx: px - Math.cos(f) * this.grappleLandBehind,
+      dy: py - Math.sin(f) * this.grappleLandBehind,
+      landRot: f + Math.PI,   // broadside (car LENGTH across your travel)
+      t: 0,
+    };
+    target.mass = this.grappleLandMass; // shovable once it's a blocker (set now; it's in flight anyway)
+    target.body.body.mass = this.grappleLandMass;
+    this.thrownCars.push(target);
+  }
+
+  // Drive grappled cars: yank a _pull'd car to its drop point (then land it as a blocker), age out
+  // landed blockers, and draw the rope from you to any in-flight car.
+  _updateGrapple(dt) {
+    const g = this.grappleGfx;
+    g.clear();
+    for (let i = this.thrownCars.length - 1; i >= 0; i--) {
+      const c = this.thrownCars[i];
+      const b = c.body;
+      if (c._pull) {
+        c._pull.t += dt;
+        const dx = c._pull.dx - b.x, dy = c._pull.dy - b.y;
+        const dist = Math.hypot(dx, dy);
+        if (dist < 26 || c._pull.t > this._grappleMaxPull) {
+          // LAND: stop, snap broadside, become a timed blocker.
+          b.body.setVelocity(0, 0);
+          c.baseRot = c._pull.landRot;
+          c.img.setRotation(c.baseRot);
+          c._pull = null;
+          c._life = 0;
+        } else {
+          b.body.setVelocity((dx / dist) * this.grapplePullSpeed, (dy / dist) * this.grapplePullSpeed);
+          // Rope: from your rear toward the flying car.
+          g.lineStyle(2.5, 0xffb14a, 0.9);
+          g.lineBetween(this.car.sprite.x, this.car.sprite.y, b.x, b.y);
+        }
+      } else {
+        c._life += dt;
+        if (c._life > this.grappleLifetime) {
+          c.body.destroy(); c.img.destroy();
+          this.thrownCars.splice(i, 1);
+        }
+      }
+    }
+  }
+
+  _clearThrownCars() {
+    for (const c of this.thrownCars || []) { c.body.destroy(); c.img.destroy(); }
+    this.thrownCars = [];
+  }
+
   // An OFF-CENTRE ram torques a block car so it spins out of the way (Arcade has no angular
   // physics, so we script it). The cross product of (hit offset) × (your push) gives both
   // the direction and how off-centre the hit was — a centre hit barely spins, an END hit
@@ -2334,6 +2420,15 @@ export class GameScene extends Phaser.Scene {
         R: c.capR, hl: c.capHalfLen, m: c.mass, rbCar: c, preVx: b.body.velocity.x, preVy: b.body.velocity.y,
       });
     }
+    // Grappled cars — solid too. While a car is IN FLIGHT (_pull) it's `grappling`, so the pair loop
+    // skips it vs the PLAYER (it won't knock you as it whips past); it still collides with cops.
+    for (const c of this.thrownCars) {
+      const b = c.body;
+      agents.push({
+        v: { sprite: b, facing: c.baseRot - Math.PI / 2, vx: b.body.velocity.x, vy: b.body.velocity.y },
+        R: c.capR, hl: c.capHalfLen, m: c.mass, rbCar: c, grappling: !!c._pull, preVx: b.body.velocity.x, preVy: b.body.velocity.y,
+      });
+    }
     // Wrecks (disabled cops): inert but still proper rotated cars, so you can't phase through one
     // and you slip past its ends. Facing comes from the SPRITE's actual rotation — the spin-out
     // tween turned the sprite, not cop.facing. Low mass (wreckMass) → it shoves out of the way.
@@ -2360,6 +2455,7 @@ export class GameScene extends Phaser.Scene {
       for (let i = 0; i < agents.length; i++) {
         for (let j = i + 1; j < agents.length; j++) {
           const a = agents[i], b = agents[j];
+          if ((a.player && b.grappling) || (b.player && a.grappling)) continue; // in-flight car ignores you
           const dx = b.v.sprite.x - a.v.sprite.x, dy = b.v.sprite.y - a.v.sprite.y, rr = a.reach + b.reach;
           if (dx * dx + dy * dy <= rr * rr) this._capsuleVsCapsule(a, b, firstIter); // broad-phase cull
         }
@@ -4081,6 +4177,17 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
       .name("Charges")
       .onChange((v) => (this.repairCharges = v)); // refill on tune (and on panel load)
 
+    const grapple = gui.addFolder("Grappling Hook (F)");
+    grapple
+      .add(this, "grappleMaxCharges", 1, 6, 1)
+      .name("Charges")
+      .onChange((v) => (this.grappleCharges = v)); // refill on tune (and on panel load)
+    grapple.add(this, "grappleRange", 80, 500, 10).name("Grab range (px)");
+    grapple.add(this, "grapplePullSpeed", 300, 2000, 50).name("Pull speed (px/s)");
+    grapple.add(this, "grappleLandBehind", 0, 200, 5).name("Land behind (px)");
+    grapple.add(this, "grappleLandMass", 1, 12, 0.5).name("Blocker mass (shove)");
+    grapple.add(this, "grappleLifetime", 2, 40, 1).name("Blocker lifetime (s)");
+
     // Cop spike HAZARD effect (not a player gadget — the cripple you take from driving over a
     // strip). Lives here so it's tunable in normal pursuit playtest. A "Test blowout" button
     // triggers it without needing a spike unit on the road.
@@ -4105,7 +4212,7 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
       .onChange((v) => { for (const c of this.parkedCars) { c.mass = v; c.body.body.mass = v; } });
     pk.add({ respawn: () => this._spawnParkedCars() }, "respawn").name("Respawn");
 
-    this._persistPanel(gui, "gd_gadgetTune_v17"); // bumped: added Parked Cars levers
+    this._persistPanel(gui, "gd_gadgetTune_v18"); // bumped: added Grappling Hook levers
 
     // Anchored to the BOTTOM-RIGHT so the panel grows UPWARD when folders expand and stays
     // clear of the bottom-left spawn panel. CRITICAL: clear top/left to "auto" — lil-gui's
@@ -4626,6 +4733,7 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
     this._updateSpikes(this.car.sprite.x, this.car.sprite.y, delta / 1000);
     this._updateOilSlicks(delta / 1000);
     this._updateSmoke(delta / 1000);
+    this._updateGrapple(delta / 1000);
     this._updateTireSmoke(delta / 1000);
 
     // While spectating a cop (camera not on the player), freeze the car so the

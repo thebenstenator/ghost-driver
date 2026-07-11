@@ -180,6 +180,14 @@ export const TOOLTIPS = {
   // ── Gadget: Repair Kit ──────────────────────────────────────────────────────
   repairMaxCharges: "How many tire-repairs you carry per run. (Changing this refills you.) Each press instantly clears a spike blowout; it won't spend a charge if your tires aren't blown.",
 
+  // ── Gadget: Grappling Hook ──────────────────────────────────────────────────
+  grappleMaxCharges: "How many grapples you carry per run. (Changing this refills you.) Each fires at the nearest parked car and yanks it into the road behind you.",
+  grappleRange: "How close (px) a parked car must be to grab it. Raise to hook cars from further away.",
+  grapplePullSpeed: "How fast (px/s) the grabbed car is yanked to the drop point. Raise for a snappier whip.",
+  grappleLandBehind: "How far behind you (px) the car lands, broadside across your lane. Raise to drop it further back.",
+  grappleLandMass: "The landed blocker's weight. Raise so cops shove through it slower (it blocks longer); lower so they clear it faster.",
+  grappleLifetime: "Seconds the landed blocker persists before it despawns. Raise to leave the blockade up longer.",
+
   // ── Parked cars (grapple targets) ───────────────────────────────────────────
   parkedDensity: "Chance a building gets a curbside parked car (re-scatters on change). Raise for more grapple targets around the map; lower for sparser streets.",
   parkedCarMass: "How heavy a parked car is in collisions. Raise so bumping one barely moves it (reads as truly parked); lower to shove them around more easily.",
