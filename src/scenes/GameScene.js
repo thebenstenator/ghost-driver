@@ -1919,11 +1919,13 @@ export class GameScene extends Phaser.Scene {
     const palette = [0x8a8f9c, 0x7a6f63, 0x5f6b78, 0x9c8a6a, 0x6a6f6a]; // muted civilian tints
     const H = (n) => { const v = Math.sin(n * 91.7 + 47.3) * 43758.5453; return v - Math.floor(v); };
     for (const b of BUILDINGS) {
-      const col = Math.round((b.x - MARGIN) / GRID_STEP);
-      const row = Math.round((b.y - MARGIN) / GRID_STEP);
+      // Cell (floor is robust to setback) is only for the edge-validity check + the deterministic
+      // seed; the POSITION anchors to the building's REAL face so a set-back building (e.g. the wide
+      // boulevards) still parks the car AT the building, not out at the nominal grid curb.
+      const col = Math.floor((b.x - MARGIN) / GRID_STEP);
+      const row = Math.floor((b.y - MARGIN) / GRID_STEP);
       const seed = row * GRID_COLS + col;
       if (H(seed) > this.parkedDensity) continue; // sparse
-      const cellX = MARGIN + col * GRID_STEP, cellY = MARGIN + row * GRID_STEP;
       const edges = []; // only interior road-facing edges (skip the outer margin)
       if (col < GRID_COLS - 1) edges.push('R');
       if (col > 0) edges.push('L');
@@ -1931,13 +1933,13 @@ export class GameScene extends Phaser.Scene {
       if (row > 0) edges.push('T');
       if (!edges.length) continue;
       const edge = edges[Math.floor(H(seed + 1) * edges.length) % edges.length];
-      const f = 0.35 + H(seed + 2) * 0.3;       // along-segment fraction (clear of intersections)
+      const f = 0.3 + H(seed + 2) * 0.4;        // along-face fraction (clear of the corners)
       const flip = H(seed + 3) < 0.5 ? 0 : Math.PI; // parked facing either way
       let x, y, theta;
-      if (edge === 'R') { x = cellX + BLOCK + curbOff; y = cellY + BLOCK * f; theta = Math.PI / 2 + flip; }
-      else if (edge === 'L') { x = cellX - curbOff; y = cellY + BLOCK * f; theta = Math.PI / 2 + flip; }
-      else if (edge === 'B') { x = cellX + BLOCK * f; y = cellY + BLOCK + curbOff; theta = flip; }
-      else { x = cellX + BLOCK * f; y = cellY - curbOff; theta = flip; }
+      if (edge === 'R') { x = b.x + b.w + curbOff; y = b.y + b.h * f; theta = Math.PI / 2 + flip; }
+      else if (edge === 'L') { x = b.x - curbOff; y = b.y + b.h * f; theta = Math.PI / 2 + flip; }
+      else if (edge === 'B') { x = b.x + b.w * f; y = b.y + b.h + curbOff; theta = flip; }
+      else { x = b.x + b.w * f; y = b.y - curbOff; theta = flip; }
       // sprite rotation so the car's LENGTH points along theta (the road direction).
       const car = this._makeCarObstacle(x, y, theta + Math.PI / 2, spec, 0x39ff14);
       car.img.setTint(palette[Math.floor(H(seed + 4) * palette.length) % palette.length]);
