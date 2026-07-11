@@ -183,7 +183,8 @@ export const TOOLTIPS = {
   // ── Gadget: Grappling Hook ──────────────────────────────────────────────────
   grappleMaxCharges: "How many grapples you carry per run. (Changing this refills you.) Each fires at the nearest parked car and yanks it into the road behind you.",
   grappleRange: "How close (px) a parked car must be to grab it. Raise to hook cars from further away.",
-  grapplePullSpeed: "How fast (px/s) the grabbed car is yanked to the drop point. Raise for a snappier whip.",
+  grapplePullTime: "Seconds the yank takes — the car eases in/out as it swings around the grabbed corner to rest. Lower for a snappier whip; raise for a slower, heavier drag.",
+  grappleTug: "How much of YOUR speed is shed per second while a car is being pulled (feel its weight). Raise for a stronger drag on you; 0 = no effect.",
   grappleLandBehind: "How far behind you (px) the car lands, broadside across your lane. Raise to drop it further back.",
   grappleLandMass: "The landed blocker's weight. Raise so cops shove through it slower (it blocks longer); lower so they clear it faster.",
   grappleLifetime: "Seconds the landed blocker persists before it despawns. Raise to leave the blockade up longer.",

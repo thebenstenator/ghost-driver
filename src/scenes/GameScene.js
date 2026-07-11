@@ -356,11 +356,11 @@ export class GameScene extends Phaser.Scene {
     this.grappleMaxCharges = 2;    // charges at the start of a run
     this.grappleCharges = this.grappleMaxCharges;
     this.grappleRange = 260;       // px — the nearest parked car within this is grabbed
-    this.grapplePullSpeed = 950;   // px/s the grabbed car is yanked toward the drop point
+    this.grapplePullTime = 0.7;    // s the yank takes (ease-in-out); the car skids to rest over this
     this.grappleLandBehind = 60;   // px behind you the car lands (broadside across your lane)
     this.grappleLandMass = 3;      // landed-blocker mass — cops SHOVE through (slowed), not a wall
-    this.grappleLifetime = 12;     // s the landed blocker persists before it despawns
-    this._grappleMaxPull = 1.2;    // s safety cap on a pull (in case it can't reach the drop point)
+    this.grappleLifetime = 20;     // s the landed blocker persists before it despawns
+    this.grappleTug = 0.45;        // fraction of YOUR speed shed per second while pulling (feel the weight)
     this.sightRange = 900; // px — cop spotting range in clear line
     this.proximityRange = 70; // px — sensed THROUGH walls only at point-blank (can't
     // lose someone on your bumper). Kept small on purpose:
@@ -1985,44 +1985,70 @@ export class GameScene extends Phaser.Scene {
     }
     if (!target) return; // nothing in reach — don't spend a charge
     this.grappleCharges--;
-    // Drop point: behind you along your travel, landing broadside across the lane.
     const f = this.car.getSpeed() > 40 ? Math.atan2(this.car.vy, this.car.vx) : this.car.facing;
     this.parkedCars = this.parkedCars.filter((c) => c !== target);
+
+    // Anim: the hook grabs the car's BACK end (relative to your travel) and drags THAT point to the
+    // drop point while the car rotates to broadside — so it pivots around the grabbed corner and
+    // skids to rest, rather than sliding rigidly. carCentre = grabPoint − grabSide·halfLen·L̂(φ).
+    const halfLen = 26;
+    const destX = px - Math.cos(f) * this.grappleLandBehind; // car CENTRE lands here
+    const destY = py - Math.sin(f) * this.grappleLandBehind;
+    const phi0 = target.baseRot - Math.PI / 2;               // current length-axis angle (parked)
+    const Lx0 = Math.cos(phi0), Ly0 = Math.sin(phi0);
+    const grabSide = Lx0 * Math.cos(f) + Ly0 * Math.sin(f) > 0 ? -1 : 1; // the end pointing "back"
+    // Broadside end angle — whichever of f±90° is the shorter swing from parked.
+    const c1 = f + Math.PI / 2, c2 = f - Math.PI / 2;
+    const phi1 = Math.abs(Phaser.Math.Angle.Wrap(c1 - phi0)) <= Math.abs(Phaser.Math.Angle.Wrap(c2 - phi0)) ? c1 : c2;
+    const Lx1 = Math.cos(phi1), Ly1 = Math.sin(phi1);
     target._pull = {
-      dx: px - Math.cos(f) * this.grappleLandBehind,
-      dy: py - Math.sin(f) * this.grappleLandBehind,
-      landRot: f + Math.PI,   // broadside (car LENGTH across your travel)
       t: 0,
+      gsx: target.body.x + grabSide * halfLen * Lx0, gsy: target.body.y + grabSide * halfLen * Ly0, // grab start
+      gex: destX + grabSide * halfLen * Lx1, gey: destY + grabSide * halfLen * Ly1,                 // grab end
+      phi0, dphi: Phaser.Math.Angle.Wrap(phi1 - phi0), phi1, grabSide, halfLen, smokeAcc: 0,
     };
-    target.mass = this.grappleLandMass; // shovable once it's a blocker (set now; it's in flight anyway)
+    target.mass = this.grappleLandMass; // shovable once it lands
     target.body.body.mass = this.grappleLandMass;
+    target.body.body.enable = false;    // pure visual while in flight — the script owns its motion
     this.thrownCars.push(target);
+    if (this.audio) this.audio.playScreech("handbrake"); // tyre squeal as it's whipped out
   }
 
-  // Drive grappled cars: yank a _pull'd car to its drop point (then land it as a blocker), age out
-  // landed blockers, and draw the rope from you to any in-flight car.
+  // Drive grappled cars: animate a _pull'd car (ease-in-out swing around the grabbed corner) to its
+  // drop point, land it as a timed blocker, age out landed blockers, draw the rope, and tug you.
   _updateGrapple(dt) {
     const g = this.grappleGfx;
     g.clear();
+    const easeIO = (t) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
+    let anyPull = false;
     for (let i = this.thrownCars.length - 1; i >= 0; i--) {
       const c = this.thrownCars[i];
-      const b = c.body;
-      if (c._pull) {
-        c._pull.t += dt;
-        const dx = c._pull.dx - b.x, dy = c._pull.dy - b.y;
-        const dist = Math.hypot(dx, dy);
-        if (dist < 26 || c._pull.t > this._grappleMaxPull) {
-          // LAND: stop, snap broadside, become a timed blocker.
-          b.body.setVelocity(0, 0);
-          c.baseRot = c._pull.landRot;
-          c.img.setRotation(c.baseRot);
+      const p = c._pull;
+      if (p) {
+        anyPull = true;
+        p.t += dt;
+        const raw = Math.min(1, p.t / Math.max(0.05, this.grapplePullTime));
+        const e = easeIO(raw);
+        const gx = p.gsx + (p.gex - p.gsx) * e, gy = p.gsy + (p.gey - p.gsy) * e; // grabbed point
+        const phi = p.phi0 + p.dphi * e;                                          // length-axis angle
+        const cxc = gx - p.grabSide * p.halfLen * Math.cos(phi);                  // → car centre
+        const cyc = gy - p.grabSide * p.halfLen * Math.sin(phi);
+        c.img.setPosition(cxc, cyc).setRotation(phi + Math.PI / 2);
+        g.lineStyle(2.5, 0xffb14a, 0.9); // rope: you → the grabbed corner
+        g.lineBetween(this.car.sprite.x, this.car.sprite.y, gx, gy);
+        p.smokeAcc += dt; // all four tyres smoke as it skids
+        if (p.smokeAcc >= this.tireSmokeRate) { p.smokeAcc = 0; this._emitGrappleSmoke(cxc, cyc, phi, p.halfLen); }
+        if (raw >= 1) {
+          // LAND: snap to the broadside pose, re-enable the body → solid, timed blocker.
+          const lx = p.gex - p.grabSide * p.halfLen * Math.cos(p.phi1);
+          const ly = p.gey - p.grabSide * p.halfLen * Math.sin(p.phi1);
+          c.baseRot = p.phi1 + Math.PI / 2;
+          c.img.setPosition(lx, ly).setRotation(c.baseRot);
+          c.body.body.enable = true;
+          c.body.setPosition(lx, ly);
+          c.body.body.reset(lx, ly);
           c._pull = null;
           c._life = 0;
-        } else {
-          b.body.setVelocity((dx / dist) * this.grapplePullSpeed, (dy / dist) * this.grapplePullSpeed);
-          // Rope: from your rear toward the flying car.
-          g.lineStyle(2.5, 0xffb14a, 0.9);
-          g.lineBetween(this.car.sprite.x, this.car.sprite.y, b.x, b.y);
         }
       } else {
         c._life += dt;
@@ -2032,6 +2058,31 @@ export class GameScene extends Phaser.Scene {
         }
       }
     }
+    // Feel the weight: shed a little of your speed while a car is being whipped out.
+    if (anyPull) {
+      const k = Math.max(0, 1 - this.grappleTug * dt);
+      const b = this.car.sprite.body;
+      if (b) { b.velocity.x *= k; b.velocity.y *= k; }
+    }
+  }
+
+  // Puffs at the grappled car's four tyre corners (reuses the tyre-smoke pool). phi = length axis.
+  _emitGrappleSmoke(cx, cy, phi, halfLen) {
+    const Lx = Math.cos(phi), Ly = Math.sin(phi), Px = -Ly, Py = Lx; // length + perpendicular
+    const hw = 11, jit = () => Math.random() * 2 - 1;
+    for (const sl of [-1, 1]) for (const sw of [-1, 1]) {
+      this.tireSmoke.push({
+        x: cx + sl * halfLen * 0.78 * Lx + sw * hw * Px,
+        y: cy + sl * halfLen * 0.78 * Ly + sw * hw * Py,
+        vx: jit() * 20, vy: jit() * 20,
+        r: 2 + Math.random() * 2,
+        maxR: this.tireSmokeR * (0.7 + Math.random() * 0.6),
+        t: 0,
+        life: this.tireSmokeLife * (0.7 + Math.random() * 0.6),
+      });
+    }
+    const over = this.tireSmoke.length - this.tireSmokeMax;
+    if (over > 0) this.tireSmoke.splice(0, over);
   }
 
   _clearThrownCars() {
@@ -2420,13 +2471,14 @@ export class GameScene extends Phaser.Scene {
         R: c.capR, hl: c.capHalfLen, m: c.mass, rbCar: c, preVx: b.body.velocity.x, preVy: b.body.velocity.y,
       });
     }
-    // Grappled cars — solid too. While a car is IN FLIGHT (_pull) it's `grappling`, so the pair loop
-    // skips it vs the PLAYER (it won't knock you as it whips past); it still collides with cops.
+    // Grappled cars that have LANDED are solid blockers. In-flight ones (_pull) are scripted visuals
+    // with their physics body disabled, so they're skipped here (no collision until they land).
     for (const c of this.thrownCars) {
+      if (c._pull) continue;
       const b = c.body;
       agents.push({
         v: { sprite: b, facing: c.baseRot - Math.PI / 2, vx: b.body.velocity.x, vy: b.body.velocity.y },
-        R: c.capR, hl: c.capHalfLen, m: c.mass, rbCar: c, grappling: !!c._pull, preVx: b.body.velocity.x, preVy: b.body.velocity.y,
+        R: c.capR, hl: c.capHalfLen, m: c.mass, rbCar: c, preVx: b.body.velocity.x, preVy: b.body.velocity.y,
       });
     }
     // Wrecks (disabled cops): inert but still proper rotated cars, so you can't phase through one
@@ -2455,7 +2507,6 @@ export class GameScene extends Phaser.Scene {
       for (let i = 0; i < agents.length; i++) {
         for (let j = i + 1; j < agents.length; j++) {
           const a = agents[i], b = agents[j];
-          if ((a.player && b.grappling) || (b.player && a.grappling)) continue; // in-flight car ignores you
           const dx = b.v.sprite.x - a.v.sprite.x, dy = b.v.sprite.y - a.v.sprite.y, rr = a.reach + b.reach;
           if (dx * dx + dy * dy <= rr * rr) this._capsuleVsCapsule(a, b, firstIter); // broad-phase cull
         }
@@ -4183,7 +4234,8 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
       .name("Charges")
       .onChange((v) => (this.grappleCharges = v)); // refill on tune (and on panel load)
     grapple.add(this, "grappleRange", 80, 500, 10).name("Grab range (px)");
-    grapple.add(this, "grapplePullSpeed", 300, 2000, 50).name("Pull speed (px/s)");
+    grapple.add(this, "grapplePullTime", 0.2, 2, 0.05).name("Pull time (s)");
+    grapple.add(this, "grappleTug", 0, 2, 0.05).name("Tug drag (feel weight)");
     grapple.add(this, "grappleLandBehind", 0, 200, 5).name("Land behind (px)");
     grapple.add(this, "grappleLandMass", 1, 12, 0.5).name("Blocker mass (shove)");
     grapple.add(this, "grappleLifetime", 2, 40, 1).name("Blocker lifetime (s)");
@@ -4212,7 +4264,7 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
       .onChange((v) => { for (const c of this.parkedCars) { c.mass = v; c.body.body.mass = v; } });
     pk.add({ respawn: () => this._spawnParkedCars() }, "respawn").name("Respawn");
 
-    this._persistPanel(gui, "gd_gadgetTune_v18"); // bumped: added Grappling Hook levers
+    this._persistPanel(gui, "gd_gadgetTune_v19"); // bumped: grapple pull time + tug (was pull speed)
 
     // Anchored to the BOTTOM-RIGHT so the panel grows UPWARD when folders expand and stays
     // clear of the bottom-left spawn panel. CRITICAL: clear top/left to "auto" — lil-gui's
