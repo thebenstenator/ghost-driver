@@ -82,16 +82,20 @@ export class GameAudio {
     // rpm  = the band's recorded pitch — used to pitch the two active bands into UNISON
     //        at the target rpm so the crossfade morphs TIMBRE only, never stacks pitches
     //        into a chord/organ. idle anchors frac 0.
+    // Prowler's new recordings don't rev as high, so this bank has finer-grained bands
+    // (500rpm steps) topping out lower — redline's exact rpm is a placeholder guess
+    // (continuing the 500-step pattern); if the last crossfade's pitch bend sounds off,
+    // nudge this number to match the recording.
     const layout = [
       { key: `eng_${car}_idle`,    frac: 0.0,  rpm: 800 },
-      { key: `eng_${car}_1500`,    frac: 0.12, rpm: 1500 },
-      { key: `eng_${car}_2500`,    frac: 0.25, rpm: 2500 },
-      { key: `eng_${car}_3500`,    frac: 0.38, rpm: 3500 },
-      { key: `eng_${car}_4500`,    frac: 0.50, rpm: 4500 },
-      { key: `eng_${car}_5500`,    frac: 0.63, rpm: 5500 },
-      { key: `eng_${car}_6500`,    frac: 0.75, rpm: 6500 },
-      { key: `eng_${car}_7500`,    frac: 0.88, rpm: 7500 },
-      { key: `eng_${car}_redline`, frac: 1.0,  rpm: 8500 },
+      { key: `eng_${car}_1500`,    frac: 0.13, rpm: 1500 },
+      { key: `eng_${car}_2000`,    frac: 0.25, rpm: 2000 },
+      { key: `eng_${car}_2500`,    frac: 0.38, rpm: 2500 },
+      { key: `eng_${car}_3000`,    frac: 0.50, rpm: 3000 },
+      { key: `eng_${car}_3500`,    frac: 0.63, rpm: 3500 },
+      { key: `eng_${car}_4000`,    frac: 0.75, rpm: 4000 },
+      { key: `eng_${car}_4500`,    frac: 0.88, rpm: 4500 },
+      { key: `eng_${car}_redline`, frac: 1.0,  rpm: 5000 },
     ];
     // All-or-nothing: if anything's missing, bail to procedural rather than play gaps.
     const bufs = layout.map((l) => cache.get(l.key));

@@ -35,7 +35,7 @@ export class BootScene extends Phaser.Scene {
   _loadEngine(car) {
     const base = `audio/engine/${car}/`;
     this.load.audio(`eng_${car}_idle`, base + 'idle.ogg');
-    for (const band of ['1500', '2500', '3500', '4500', '5500', '6500', '7500', 'redline']) {
+    for (const band of ['1500', '2000', '2500', '3000', '3500', '4000', '4500', 'redline']) {
       this.load.audio(`eng_${car}_${band}`, base + `onload_${band}.ogg`);
     }
   }
