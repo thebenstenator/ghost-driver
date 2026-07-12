@@ -3384,13 +3384,13 @@ bleed: { fastFrac: ${b.fastFrac}, fastRate: ${b.fastRate}, slowRate: ${b.slowRat
     });
     this._inGarage = null;
 
-    // Road lane dashes on every street (visual only)
-    this._drawRoadMarkings();
-
     // Spatial index of the wall rects (losRects) so the capsule resolver + LOS test only the
     // buildings NEAR an agent instead of all ~800+ every frame. The map is a lattice, so a uniform
-    // bucket grid is the natural fit.
+    // bucket grid is the natural fit. Built BEFORE the markings, which query it to skip open ground.
     this._buildWallGrid();
+
+    // Road lane dashes on every street (visual only)
+    this._drawRoadMarkings();
   }
 
   // Bucket every wall rect into a uniform grid keyed by GRID_STEP-sized cells. A big wall spans
@@ -3438,19 +3438,44 @@ bleed: { fastFrac: ${b.fastFrac}, fastRate: ${b.fastRate}, slowRate: ${b.slowRat
       for (const b of nav.nbr[a]) {
         if (b < a) continue; // each edge once (adjacency is symmetric)
         const B = nav.ij(b), pb = nav.pos(b);
-        let width, insetA, insetB;
-        if (A.j === B.j) { // horizontal edge → crossing roads are the vertical roads at each end
-          width = streetWidthH(A.j, A.i);
-          insetA = hasVertNbr(a) ? streetWidthV(A.i) / 2 : SMALL;
-          insetB = hasVertNbr(b) ? streetWidthV(B.i) / 2 : SMALL;
-        } else {            // vertical edge → crossing roads are the horizontal roads at each end
-          width = streetWidthV(A.i);
+        const horizontal = A.j === B.j;
+        // Street width needs the position: streetWidthV/H resolve the district on each side of the
+        // line at (line, row/col). (Passing only the line — the old 1-arg call — silently resolved
+        // to district[0], so every vertical road was drawn Industrial-wide. That bug is fixed here.)
+        const width = horizontal ? streetWidthH(A.j, A.i) : streetWidthV(A.i, A.j);
+
+        // Only mark real STREETS. An open yard / plaza (a skipped plot) still has nav nodes, but no
+        // building flanks its "roads" — drawing lane dashes there is the "random lines over nothing"
+        // artefact. A street has a building within ~half its width on at least one side.
+        const mx = (pa.x + pb.x) / 2, my = (pa.y + pb.y) / 2, off = width / 2 + 12;
+        const flanked = horizontal
+          ? (this._pointInAnyWall(mx, my - off) || this._pointInAnyWall(mx, my + off))
+          : (this._pointInAnyWall(mx - off, my) || this._pointInAnyWall(mx + off, my));
+        if (!flanked) continue;
+
+        let insetA, insetB;
+        if (horizontal) { // crossing roads are the vertical roads at each end
+          insetA = hasVertNbr(a) ? streetWidthV(A.i, A.j) / 2 : SMALL;
+          insetB = hasVertNbr(b) ? streetWidthV(B.i, A.j) / 2 : SMALL;
+        } else {          // crossing roads are the horizontal roads at each end
           insetA = hasHorizNbr(a) ? streetWidthH(A.j, A.i) / 2 : SMALL;
           insetB = hasHorizNbr(b) ? streetWidthH(B.j, A.i) / 2 : SMALL;
         }
         this._laneMarkings(g, pa, pb, width, insetA, insetB);
       }
     }
+  }
+
+  // True if (x,y) is inside any building — a point query against the wall spatial grid.
+  _pointInAnyWall(x, y) {
+    const S = this._wbSize;
+    const bc = Math.floor(x / S), br = Math.floor(y / S);
+    if (bc < 0 || br < 0 || bc >= this._wbCols || br >= this._wbRows) return false;
+    for (const wi of this._wallBuckets[br * this._wbCols + bc]) {
+      const w = this.losRects[wi];
+      if (x >= w.x && x <= w.right && y >= w.y && y <= w.bottom) return true;
+    }
+    return false;
   }
 
   // Draw the lane dividers for one road segment: (lanes-1) dashed lines spread across the road
