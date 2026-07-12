@@ -33,7 +33,7 @@ import {
   MARGIN,
   GRID_STEP,
 } from "../config.js";
-import { BUILDINGS, GARAGES } from "../world/city.js";
+import { BUILDINGS, GARAGES, streetWidthV, streetWidthH } from "../world/city.js";
 import { GROUND_COLOR, drawBuilding, drawArterialLanes } from "../world/cityRender.js";
 import { Mission, missionById } from "../systems/Mission.js";
 
@@ -185,10 +185,14 @@ export class GameScene extends Phaser.Scene {
     // pins against scroll but NOT zoom.) UI camera is wired at the end of create().
     this.worldLayer = this.add.layer();
 
+    // Nav graph is derived from the static city geometry (BUILDINGS), so build it BEFORE
+    // _buildWorld — the road markings are drawn from nav edges — and before the player, so we can
+    // drop the player on a guaranteed-drivable road node (the world centre can fall inside a
+    // district superblock now that the map isn't a uniform grid).
+    this.navGrid = new NavGrid();
     this._buildWorld();
-
-    // Player starts at the center road intersection
-    this.car = new PlayerCar(this, WORLD_WIDTH / 2, WORLD_HEIGHT / 2);
+    const spawn = this.navGrid.pos(this.navGrid.nearestNode(WORLD_WIDTH / 2, WORLD_HEIGHT / 2));
+    this.car = new PlayerCar(this, spawn.x, spawn.y);
     this.worldLayer.add(this.car.sprite);
     // Shared light-tuning multipliers (brightness/size), adjusted live in the car panel.
     this.lightTuning = { head: 1, headLen: 1, headWid: 1, brake: 1, flash: 1 };
@@ -226,7 +230,6 @@ export class GameScene extends Phaser.Scene {
     if (this.capDebug) this.worldLayer.add(this.capDebug);
 
     // --- Cops + pursuit ---
-    this.navGrid = new NavGrid();
     this.director = new PursuitDirector(this.navGrid, this.losRects);
     this.cops = [];
     this.wrecks = []; // disabled cops, kept as inert obstacles until they despawn
@@ -3356,30 +3359,77 @@ bleed: { fastFrac: ${b.fastFrac}, fastRate: ${b.fastRate}, slowRate: ${b.slowRat
     });
     this._inGarage = null;
 
-    // Road lane dashes on the two center roads (visual only)
+    // Road lane dashes on every street (visual only)
     this._drawRoadMarkings();
-    drawArterialLanes(this, this.worldLayer);
+    // Arterial striping is disabled for the district map — its fixed WIDE_COL/WIDE_ROW belong to
+    // the old uniform grid. Boulevard striping will return keyed off district data.
   }
 
   _drawRoadMarkings() {
     const g = this.add.graphics().setDepth(1);
     this.worldLayer.add(g);
-    g.lineStyle(2, 0xcccccc, 0.85);
+    g.lineStyle(2, 0xcccccc, 0.7);
 
-    // One centre-line per road gap between columns (vertical roads)
-    // and per road gap between rows (horizontal roads)
-    for (let i = 0; i < GRID_COLS - 1; i++) {
-      const roadX = MARGIN + (i + 1) * GRID_STEP - ROAD / 2;
-      for (let y = 0; y < WORLD_HEIGHT; y += 60) {
-        g.strokeLineShape(new Phaser.Geom.Line(roadX, y, roadX, y + 30));
+    // Lane markings along the REAL drivable roads — one pass per NavGrid edge. Tying markings to
+    // nav edges means they only ever land on road a cop can actually drive, so they can never
+    // bleed across a building (the old full-length lines did, over superblocks). Two refinements:
+    //   • lane count comes from the road WIDTH (a 3-lane street gets two dividers framing the
+    //     centre-turn lane; the boulevard reads as a multi-lane artery; an alley gets none), and
+    //   • each dash is inset from the endpoints by the CROSSING road's half-width, so the
+    //     intersection box stays blank (markings stop before the junction).
+    const nav = this.navGrid;
+    // Does node `idx` have a neighbour in the crossing direction — i.e. is there a REAL cross-
+    // street here? A node mid-way along a superblock's edge sits where a road is CAPPED (swallowed
+    // by the block), so it has no perpendicular neighbour: we must NOT blank there, or the dashes
+    // gap out between buildings where there's no actual intersection.
+    const hasVertNbr  = (idx) => { const c = nav.ij(idx).i; return nav.nbr[idx].some((n) => nav.ij(n).i === c); };
+    const hasHorizNbr = (idx) => { const rr = nav.ij(idx).j; return nav.nbr[idx].some((n) => nav.ij(n).j === rr); };
+    const SMALL = 6; // token gap at a non-intersection so consecutive edges don't visually fuse
+
+    for (let a = 0; a < nav.cols * nav.rows; a++) {
+      const A = nav.ij(a), pa = nav.pos(a);
+      for (const b of nav.nbr[a]) {
+        if (b < a) continue; // each edge once (adjacency is symmetric)
+        const B = nav.ij(b), pb = nav.pos(b);
+        let width, insetA, insetB;
+        if (A.j === B.j) { // horizontal edge → crossing roads are the vertical roads at each end
+          width = streetWidthH(A.j, A.i);
+          insetA = hasVertNbr(a) ? streetWidthV(A.i) / 2 : SMALL;
+          insetB = hasVertNbr(b) ? streetWidthV(B.i) / 2 : SMALL;
+        } else {            // vertical edge → crossing roads are the horizontal roads at each end
+          width = streetWidthV(A.i);
+          insetA = hasHorizNbr(a) ? streetWidthH(A.j, A.i) / 2 : SMALL;
+          insetB = hasHorizNbr(b) ? streetWidthH(B.j, A.i) / 2 : SMALL;
+        }
+        this._laneMarkings(g, pa, pb, width, insetA, insetB);
       }
     }
+  }
 
-    for (let i = 0; i < GRID_ROWS - 1; i++) {
-      const roadY = MARGIN + (i + 1) * GRID_STEP - ROAD / 2;
-      for (let x = 0; x < WORLD_WIDTH; x += 60) {
-        g.strokeLineShape(new Phaser.Geom.Line(x, roadY, x + 30, roadY));
-      }
+  // Draw the lane dividers for one road segment: (lanes-1) dashed lines spread across the road
+  // width, perpendicular to travel. A 2-lane road → one centre line; 3-lane → two; an alley
+  // (1 lane) → none.
+  _laneMarkings(g, pa, pb, width, insetA, insetB) {
+    const lanes = Math.max(1, Math.min(6, Math.round(width / 56)));
+    if (lanes < 2) return;
+    const dx = pb.x - pa.x, dy = pb.y - pa.y, len = Math.hypot(dx, dy) || 1;
+    const nx = -dy / len, ny = dx / len; // unit perpendicular
+    for (let k = 1; k < lanes; k++) {
+      const off = -width / 2 + k * (width / lanes);
+      this._dashLine(g, { x: pa.x + nx * off, y: pa.y + ny * off }, { x: pb.x + nx * off, y: pb.y + ny * off }, insetA, insetB);
+    }
+  }
+
+  // Dashed line from p to q (28px dash / 24px gap), inset from each end so intersections stay
+  // blank (insetA/insetB = how far to hold off at the p/q ends, i.e. the crossing road's radius).
+  _dashLine(g, p, q, insetA = 10, insetB = 10) {
+    const dx = q.x - p.x, dy = q.y - p.y, len = Math.hypot(dx, dy);
+    const start = insetA, end = len - insetB;
+    if (end - start < 8) return;
+    const ux = dx / len, uy = dy / len;
+    for (let d = start; d < end; d += 52) {
+      const e = Math.min(d + 28, end);
+      g.strokeLineShape(new Phaser.Geom.Line(p.x + ux * d, p.y + uy * d, p.x + ux * e, p.y + uy * e));
     }
   }
 

@@ -1,4 +1,4 @@
-import { GRID_COLS, GRID_ROWS, GRID_STEP, ROAD, MARGIN, WORLD_WIDTH, WORLD_HEIGHT } from '../config.js';
+import { navLines } from '../config.js';
 import { BUILDINGS } from '../world/city.js';
 
 // Navigation graph of the city's road network. Nodes sit on a lattice (road
@@ -48,16 +48,11 @@ export class NavGrid {
       this.xs = opts.xs.slice();
       this.ys = opts.ys.slice();
     } else {
-      // Node lines: interior road centrelines (i = 1..n-1) PLUS a perimeter ring on the
-      // drivable margin lane around the world edge (nodes at MARGIN/2 from each wall), so a
-      // cop can chase/search along the very edge instead of wedging against the outer wall.
-      this.xs = [MARGIN / 2];
-      for (let i = 1; i < GRID_COLS; i++) this.xs.push(MARGIN + i * GRID_STEP - ROAD / 2);
-      this.xs.push(WORLD_WIDTH - MARGIN / 2);
-
-      this.ys = [MARGIN / 2];
-      for (let j = 1; j < GRID_ROWS; j++) this.ys.push(MARGIN + j * GRID_STEP - ROAD / 2);
-      this.ys.push(WORLD_HEIGHT - MARGIN / 2);
+      // The shared city lattice (interior road centrelines + a perimeter ring on the drivable
+      // margin lane), so a cop can chase/search along the very edge instead of wedging.
+      const { xs, ys } = navLines();
+      this.xs = xs;
+      this.ys = ys;
     }
 
     this.cols = this.xs.length;
