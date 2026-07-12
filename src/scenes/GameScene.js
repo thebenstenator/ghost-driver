@@ -359,7 +359,8 @@ export class GameScene extends Phaser.Scene {
     this.grappleCooldown = 20;     // s between grapples (cooldown gadget, not fixed charges)
     this.grappleCdRemaining = 0;   // s left on the cooldown (0 = ready)
     this.grappleRange = 260;       // px — the nearest parked car within this is grabbed
-    this.grapplePullTime = 0.7;    // s the yank takes (ease-in-out); the car skids to rest over this
+    this.grappleReelRate = 0.11;   // ease-OUT reel toward your LIVE wake anchor (per-60fps frame; higher = snappier yank)
+    this.grapplePullTime = 0.9;    // s CAP on the reel — it lands by now even if you're outrunning it
     this.grappleLandBehind = 60;   // px behind you the car lands (broadside across your lane)
     this.grappleLandMass = 3;      // landed-blocker mass — cops SHOVE through (slowed), not a wall
     this.grappleLifetime = 20;     // s the landed blocker persists before it despawns
@@ -1991,19 +1992,21 @@ export class GameScene extends Phaser.Scene {
     const f = this.car.getSpeed() > 40 ? Math.atan2(this.car.vy, this.car.vx) : this.car.facing;
     this.parkedCars = this.parkedCars.filter((c) => c !== target);
 
-    // Anim: the hook grabs the car's BACK end (relative to your travel) and drags THAT point to the
-    // drop point while the car rotates to broadside — so it pivots around the grabbed corner and
-    // skids to rest, rather than sliding rigidly. carCentre = grabPoint − grabSide·halfLen·L̂(φ).
+    // Anim: the hook grabs the car's BACK corner and REELS that point toward a LIVE anchor in your
+    // wake (your rear, recomputed every frame in _updateGrapple) — so the motion is driven by your
+    // actual driving, not a fixed arc. The body trails the grabbed corner (pivot swing preserved),
+    // and because the anchor rides with you, speed falls out naturally: floor it and the anchor races
+    // so the car whips hard and settles further back; crawl and it plops in close.
     const halfLen = 26;
-    const destX = px - Math.cos(f) * this.grappleLandBehind; // car CENTRE lands here
-    const destY = py - Math.sin(f) * this.grappleLandBehind;
-    const phi0 = target.baseRot - Math.PI / 2;               // current length-axis angle (parked)
+    const anchorX = px - Math.cos(f) * this.grappleLandBehind; // fire-time anchor (for the swing-dir pick)
+    const anchorY = py - Math.sin(f) * this.grappleLandBehind;
+    const phi0 = target.baseRot - Math.PI / 2;                 // current length-axis angle (parked)
     const Lx0 = Math.cos(phi0), Ly0 = Math.sin(phi0);
     const grabSide = Lx0 * Math.cos(f) + Ly0 * Math.sin(f) > 0 ? -1 : 1; // the end pointing "back"
-    const gsx = target.body.x + grabSide * halfLen * Lx0;   // grabbed point (start)
+    const gsx = target.body.x + grabSide * halfLen * Lx0;     // grabbed point (start)
     const gsy = target.body.y + grabSide * halfLen * Ly0;
-    // Drag direction of the grabbed point (its big translation to the drop centre).
-    let Dx = destX - gsx, Dy = destY - gsy;
+    // Drag direction of the grabbed point (start → anchor).
+    let Dx = anchorX - gsx, Dy = anchorY - gsy;
     const Dl = Math.hypot(Dx, Dy) || 1; Dx /= Dl; Dy /= Dl;
     // Both broadside options (f±90°) look identical parked but swing OPPOSITE ways. Pick the one that
     // makes the body TRAIL the grabbed corner (end on the −D side) — i.e. maximise grabSide·L̂(φ₁)·D —
@@ -2012,12 +2015,11 @@ export class GameScene extends Phaser.Scene {
     const s1 = grabSide * (Math.cos(c1) * Dx + Math.sin(c1) * Dy);
     const s2 = grabSide * (Math.cos(c2) * Dx + Math.sin(c2) * Dy);
     const phi1 = s1 >= s2 ? c1 : c2;
-    const Lx1 = Math.cos(phi1), Ly1 = Math.sin(phi1);
     target._pull = {
       t: 0,
-      gsx, gsy,                                                                       // grab start
-      gex: destX + grabSide * halfLen * Lx1, gey: destY + grabSide * halfLen * Ly1,   // grab end
-      phi0, dphi: Phaser.Math.Angle.Wrap(phi1 - phi0), phi1, grabSide, halfLen, smokeAcc: 0,
+      gx: gsx, gy: gsy,  // current grabbed point (reeled toward the live anchor each frame)
+      phi: phi0, phi1,   // current + target (broadside) length-axis angle
+      grabSide, halfLen, smokeAcc: 0,
     };
     target.mass = this.grappleLandMass; // shovable once it lands
     target.body.body.mass = this.grappleLandMass;
@@ -2032,7 +2034,6 @@ export class GameScene extends Phaser.Scene {
     if (this.grappleCdRemaining > 0) this.grappleCdRemaining = Math.max(0, this.grappleCdRemaining - dt);
     const g = this.grappleGfx;
     g.clear();
-    const easeIO = (t) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
     let anyPull = false;
     for (let i = this.thrownCars.length - 1; i >= 0; i--) {
       const c = this.thrownCars[i];
@@ -2040,26 +2041,31 @@ export class GameScene extends Phaser.Scene {
       if (p) {
         anyPull = true;
         p.t += dt;
-        const raw = Math.min(1, p.t / Math.max(0.05, this.grapplePullTime));
-        const e = easeIO(raw);
-        const gx = p.gsx + (p.gex - p.gsx) * e, gy = p.gsy + (p.gey - p.gsy) * e; // grabbed point
-        const phi = p.phi0 + p.dphi * e;                                          // length-axis angle
-        const cxc = gx - p.grabSide * p.halfLen * Math.cos(phi);                  // → car centre
-        const cyc = gy - p.grabSide * p.halfLen * Math.sin(phi);
-        c.img.setPosition(cxc, cyc).setRotation(phi + Math.PI / 2);
+        // LIVE anchor: your rear in your CURRENT heading — the car reels into your moving wake.
+        const f = this.car.getSpeed() > 40 ? Math.atan2(this.car.vy, this.car.vx) : this.car.facing;
+        const ax = this.car.sprite.x - Math.cos(f) * this.grappleLandBehind;
+        const ay = this.car.sprite.y - Math.sin(f) * this.grappleLandBehind;
+        // Ease-OUT reel (yank, then settle) of the grabbed point + rotation toward broadside.
+        const k = 1 - Math.pow(1 - this.grappleReelRate, dt * 60);
+        p.gx += (ax - p.gx) * k;
+        p.gy += (ay - p.gy) * k;
+        p.phi += Phaser.Math.Angle.Wrap(p.phi1 - p.phi) * k;
+        const cxc = p.gx - p.grabSide * p.halfLen * Math.cos(p.phi); // → car centre
+        const cyc = p.gy - p.grabSide * p.halfLen * Math.sin(p.phi);
+        c.img.setPosition(cxc, cyc).setRotation(p.phi + Math.PI / 2);
         g.lineStyle(2.5, 0xffb14a, 0.9); // rope: you → the grabbed corner
-        g.lineBetween(this.car.sprite.x, this.car.sprite.y, gx, gy);
+        g.lineBetween(this.car.sprite.x, this.car.sprite.y, p.gx, p.gy);
         p.smokeAcc += dt; // all four tyres smoke as it skids
-        if (p.smokeAcc >= this.tireSmokeRate) { p.smokeAcc = 0; this._emitGrappleSmoke(cxc, cyc, phi, p.halfLen); }
-        if (raw >= 1) {
-          // LAND: snap to the broadside pose, re-enable the body → solid, timed blocker.
-          const lx = p.gex - p.grabSide * p.halfLen * Math.cos(p.phi1);
-          const ly = p.gey - p.grabSide * p.halfLen * Math.sin(p.phi1);
-          c.baseRot = p.phi1 + Math.PI / 2;
-          c.img.setPosition(lx, ly).setRotation(c.baseRot);
+        if (p.smokeAcc >= this.tireSmokeRate) { p.smokeAcc = 0; this._emitGrappleSmoke(cxc, cyc, p.phi, p.halfLen); }
+        // Land once it's caught up to the anchor (low speed → arrives quick) OR the time cap hits
+        // (high speed → it lands where the reel got to, in your wake).
+        const arrived = (ax - p.gx) ** 2 + (ay - p.gy) ** 2 < 22 * 22;
+        if (arrived || p.t >= this.grapplePullTime) {
+          c.baseRot = p.phi + Math.PI / 2;
+          c.img.setPosition(cxc, cyc).setRotation(c.baseRot);
           c.body.body.enable = true;
-          c.body.setPosition(lx, ly);
-          c.body.body.reset(lx, ly);
+          c.body.setPosition(cxc, cyc);
+          c.body.body.reset(cxc, cyc);
           c._pull = null;
           c._life = 0;
         }
@@ -4291,7 +4297,8 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
     const grapple = gui.addFolder("Grappling Hook (F)");
     grapple.add(this, "grappleCooldown", 3, 60, 1).name("Cooldown (s)");
     grapple.add(this, "grappleRange", 80, 500, 10).name("Grab range (px)");
-    grapple.add(this, "grapplePullTime", 0.2, 2, 0.05).name("Pull time (s)");
+    grapple.add(this, "grappleReelRate", 0.03, 0.4, 0.01).name("Reel snap");
+    grapple.add(this, "grapplePullTime", 0.2, 2, 0.05).name("Pull time cap (s)");
     grapple.add(this, "grappleTug", 0, 2, 0.05).name("Tug drag (feel weight)");
     grapple.add(this, "grappleLandBehind", 0, 200, 5).name("Land behind (px)");
     grapple.add(this, "grappleLandMass", 1, 12, 0.5).name("Blocker mass (shove)");
@@ -4321,7 +4328,7 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
       .onChange((v) => { for (const c of this.parkedCars) { c.mass = v; c.body.body.mass = v; } });
     pk.add({ respawn: () => this._spawnParkedCars() }, "respawn").name("Respawn");
 
-    this._persistPanel(gui, "gd_gadgetTune_v20"); // bumped: grapple is a cooldown (was charges)
+    this._persistPanel(gui, "gd_gadgetTune_v21"); // bumped: grapple live-wake reel (reel snap)
 
     // Anchored to the BOTTOM-RIGHT so the panel grows UPWARD when folders expand and stays
     // clear of the bottom-left spawn panel. CRITICAL: clear top/left to "auto" — lil-gui's

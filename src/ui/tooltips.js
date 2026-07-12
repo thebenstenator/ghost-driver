@@ -183,7 +183,8 @@ export const TOOLTIPS = {
   // ── Gadget: Grappling Hook ──────────────────────────────────────────────────
   grappleCooldown: "Seconds between grapples. The hook is cooldown-based, not fixed uses — fire it, then wait this long before the next yank. (A failed grab, with no car in range, doesn't start the cooldown.)",
   grappleRange: "How close (px) a parked car must be to grab it. Raise to hook cars from further away.",
-  grapplePullTime: "Seconds the yank takes — the car eases in/out as it swings around the grabbed corner to rest. Lower for a snappier whip; raise for a slower, heavier drag.",
+  grappleReelRate: "How snappy the yank is — how fast the car reels toward the live anchor in your wake each frame. Raise for a harder, quicker whip; lower for a slower, heavier drag.",
+  grapplePullTime: "Time CAP on the reel — if you're outrunning it (high speed), the car lands by now wherever the reel got to. At low speed it lands sooner, as soon as it catches up. Raise to let a fast whip run longer.",
   grappleTug: "How much of YOUR speed is shed per second while a car is being pulled (feel its weight). Raise for a stronger drag on you; 0 = no effect.",
   grappleLandBehind: "How far behind you (px) the car lands, broadside across your lane. Raise to drop it further back.",
   grappleLandMass: "The landed blocker's weight. Raise so cops shove through it slower (it blocks longer); lower so they clear it faster.",
