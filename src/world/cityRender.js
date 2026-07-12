@@ -1,96 +1,106 @@
-// Cosmetic-only "flat-shaded noir" rendering for the procedural city grid defined in city.js.
-// Draws the SAME building/road geometry GameScene already uses for collision/LOS — this only
-// decides what color pixels land where a building sits, so it's safe to iterate on without
-// touching physics, collision, or the NavGrid.
-import { GRID_STEP, MARGIN, ROAD, WORLD_WIDTH, WORLD_HEIGHT } from "../config.js";
+// Procedural noir art pass for the generated city (see specs/districts.md). Cosmetic ONLY — draws
+// the SAME building/road geometry the physics/LOS/nav use, so it's safe to iterate without touching
+// gameplay. Everything is DETERMINISTIC (per-building hash) and batched into a few Graphics objects
+// (the map has 800+ buildings; individual GameObjects tank the frame rate). The look:
+//   • per-district MATERIALS (subtle tint + value — all dark/desaturated, noir intact)
+//   • per-building value jitter + rooftop DETAIL (parapet, fixtures, water tanks, height cues)
+//   • wet-street PUDDLES with faint neon reflections
+//   • EMISSIVE neon signage + rooftop beacons on an ADD-blend layer (bloomed by the camera post-FX)
+import Phaser from "phaser";
+import { WORLD_WIDTH, WORLD_HEIGHT } from "../config.js";
+import { districtIdAt } from "./city.js";
 
-export const GROUND_COLOR = 0x181818;
+export const GROUND_COLOR = 0x141416;
 
-const PALETTE = {
-  sidewalk: 0x242424,
-  curb: 0x404040,
-  laneMark: 0xcccccc,
-  median: 0x161616,
-  building: 0x262626,
-  roofHi: 0x5a5a5a,
-  shadow: 0x000000,
+// Per-district materials [r,g,b] — dark + desaturated; identity is subtle tint + value, not colour.
+const MAT = {
+  financial:   { roof: [47, 46, 51], walk: [38, 38, 43] }, // warm marble-grey
+  neon:        { roof: [42, 38, 48], walk: [34, 31, 39] }, // faint violet-dark
+  industrial:  { roof: [48, 42, 36], walk: [38, 33, 25] }, // rust/brown-dark
+  docks:       { roof: [36, 43, 49], walk: [28, 35, 40] }, // cold blue-grey
+  backstreets: { roof: [42, 42, 44], walk: [32, 32, 34] }, // neutral
 };
+const NEON = [0x2ce8d0, 0xff3bc8, 0xffb020, 0xff5050, 0x49b8ff, 0x8f6bff];
+const NEON_DENSITY = { neon: 0.62, backstreets: 0.30, docks: 0.18, industrial: 0.12, financial: 0.22 };
 
-// Same wide-arterial line index as city.js's WIDE_COL/WIDE_ROW — kept in sync manually since
-// they only matter here for cosmetic lane striping.
-const WIDE_COL = 6, WIDE_ROW = 8;
+const clampC = (v) => Math.max(0, Math.min(255, Math.round(v)));
+const toHex = (r, g, b) => (clampC(r) << 16) | (clampC(g) << 8) | clampC(b);
+const arrHex = (a) => toHex(a[0], a[1], a[2]);
+const shade = (base, d) => toHex(base[0] + d, base[1] + d, base[2] + d);
+const whiteMix = (hex, t) => toHex(((hex >> 16) & 255) + (255 - ((hex >> 16) & 255)) * t,
+  ((hex >> 8) & 255) + (255 - ((hex >> 8) & 255)) * t, (hex & 255) + (255 - (hex & 255)) * t);
+const hash = (n) => { const x = Math.sin(n * 127.1 + 311.7) * 43758.5453; return x - Math.floor(x); };
+const matOf = (b) => MAT[districtIdAt(b.x + b.w / 2, b.y + b.h / 2)] || MAT.backstreets;
 
-// One building: a sidewalk halo (always perfectly aligned since it's generated FROM the
-// footprint, not a separate curb tile), a drop shadow (upper-left light source), and the
-// flat-shaded roof — this is a top-down orthographic view, so the roof is ALL you'd ever see
-// of a building; no windows/facade detail belongs here.
-export function drawBuilding(scene, worldLayer, b) {
-  const cx = b.x + b.w / 2, cy = b.y + b.h / 2;
-  const pad = 8;
-
-  worldLayer.add(
-    scene.add
-      .rectangle(cx, cy, b.w + pad * 2, b.h + pad * 2, PALETTE.sidewalk)
-      .setStrokeStyle(2, PALETTE.curb, 0.8)
-      .setDepth(1.4),
-  );
-  worldLayer.add(
-    scene.add.rectangle(cx + 5, cy + 5, b.w, b.h, PALETTE.shadow, 0.3).setDepth(1.8),
-  );
-  worldLayer.add(
-    scene.add
-      .rectangle(cx, cy, b.w, b.h, PALETTE.building)
-      .setStrokeStyle(1, PALETTE.roofHi, 0.8)
-      .setDepth(2),
-  );
-}
-
-// Batched draw of ALL buildings into a handful of Graphics objects instead of ~3 GameObjects
-// each. On the big district map that's ~800+ buildings; individual GameObjects (≈2500 quads with
-// their own transforms) tank the frame rate, while a Graphics object records everything into one
-// batched geometry. Buildings never overlap (roads separate them), so draw order across buildings
-// is irrelevant — we just emit sidewalk halo → drop shadow → flat roof per building. Same look as
-// drawBuilding(), just consolidated. (drawBuilding is kept for the odd one-off, e.g. a garage.)
-export function drawBuildingsBatched(scene, worldLayer, buildings) {
-  const pad = 8;
-  const g = scene.add.graphics().setDepth(2);
+// Wet-street puddles (dark water + a faint neon reflection). Under the buildings, which cover any
+// that overlap. Low smoothness keeps the ellipse count cheap.
+export function drawGroundDetail(scene, worldLayer) {
+  const g = scene.add.graphics().setDepth(0.5);
   worldLayer.add(g);
-  for (const b of buildings) {
-    // sidewalk halo + curb
-    g.fillStyle(PALETTE.sidewalk, 1).fillRect(b.x - pad, b.y - pad, b.w + pad * 2, b.h + pad * 2);
-    g.lineStyle(2, PALETTE.curb, 0.8).strokeRect(b.x - pad, b.y - pad, b.w + pad * 2, b.h + pad * 2);
-    // drop shadow (upper-left light source → offset down-right)
-    g.fillStyle(PALETTE.shadow, 0.3).fillRect(b.x + 5, b.y + 5, b.w, b.h);
-    // flat roof
-    g.fillStyle(PALETTE.building, 1).fillRect(b.x, b.y, b.w, b.h);
-    g.lineStyle(1, PALETTE.roofHi, 0.8).strokeRect(b.x, b.y, b.w, b.h);
+  for (let i = 0; i < 380; i++) {
+    const px = hash(i * 13 + 1) * WORLD_WIDTH, py = hash(i * 29 + 3) * WORLD_HEIGHT;
+    const rw = 16 + hash(i * 7) * 46, rh = 6 + hash(i * 11) * 16;
+    g.fillStyle(0x0a0a0d, 0.6).fillEllipse(px, py, rw * 2, rh * 2, 10);
+    g.fillStyle(NEON[Math.floor(hash(i * 5) * NEON.length)], 0.05).fillEllipse(px + rw * 0.2, py, rw * 1.4, rh, 10);
   }
   return g;
 }
 
-// Extra lane striping across the two wide arterials (the boulevard gap city.js already
-// generates is ~3x a normal road's width — this just paints enough lanes to make that width
-// legible: a solid median + two dashed lane dividers on each side).
-export function drawArterialLanes(scene, worldLayer) {
-  const g = scene.add.graphics().setDepth(1.05);
-  const dash = 26, gap = 22, lineW = 3;
+// All buildings, batched: material tint + value jitter + height cues + rooftop detail.
+export function drawBuildingsBatched(scene, worldLayer, buildings) {
+  const g = scene.add.graphics().setDepth(2);
+  worldLayer.add(g);
+  for (const b of buildings) {
+    const mat = matOf(b);
+    const j = (hash(b.x * 13 + b.y * 7) - 0.5) * 16; // per-building brightness jitter
+    const roof = shade(mat.roof, j);
 
-  const vX = MARGIN + WIDE_COL * GRID_STEP - ROAD / 2;
-  const hY = MARGIN + WIDE_ROW * GRID_STEP - ROAD / 2;
-
-  g.fillStyle(PALETTE.laneMark, 0.85);
-  for (const off of [-110, -40, 40, 110]) {
-    for (let y = MARGIN; y < WORLD_HEIGHT - MARGIN; y += dash + gap) {
-      g.fillRect(vX + off - lineW / 2, y, lineW, Math.min(dash, WORLD_HEIGHT - MARGIN - y));
-    }
-    for (let x = MARGIN; x < WORLD_WIDTH - MARGIN; x += dash + gap) {
-      g.fillRect(x, hY + off - lineW / 2, Math.min(dash, WORLD_WIDTH - MARGIN - x), lineW);
+    g.fillStyle(0x000000, 0.38).fillRect(b.x + 6, b.y + 7, b.w, b.h);        // drop shadow (down-right)
+    g.fillStyle(arrHex(mat.walk), 1).fillRect(b.x - 8, b.y - 8, b.w + 16, b.h + 16); // sidewalk halo
+    g.fillStyle(roof, 1).fillRect(b.x, b.y, b.w, b.h);                        // roof
+    // Height cues — lit top/left, shaded bottom/right.
+    g.fillStyle(shade(mat.roof, j + 20), 0.85).fillRect(b.x, b.y, b.w, 3);
+    g.fillStyle(shade(mat.roof, j + 12), 0.7).fillRect(b.x, b.y, 3, b.h);
+    g.fillStyle(shade(mat.roof, j - 18), 0.7).fillRect(b.x, b.y + b.h - 3, b.w, 3);
+    g.fillStyle(shade(mat.roof, j - 12), 0.7).fillRect(b.x + b.w - 3, b.y, 3, b.h);
+    // Parapet + rooftop fixtures (only where there's room).
+    if (b.w > 55 && b.h > 55) {
+      g.lineStyle(1.5, shade(mat.roof, j - 12), 0.6).strokeRect(b.x + 9, b.y + 9, b.w - 18, b.h - 18);
+      const nF = 1 + Math.floor(hash(b.x * 3 + b.y) * 3);
+      g.fillStyle(shade(mat.roof, j - 22), 0.92);
+      for (let k = 0; k < nF; k++) {
+        const fw = 12 + hash(b.x + k * 5) * 26, fh = 12 + hash(b.y + k * 7) * 26;
+        const fx = b.x + 16 + hash(b.x + k * 11) * (b.w - 32 - fw), fy = b.y + 16 + hash(b.y + k * 17) * (b.h - 32 - fh);
+        if (fw > 0 && fh > 0 && fx > b.x && fy > b.y) g.fillRect(fx, fy, fw, fh);
+      }
+      if (hash(b.x + b.y * 3) > 0.72) g.fillStyle(shade(mat.roof, j - 26), 0.9).fillCircle(b.x + b.w * 0.7, b.y + b.h * 0.3, 9);
     }
   }
+  return g;
+}
 
-  g.fillStyle(PALETTE.median, 0.9);
-  g.fillRect(vX - 10, MARGIN, 20, WORLD_HEIGHT - MARGIN * 2);
-  g.fillRect(MARGIN, hY - 10, WORLD_WIDTH - MARGIN * 2, 20);
-
+// Emissive layer: neon signage (bright tube + colour bloom) + red rooftop beacons, on an ADD blend
+// so light ACCUMULATES against the dark city. The camera Bloom post-FX then bleeds it outward.
+export function drawNeon(scene, worldLayer, buildings) {
+  const g = scene.add.graphics().setDepth(5).setBlendMode(Phaser.BlendModes.ADD);
   worldLayer.add(g);
+  for (const b of buildings) {
+    const dist = districtIdAt(b.x + b.w / 2, b.y + b.h / 2);
+    if (hash(b.x * 7 + b.y * 3) > (NEON_DENSITY[dist] ?? 0.15)) continue;
+    const col = NEON[Math.floor(hash(b.x + b.y) * NEON.length)];
+    const vert = hash(b.x * 3 + b.y) > 0.6;
+    const len = 16 + hash(b.x + b.y * 5) * 26, th = 4;
+    const sx = b.x + b.w * (0.18 + hash(b.x) * 0.64), sy = b.y + b.h - 4;
+    const w = vert ? th : len, h = vert ? len : th, x = sx - w / 2, y = sy - h;
+    g.fillStyle(col, 0.22).fillRect(x - 10, y - 10, w + 20, h + 20); // wide soft bloom
+    g.fillStyle(col, 0.5).fillRect(x - 4, y - 4, w + 8, h + 8);       // tight bloom
+    g.fillStyle(whiteMix(col, 0.7), 1).fillRect(x, y, w, h);          // hot near-white tube
+  }
+  for (const b of buildings) {
+    if (b.w < 90 || b.h < 90 || hash(b.x + b.y * 9) < 0.82) continue; // sparse rooftop beacons
+    const x = b.x + b.w * 0.3, y = b.y + b.h * 0.6;
+    g.fillStyle(0xff3c3c, 0.5).fillCircle(x, y, 9);
+    g.fillStyle(0xffc8c8, 1).fillCircle(x, y, 2.2);
+  }
+  return g;
 }

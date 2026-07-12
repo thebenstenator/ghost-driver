@@ -8,5 +8,6 @@ CLAUDE.md
 # .tiled-project source files in tiled-src/ ARE committed.
 *.tiled-session
 
-# Generated map snapshot (regenerate with: node sim/map-svg.mjs)
+# Generated preview snapshots (regenerate: node sim/map-svg.mjs / sim/art-preview.mjs)
 sim/map.svg
+sim/art-preview.svg

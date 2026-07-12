@@ -55,6 +55,12 @@ function districtAtPlot(c, r) {
   for (const d of DISTRICTS) if (c >= d.c0 && c < d.c1 && r >= d.r0 && r < d.r1) return d;
   return DISTRICTS[0];
 }
+// District id at a world point — used by the renderer to pick per-district materials/accents.
+export function districtIdAt(x, y) {
+  const c = Math.max(0, Math.min(COLS - 1, Math.floor((x - MARGIN) / GRID_STEP)));
+  const r = Math.max(0, Math.min(ROWS - 1, Math.floor((y - MARGIN) / GRID_STEP)));
+  return districtAtPlot(c, r).id;
+}
 
 // Per-district alleys (scattered through interior lines) + Financial's boulevard/service alley.
 for (const d of DISTRICTS) {

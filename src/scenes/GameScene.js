@@ -34,7 +34,7 @@ import {
   GRID_STEP,
 } from "../config.js";
 import { BUILDINGS, GARAGES, streetWidthV, streetWidthH } from "../world/city.js";
-import { GROUND_COLOR, drawBuildingsBatched } from "../world/cityRender.js";
+import { GROUND_COLOR, drawGroundDetail, drawBuildingsBatched, drawNeon } from "../world/cityRender.js";
 import { Mission, missionById } from "../systems/Mission.js";
 
 export class GameScene extends Phaser.Scene {
@@ -688,6 +688,11 @@ export class GameScene extends Phaser.Scene {
       hud.push(this.objectiveText, this.beaconGfx, this.briefingText, this.resultText);
     this.cameras.main.ignore(hud); // world cam skips HUD
     this.uiCamera.ignore(this.worldLayer); // UI cam skips the world (and its future children)
+
+    // Bloom the WORLD camera only (not the HUD, which is on the UI cam): the dark noir city barely
+    // blooms, but the emissive neon / beacons / headlights bleed light outward. WebGL-only — guard
+    // for the Canvas fallback (no post-FX pipeline there).
+    if (this.cameras.main.postFX) this.cameras.main.postFX.addBloom(0xffffff, 1, 1, 1, 1.1);
 
     // Tear down the DOM tuning panels when the scene restarts / returns to menu,
     // otherwise they stack up duplicates on every R / menu cycle.
@@ -3349,8 +3354,10 @@ bleed: { fastFrac: ${b.fastFrac}, fastRate: ${b.fastRate}, slowRate: ${b.slowRat
     this.walls = this.physics.add.staticGroup();
     this.losRects = []; // building footprints for line-of-sight checks
 
-    // Visuals: ALL buildings batched into one Graphics object (not ~3 GameObjects each) — the big
-    // map has 800+ buildings, and individual GameObjects tank the frame rate.
+    // Visuals (all batched): wet-street puddles under the buildings, then ALL buildings in one
+    // Graphics object (material tint + rooftop detail) — the big map has 800+ buildings, so
+    // individual GameObjects would tank the frame rate.
+    drawGroundDetail(this, this.worldLayer);
     drawBuildingsBatched(this, this.worldLayer, BUILDINGS);
 
     // Physics + LOS: an invisible static body (centre backstop for the Arcade collider) and a
@@ -3396,6 +3403,9 @@ bleed: { fastFrac: ${b.fastFrac}, fastRate: ${b.fastRate}, slowRate: ${b.slowRat
 
     // Road lane dashes on every street (visual only)
     this._drawRoadMarkings();
+
+    // Emissive neon signage + rooftop beacons (ADD-blend layer; the camera Bloom post-FX blooms it).
+    drawNeon(this, this.worldLayer, BUILDINGS);
   }
 
   // Bucket every wall rect into a uniform grid keyed by GRID_STEP-sized cells. A big wall spans
