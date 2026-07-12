@@ -6,98 +6,94 @@ import { GRID_COLS, GRID_ROWS, BLOCK, ROAD, MARGIN, GRID_STEP, WORLD_WIDTH, WORL
 // per-plot hash, never Math.random): a random map would desync the sim from the game.
 //
 // ── HOW DISTRICTS DIFFER ──────────────────────────────────────────────────────────────────
-// Districts are VERTICAL COLUMN BANDS (a `DISTRICTS` table). Every building is a rectangle laid
-// out FLUSH to the fine BLOCK grid (facades stay aligned — no jittered setbacks). Identity comes
-// from two levers, and the edge-aware NavGrid (src/ai/NavGrid.js) derives drivable streets from
-// whatever we emit:
-//   1. BLOCK PATTERN — how each district's generator merges plots. A merge that spans the road
-//      between two plots CAPS that street (the superblock swallows it → dead-end / T-junction);
-//      the NavGrid prunes it automatically. Superblocks also prune the nodes they cover.
-//   2. STREET WIDTH — each district has a default width; specific lines are overridden into a
-//      grand boulevard or narrow alleys. Width changes by moving the FACES of the buildings on
-//      BOTH sides equally; the centreline (and the NavGrid line) never moves, so connectivity is
-//      untouched and facades stay flush. streetWidthV/H are the source of truth (GameScene also
-//      uses them to blank intersections by the crossing road's width).
-//
-// A vertical road line sits in exactly one district (or on a seam); horizontal roads take the
-// width of the column's district, so streets visibly STEP narrower crossing a seam.
+// Districts are RECTANGULAR REGIONS on the plot grid (a `DISTRICTS` table with col+row ranges —
+// a 2-D layout, so districts are big and roughly square rather than full-height strips). Every
+// building is a rectangle laid out FLUSH to the grid (facades stay aligned). Identity comes from:
+//   1. BLOCK PATTERN — each district's generator merges plots its own way. A merge that spans the
+//      road between two plots CAPS that street (the block swallows it → dead-end/T-junction); the
+//      edge-aware NavGrid prunes it. Superblocks also prune the nodes they cover; skipped plots
+//      are drivable open yards.
+//   2. STREET WIDTH — each district has a default width; some lines are boulevards or alleys. A
+//      road changes width by moving the FACES of the buildings on BOTH sides equally; the
+//      centreline (and the NavGrid line) never moves, so connectivity is untouched and facades
+//      stay flush. streetWidthV/H are the source of truth (GameScene uses them for lane markings
+//      and to blank intersections by the crossing road's width).
 
 const COLS = GRID_COLS, ROWS = GRID_ROWS;
 
-// Deterministic per-plot hash → [0,1). Stable across reloads and identical in game + sim.
-function hash(n) {
-  const x = Math.sin(n * 127.1 + 311.7) * 43758.5453;
-  return x - Math.floor(x);
-}
+function hash(n) { const x = Math.sin(n * 127.1 + 311.7) * 43758.5453; return x - Math.floor(x); }
 
 const plotX = (c) => MARGIN + c * GRID_STEP;
 const plotY = (r) => MARGIN + r * GRID_STEP;
 const pidx  = (c, r) => r * COLS + c;
-// Centre of road-line k (the NavGrid line): k=1..COLS-1 interior, 0/COLS are the margin lanes.
-const lineCoord = (k) => MARGIN + k * GRID_STEP - ROAD / 2;
+const lineCoord = (k) => MARGIN + k * GRID_STEP - ROAD / 2; // centre of road-line k (a NavGrid line)
 
 // ── Street widths ───────────────────────────────────────────────────────────────────────────
-const AVENUE_W    = Math.round(ROAD * 3.2); // ~grand boulevard (widest drivable)
-const ALLEY_W     = 60;   // service lanes / alleys (narrowest drivable)
+const AVENUE_W    = Math.round(ROAD * 3.2); // grand boulevard (widest)
+const ALLEY_W     = 60;   // alleys / service lanes (narrowest)
 const FIN_STREET  = 168;  // Financial: 3 lanes (one each way + centre turn)
-const BACK_STREET = ROAD; // Backstreets: tight (claustrophobic)
+const BACK_STREET = ROAD; // Backstreets: tight
 const NEON_STREET = 132;  // Neon Mile: medium
-const IND_STREET  = 200;  // Industrial: very wide service roads for heavy vehicles
+const IND_STREET  = 200;  // Industrial: very wide service roads
 const DOCK_STREET = 150;  // Docks: loading lanes
 
-// ── District table (vertical bands, left → right) ─────────────────────────────────────────────
-// Financial sits central so the world-centre player spawn lands in it. Generators are function
-// declarations (hoisted), so referencing them here before their definition is fine.
+// ── District table (2-D regions) ──────────────────────────────────────────────────────────────
+// A 3×2 arrangement with Financial spanning the whole centre column, so the world-centre player
+// spawn lands in it. Regions tile the grid exactly (no gaps/overlaps). Generators are function
+// declarations (hoisted), referenced here before definition.
+const HB = ROWS >> 1; // horizontal band split (row)
+const CB1 = Math.round(COLS / 3), CB2 = COLS - CB1; // vertical band splits (cols)
 const DISTRICTS = [
-  { id: 'industrial',  c0: 0,  c1: 5,  street: IND_STREET,  gen: genIndustrial,  alleyP: 0    },
-  { id: 'docks',       c0: 5,  c1: 10, street: DOCK_STREET, gen: genDocks,       alleyP: 0.15 },
-  { id: 'financial',   c0: 10, c1: 16, street: FIN_STREET,  gen: genFinancial,   alleyP: 0    },
-  { id: 'neon',        c0: 16, c1: 21, street: NEON_STREET, gen: genNeon,        alleyP: 0.20 },
-  { id: 'backstreets', c0: 21, c1: 26, street: BACK_STREET, gen: genBackstreets, alleyP: 0.45 },
+  { id: 'industrial',  c0: 0,   c1: CB1,  r0: 0,  r1: HB,   street: IND_STREET,  gen: genIndustrial,  alleyP: 0    },
+  { id: 'neon',        c0: 0,   c1: CB1,  r0: HB, r1: ROWS, street: NEON_STREET, gen: genNeon,        alleyP: 0.20 },
+  { id: 'financial',   c0: CB1, c1: CB2,  r0: 0,  r1: ROWS, street: FIN_STREET,  gen: genFinancial,   alleyP: 0    },
+  { id: 'docks',       c0: CB2, c1: COLS, r0: 0,  r1: HB,   street: DOCK_STREET, gen: genDocks,       alleyP: 0.10 },
+  { id: 'backstreets', c0: CB2, c1: COLS, r0: HB, r1: ROWS, street: BACK_STREET, gen: genBackstreets, alleyP: 0.45 },
 ];
-function districtOfCol(c) {
-  for (const d of DISTRICTS) if (c >= d.c0 && c < d.c1) return d;
-  return DISTRICTS[DISTRICTS.length - 1];
+const financial = DISTRICTS.find((d) => d.id === 'financial');
+function districtAtPlot(c, r) {
+  for (const d of DISTRICTS) if (c >= d.c0 && c < d.c1 && r >= d.r0 && r < d.r1) return d;
+  return DISTRICTS[0];
 }
 
-const AVENUE_COL = 12; // Financial's grand vertical artery (a real through-road between superblocks)
-const GARAGE_C = 23, GARAGE_R = 3; // one garage in the Backstreets
-const isGarage = (c, r) => c === GARAGE_C && r === GARAGE_R;
-const G_WALL = 16, G_DOOR = 96;    // garage wall thickness + entrance gap
-const consumed = new Set();        // plot indices already covered by a merge (shared across generators)
-
-// ── Per-line width overrides (beat the district default) ──────────────────────────────────────
-const vOverride = new Map([
-  [AVENUE_COL, AVENUE_W], // the boulevard
-  [14, ALLEY_W],          // a narrow Financial service lane
-]);
-for (const d of DISTRICTS) { // each district scatters alleys through its interior vertical lines
+// Per-district alleys (scattered through interior lines) + Financial's boulevard/service alley.
+for (const d of DISTRICTS) {
+  d.vAlleys = new Set(); d.hAlleys = new Set(); d.avenue = -1; d.avenueW = AVENUE_W;
   if (!d.alleyP) continue;
-  for (let k = d.c0 + 1; k < d.c1; k++) if (!vOverride.has(k) && hash(k * 5 + 1) < d.alleyP) vOverride.set(k, ALLEY_W);
+  for (let k = d.c0 + 1; k < d.c1; k++) if (hash(k * 5 + 1) < d.alleyP) d.vAlleys.add(k);
+  for (let j = d.r0 + 1; j < d.r1; j++) if (hash(j * 13 + 7) < d.alleyP) d.hAlleys.add(j);
 }
-const hOverride = new Map();
-for (let k = 1; k < ROWS; k++) if (hash(k * 13 + 7) < 0.16) hOverride.set(k, ALLEY_W); // shared narrow cross-streets
+financial.avenue = CB1 + (((CB2 - CB1) >> 1) | 1); // an odd-ish central Financial line = a through-road
+financial.vAlleys.add(financial.avenue + 4);       // one narrow Financial service lane
 
-// Width of vertical road line i (each vertical line is within one district, or on a seam).
-export function streetWidthV(i) {
-  if (vOverride.has(i)) return vOverride.get(i);
-  if (i <= 0 || i >= COLS) return ROAD; // margin lanes
-  const left = districtOfCol(i - 1), right = districtOfCol(i);
-  return left === right ? left.street : Math.max(left.street, right.street); // seam = the wider side
+const GARAGE_C = CB2 + 3, GARAGE_R = HB + 3; // one garage in the Backstreets
+const isGarage = (c, r) => c === GARAGE_C && r === GARAGE_R;
+const G_WALL = 16, G_DOOR = 96;
+const consumed = new Set();
+
+// Width of vertical road line k at plot-row r (the district on each side decides; a seam takes
+// the wider side). Exported so GameScene can size lane markings + blank intersections.
+export function streetWidthV(k, r) {
+  if (k <= 0 || k >= COLS) return ROAD; // margin lanes
+  const rr = Math.min(ROWS - 1, Math.max(0, r));
+  const dl = districtAtPlot(k - 1, rr), dr = districtAtPlot(k, rr);
+  if (dl === dr) return dl.avenue === k ? dl.avenueW : dl.vAlleys.has(k) ? ALLEY_W : dl.street;
+  return Math.max(dl.street, dr.street); // seam
 }
-// Width of horizontal road line j at column-line `col` (follows the column's district).
-export function streetWidthH(j, col) {
-  if (hOverride.has(j)) return hOverride.get(j);
-  if (j <= 0 || j >= ROWS) return ROAD; // margin lanes
-  return districtOfCol(col).street;
+export function streetWidthH(j, c) {
+  if (j <= 0 || j >= ROWS) return ROAD;
+  const cc = Math.min(COLS - 1, Math.max(0, c));
+  const dt = districtAtPlot(cc, j - 1), db = districtAtPlot(cc, j);
+  if (dt === db) return dt.hAlleys.has(j) ? ALLEY_W : dt.street;
+  return Math.max(dt.street, db.street);
 }
 
 // A building spanning cspan×rspan plots, each FACE placed against its road line at that street's
-// width. Horizontal faces use the building's own column `c` to pick the district width.
+// width. Vertical faces use the building's top row `r`, horizontal faces its left column `c`.
 function faceRect(c, r, cspan = 1, rspan = 1) {
   const kL = c, kR = c + cspan, kT = r, kB = r + rspan;
-  const x1 = kL === 0    ? MARGIN                : lineCoord(kL) + streetWidthV(kL) / 2;
-  const x2 = kR === COLS ? WORLD_WIDTH - MARGIN  : lineCoord(kR) - streetWidthV(kR) / 2;
+  const x1 = kL === 0    ? MARGIN                : lineCoord(kL) + streetWidthV(kL, r) / 2;
+  const x2 = kR === COLS ? WORLD_WIDTH - MARGIN  : lineCoord(kR) - streetWidthV(kR, r) / 2;
   const y1 = kT === 0    ? MARGIN                : lineCoord(kT) + streetWidthH(kT, c) / 2;
   const y2 = kB === ROWS ? WORLD_HEIGHT - MARGIN : lineCoord(kB) - streetWidthH(kB, c) / 2;
   return { x: x1, y: y1, w: x2 - x1, h: y2 - y1 };
@@ -107,17 +103,14 @@ export const BUILDINGS = [];
 export const GARAGES = [];
 for (const d of DISTRICTS) d.gen(d);
 
-// ── District generators ───────────────────────────────────────────────────────────────────
-// Financial — grand regular grid of merged 2×2 superblocks.
+// ── District generators (each stays within its region [c0,c1) × [r0,r1)) ───────────────────
 function genFinancial(d) {
-  for (let r = 0; r < ROWS; r += 2)
+  for (let r = d.r0; r < d.r1; r += 2)
     for (let c = d.c0; c < d.c1; c += 2)
-      BUILDINGS.push(faceRect(c, r, Math.min(2, d.c1 - c), Math.min(2, ROWS - r)));
+      BUILDINGS.push(faceRect(c, r, Math.min(2, d.c1 - c), Math.min(2, d.r1 - r)));
 }
-
-// Neon Mile — medium: mostly 1×1, ~25% merged right into wider 2×1 blocks. Denser + regular.
 function genNeon(d) {
-  for (let r = 0; r < ROWS; r++)
+  for (let r = d.r0; r < d.r1; r++)
     for (let c = d.c0; c < d.c1; c++) {
       const i = pidx(c, r);
       if (consumed.has(i)) continue;
@@ -126,55 +119,45 @@ function genNeon(d) {
       } else BUILDINGS.push(faceRect(c, r, 1, 1));
     }
 }
-
-// Backstreets — small aligned 1×1 plots with 1×2 merges that cap streets into dead-ends. A maze.
 function genBackstreets(d) {
-  for (let r = 0; r < ROWS; r++)
+  for (let r = d.r0; r < d.r1; r++)
     for (let c = d.c0; c < d.c1; c++) {
       const i = pidx(c, r);
       if (consumed.has(i)) continue;
       if (isGarage(c, r)) { buildGarage(c, r); continue; }
       const hh = hash(i * 3 + 1);
       const canRight = c + 1 < d.c1 && !consumed.has(pidx(c + 1, r)) && !isGarage(c + 1, r);
-      const canDown  = r + 1 < ROWS && !consumed.has(pidx(c, r + 1)) && !isGarage(c, r + 1);
+      const canDown  = r + 1 < d.r1 && !consumed.has(pidx(c, r + 1)) && !isGarage(c, r + 1);
       if (hh < 0.16 && canRight) { BUILDINGS.push(faceRect(c, r, 2, 1)); consumed.add(pidx(c + 1, r)); }
       else if (hh < 0.32 && canDown) { BUILDINGS.push(faceRect(c, r, 1, 2)); consumed.add(pidx(c, r + 1)); }
       else BUILDINGS.push(faceRect(c, r, 1, 1));
     }
 }
-
-// Industrial — huge 3×3 superblocks with the occasional open factory yard (a skipped plot).
 function genIndustrial(d) {
-  for (let r = 0; r < ROWS; r += 3)
+  for (let r = d.r0; r < d.r1; r += 3)
     for (let c = d.c0; c < d.c1; c += 3) {
-      if (hash(pidx(c, r) * 5 + 3) < 0.15) continue; // open factory yard (drivable void)
-      BUILDINGS.push(faceRect(c, r, Math.min(3, d.c1 - c), Math.min(3, ROWS - r)));
+      if (hash(pidx(c, r) * 5 + 3) < 0.15) continue; // open factory yard
+      BUILDINGS.push(faceRect(c, r, Math.min(3, d.c1 - c), Math.min(3, d.r1 - r)));
     }
 }
-
-// Docks — portrait 2×3 warehouses with many large open loading yards. Open + exposed.
 function genDocks(d) {
-  for (let r = 0; r < ROWS; r += 3)
+  for (let r = d.r0; r < d.r1; r += 3)
     for (let c = d.c0; c < d.c1; c += 2) {
       if (hash(pidx(c, r) * 7 + 4) < 0.35) continue; // open loading yard
-      BUILDINGS.push(faceRect(c, r, Math.min(2, d.c1 - c), Math.min(3, ROWS - r)));
+      BUILDINGS.push(faceRect(c, r, Math.min(2, d.c1 - c), Math.min(3, d.r1 - r)));
     }
 }
 
-// --- Parking garage builder ---
-// Replaces a plot's building with a HOLLOW enclosure: solid walls on three sides plus two short
-// segments flanking a DOOR gap on the road-facing (south) side. Walls join losRects + the wall
-// group in GameScene (so they block sight + movement like any building); the hide LOGIC lives in
-// GameScene. Kept flush to the plot.
+// --- Parking garage builder --- (see previous notes: hollow enclosure, door faces south).
 function buildGarage(c, r) {
   const x = plotX(c), y = plotY(r), w = BLOCK, h = BLOCK;
   const doorX = x + (w - G_DOOR) / 2;
   const walls = [
-    { x, y, w, h: G_WALL },                                                    // north (back)
-    { x, y, w: G_WALL, h },                                                     // west
-    { x: x + w - G_WALL, y, w: G_WALL, h },                                     // east
-    { x, y: y + h - G_WALL, w: (w - G_DOOR) / 2, h: G_WALL },                   // south-left of door
-    { x: doorX + G_DOOR, y: y + h - G_WALL, w: (w - G_DOOR) / 2, h: G_WALL },   // south-right of door
+    { x, y, w, h: G_WALL },
+    { x, y, w: G_WALL, h },
+    { x: x + w - G_WALL, y, w: G_WALL, h },
+    { x, y: y + h - G_WALL, w: (w - G_DOOR) / 2, h: G_WALL },
+    { x: doorX + G_DOOR, y: y + h - G_WALL, w: (w - G_DOOR) / 2, h: G_WALL },
   ];
   GARAGES.push({
     x, y, w, h, walls,
@@ -184,13 +167,11 @@ function buildGarage(c, r) {
 }
 
 // --- Points of Interest (mission destinations) ---
-// Placed on district-seam roads (guaranteed open) and the garage for now — a real per-district
-// POI table comes later. Missions reference a POI by id, so coords can move freely.
 const { xs: NAV_XS, ys: NAV_YS } = navLines();
-const seamNode = (line, row) => ({ x: NAV_XS[line], y: NAV_YS[row] });
+const node = (line, row) => ({ x: NAV_XS[line], y: NAV_YS[row] });
 export const POIS = [
-  { id: 'drop',      name: 'The Drop',      ...seamNode(16, ROWS - 3), r: 80 }, // Financial/Neon seam
+  { id: 'drop',      name: 'The Drop',      ...node(financial.avenue, HB),         r: 80 },
   { id: 'safehouse', name: 'The Safehouse', x: plotX(GARAGE_C) + BLOCK / 2, y: plotY(GARAGE_R) + BLOCK / 2, r: 60 },
-  { id: 'docks',     name: 'The Docks',     ...seamNode(5, 3),         r: 80 }, // Industrial/Docks seam
+  { id: 'docks',     name: 'The Docks',     ...node(CB2, Math.round(HB / 2)),      r: 80 },
 ];
 export const poiById = (id) => POIS.find((p) => p.id === id) || null;

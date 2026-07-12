@@ -34,7 +34,7 @@ import {
   GRID_STEP,
 } from "../config.js";
 import { BUILDINGS, GARAGES, streetWidthV, streetWidthH } from "../world/city.js";
-import { GROUND_COLOR, drawBuilding, drawArterialLanes } from "../world/cityRender.js";
+import { GROUND_COLOR, drawBuildingsBatched } from "../world/cityRender.js";
 import { Mission, missionById } from "../systems/Mission.js";
 
 export class GameScene extends Phaser.Scene {
@@ -2472,6 +2472,11 @@ export class GameScene extends Phaser.Scene {
     agents.length = 0;
     agents.push({ v: this.car, R: this.playerCapR, hl: this.playerCapHalfLen, m: this.playerMass, player: true, preVx: this.car.vx, preVy: this.car.vy });
     for (const cop of this.cops) agents.push({ v: cop, R: cop.capR, hl: cop.capHalfLen, m: cop.mass || 1, cop, preVx: cop.vx, preVy: cop.vy });
+    // Inert props (parked/thrown/wreck cars) are scattered across the whole ~18k city; only those
+    // NEAR the player can possibly be in a collision this frame. Culling by distance keeps the
+    // agent list (and the O(n²) car↔car pass) bounded to the action instead of the map.
+    const pcx = this.car.sprite.x, pcy = this.car.sprite.y, CULL2 = 1600 * 1600;
+    const nearPlayer = (x, y) => (x - pcx) * (x - pcx) + (y - pcy) * (y - pcy) <= CULL2;
     // Roadblock cars: a per-frame shim exposing the Vehicle-like fields the resolver needs.
     // facing runs along the car's LENGTH (sprite rotation − π/2), so the capsule rotates with
     // the scripted spin. vx/vy seed from the Arcade body; the resolver writes back through it.
@@ -2485,6 +2490,7 @@ export class GameScene extends Phaser.Scene {
     // Parked cars — same solid capsule shim (they don't spin), so you + cops collide with them.
     for (const c of this.parkedCars) {
       const b = c.body;
+      if (!nearPlayer(b.x, b.y)) continue;
       agents.push({
         v: { sprite: b, facing: c.baseRot - Math.PI / 2, vx: b.body.velocity.x, vy: b.body.velocity.y },
         R: c.capR, hl: c.capHalfLen, m: c.mass, rbCar: c, preVx: b.body.velocity.x, preVy: b.body.velocity.y,
@@ -2495,6 +2501,7 @@ export class GameScene extends Phaser.Scene {
     for (const c of this.thrownCars) {
       if (c._pull) continue;
       const b = c.body;
+      if (!nearPlayer(b.x, b.y)) continue;
       agents.push({
         v: { sprite: b, facing: c.baseRot - Math.PI / 2, vx: b.body.velocity.x, vy: b.body.velocity.y },
         R: c.capR, hl: c.capHalfLen, m: c.mass, rbCar: c, preVx: b.body.velocity.x, preVy: b.body.velocity.y,
@@ -2505,6 +2512,7 @@ export class GameScene extends Phaser.Scene {
     // tween turned the sprite, not cop.facing. Low mass (wreckMass) → it shoves out of the way.
     for (const w of this.wrecks) {
       const s = w.sprite;
+      if (!nearPlayer(s.x, s.y)) continue;
       agents.push({
         v: { sprite: s, facing: s.rotation - Math.PI / 2 - (w.textureRotation || 0), vx: s.body.velocity.x, vy: s.body.velocity.y },
         R: w.capR, hl: w.capHalfLen, m: w.mass || this.wreckMass, wreck: true,
@@ -2555,26 +2563,39 @@ export class GameScene extends Phaser.Scene {
   }
 
   _capsuleVsWalls(a) {
-    const s = a.v.sprite, R = a.R;
-    for (const wall of this.losRects) {
-      if (s.x + a.reach < wall.x || s.x - a.reach > wall.right ||
-          s.y + a.reach < wall.y || s.y - a.reach > wall.bottom) continue;
-      for (let k = 0; k < 6; k += 2) {
-        const px = a.c[k], py = a.c[k + 1];
-        const qx = Phaser.Math.Clamp(px, wall.x, wall.right), qy = Phaser.Math.Clamp(py, wall.y, wall.bottom);
-        const dx = px - qx, dy = py - qy, dist2 = dx * dx + dy * dy;
-        let nx, ny, pen;
-        if (dist2 > 1e-4) { const dd = Math.sqrt(dist2); if (dd >= R) continue; nx = dx / dd; ny = dy / dd; pen = R - dd; }
-        else {
-          const dl = px - wall.x, dr = wall.right - px, dtp = py - wall.y, dbt = wall.bottom - py;
-          const m = Math.min(dl, dr, dtp, dbt);
-          if (m === dl) { nx = -1; ny = 0; pen = dl + R; } else if (m === dr) { nx = 1; ny = 0; pen = dr + R; }
-          else if (m === dtp) { nx = 0; ny = -1; pen = dtp + R; } else { nx = 0; ny = 1; pen = dbt + R; }
+    const s = a.v.sprite, R = a.R, reach = a.reach, S = this._wbSize;
+    // Only the buckets the agent's AABB overlaps — a handful of walls, not all ~800+. Stamp dedupes
+    // a wall that spans multiple buckets so it's resolved at most once per call.
+    const stamp = ++this._wallStamp;
+    const c0 = Math.max(0, Math.floor((s.x - reach) / S)), c1 = Math.min(this._wbCols - 1, Math.floor((s.x + reach) / S));
+    const r0 = Math.max(0, Math.floor((s.y - reach) / S)), r1 = Math.min(this._wbRows - 1, Math.floor((s.y + reach) / S));
+    for (let br = r0; br <= r1; br++) {
+      for (let bc = c0; bc <= c1; bc++) {
+        const bucket = this._wallBuckets[br * this._wbCols + bc];
+        for (const wi of bucket) {
+          if (this._wallSeen[wi] === stamp) continue;
+          this._wallSeen[wi] = stamp;
+          const wall = this.losRects[wi];
+          if (s.x + reach < wall.x || s.x - reach > wall.right ||
+              s.y + reach < wall.y || s.y - reach > wall.bottom) continue;
+          for (let k = 0; k < 6; k += 2) {
+            const px = a.c[k], py = a.c[k + 1];
+            const qx = Phaser.Math.Clamp(px, wall.x, wall.right), qy = Phaser.Math.Clamp(py, wall.y, wall.bottom);
+            const dx = px - qx, dy = py - qy, dist2 = dx * dx + dy * dy;
+            let nx, ny, pen;
+            if (dist2 > 1e-4) { const dd = Math.sqrt(dist2); if (dd >= R) continue; nx = dx / dd; ny = dy / dd; pen = R - dd; }
+            else {
+              const dl = px - wall.x, dr = wall.right - px, dtp = py - wall.y, dbt = wall.bottom - py;
+              const m = Math.min(dl, dr, dtp, dbt);
+              if (m === dl) { nx = -1; ny = 0; pen = dl + R; } else if (m === dr) { nx = 1; ny = 0; pen = dr + R; }
+              else if (m === dtp) { nx = 0; ny = -1; pen = dtp + R; } else { nx = 0; ny = 1; pen = dbt + R; }
+            }
+            const corr = Math.max(0, pen - this.capSlop) * this.capRelax; // slop + relaxation
+            if (corr > 0) this._capShift(a, nx * corr, ny * corr);
+            const vn = a.v.vx * nx + a.v.vy * ny;
+            if (vn < 0) { a.v.vx -= vn * nx; a.v.vy -= vn * ny; a.v.sprite.body.velocity.set(a.v.vx, a.v.vy); }
+          }
         }
-        const corr = Math.max(0, pen - this.capSlop) * this.capRelax; // slop + relaxation
-        if (corr > 0) this._capShift(a, nx * corr, ny * corr);
-        const vn = a.v.vx * nx + a.v.vy * ny;
-        if (vn < 0) { a.v.vx -= vn * nx; a.v.vy -= vn * ny; a.v.sprite.body.velocity.set(a.v.vx, a.v.vy); }
       }
     }
   }
@@ -3323,19 +3344,17 @@ bleed: { fastFrac: ${b.fastFrac}, fastRate: ${b.fastRate}, slowRate: ${b.slowRat
     this.walls = this.physics.add.staticGroup();
     this.losRects = []; // building footprints for line-of-sight checks
 
+    // Visuals: ALL buildings batched into one Graphics object (not ~3 GameObjects each) — the big
+    // map has 800+ buildings, and individual GameObjects tank the frame rate.
+    drawBuildingsBatched(this, this.worldLayer, BUILDINGS);
+
+    // Physics + LOS: an invisible static body (centre backstop for the Arcade collider) and a
+    // footprint rect per building.
     BUILDINGS.forEach((b) => {
       const { x, y, w, h } = b;
-      const cx = x + w / 2;
-      const cy = y + h / 2;
-
-      // Visual building — flat-shaded noir rendering (sidewalk halo + shadow + flat roof).
-      drawBuilding(this, this.worldLayer, b);
-
-      // Physics body — scale the 1px texture to building size
-      const body = this.walls.create(cx, cy, "_px");
+      const body = this.walls.create(x + w / 2, y + h / 2, "_px");
       body.setDisplaySize(w, h).refreshBody();
       body.setVisible(false);
-
       this.losRects.push(new Phaser.Geom.Rectangle(x, y, w, h));
     });
 
@@ -3367,8 +3386,30 @@ bleed: { fastFrac: ${b.fastFrac}, fastRate: ${b.fastRate}, slowRate: ${b.slowRat
 
     // Road lane dashes on every street (visual only)
     this._drawRoadMarkings();
-    // Arterial striping is disabled for the district map — its fixed WIDE_COL/WIDE_ROW belong to
-    // the old uniform grid. Boulevard striping will return keyed off district data.
+
+    // Spatial index of the wall rects (losRects) so the capsule resolver + LOS test only the
+    // buildings NEAR an agent instead of all ~800+ every frame. The map is a lattice, so a uniform
+    // bucket grid is the natural fit.
+    this._buildWallGrid();
+  }
+
+  // Bucket every wall rect into a uniform grid keyed by GRID_STEP-sized cells. A big wall spans
+  // several buckets (its index is pushed into each). Queries dedupe via a per-query stamp so a
+  // multi-bucket wall is only tested once.
+  _buildWallGrid() {
+    this._wbSize = GRID_STEP;
+    this._wbCols = Math.ceil(WORLD_WIDTH / this._wbSize) + 1;
+    this._wbRows = Math.ceil(WORLD_HEIGHT / this._wbSize) + 1;
+    this._wallBuckets = Array.from({ length: this._wbCols * this._wbRows }, () => []);
+    this._wallSeen = new Int32Array(this.losRects.length).fill(-1);
+    this._wallStamp = 0;
+    const S = this._wbSize;
+    for (let i = 0; i < this.losRects.length; i++) {
+      const w = this.losRects[i];
+      const c0 = Math.max(0, Math.floor(w.x / S)), c1 = Math.min(this._wbCols - 1, Math.floor(w.right / S));
+      const r0 = Math.max(0, Math.floor(w.y / S)), r1 = Math.min(this._wbRows - 1, Math.floor(w.bottom / S));
+      for (let r = r0; r <= r1; r++) for (let c = c0; c <= c1; c++) this._wallBuckets[r * this._wbCols + c].push(i);
+    }
   }
 
   _drawRoadMarkings() {

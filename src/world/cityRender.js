@@ -45,6 +45,29 @@ export function drawBuilding(scene, worldLayer, b) {
   );
 }
 
+// Batched draw of ALL buildings into a handful of Graphics objects instead of ~3 GameObjects
+// each. On the big district map that's ~800+ buildings; individual GameObjects (≈2500 quads with
+// their own transforms) tank the frame rate, while a Graphics object records everything into one
+// batched geometry. Buildings never overlap (roads separate them), so draw order across buildings
+// is irrelevant — we just emit sidewalk halo → drop shadow → flat roof per building. Same look as
+// drawBuilding(), just consolidated. (drawBuilding is kept for the odd one-off, e.g. a garage.)
+export function drawBuildingsBatched(scene, worldLayer, buildings) {
+  const pad = 8;
+  const g = scene.add.graphics().setDepth(2);
+  worldLayer.add(g);
+  for (const b of buildings) {
+    // sidewalk halo + curb
+    g.fillStyle(PALETTE.sidewalk, 1).fillRect(b.x - pad, b.y - pad, b.w + pad * 2, b.h + pad * 2);
+    g.lineStyle(2, PALETTE.curb, 0.8).strokeRect(b.x - pad, b.y - pad, b.w + pad * 2, b.h + pad * 2);
+    // drop shadow (upper-left light source → offset down-right)
+    g.fillStyle(PALETTE.shadow, 0.3).fillRect(b.x + 5, b.y + 5, b.w, b.h);
+    // flat roof
+    g.fillStyle(PALETTE.building, 1).fillRect(b.x, b.y, b.w, b.h);
+    g.lineStyle(1, PALETTE.roofHi, 0.8).strokeRect(b.x, b.y, b.w, b.h);
+  }
+  return g;
+}
+
 // Extra lane striping across the two wide arterials (the boulevard gap city.js already
 // generates is ~3x a normal road's width — this just paints enough lanes to make that width
 // legible: a solid median + two dashed lane dividers on each side).
