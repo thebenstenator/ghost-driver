@@ -34,7 +34,7 @@ import {
   GRID_STEP,
 } from "../config.js";
 import { BUILDINGS, GARAGES, streetWidthV, streetWidthH } from "../world/city.js";
-import { GROUND_COLOR, drawGroundDetail, drawBuildingsBatched, drawNeon } from "../world/cityRender.js";
+import { GROUND_COLOR, drawPuddles, drawBuildings, drawNeonInto } from "../world/cityRender.js";
 import { Mission, missionById } from "../systems/Mission.js";
 
 export class GameScene extends Phaser.Scene {
@@ -3354,14 +3354,8 @@ bleed: { fastFrac: ${b.fastFrac}, fastRate: ${b.fastRate}, slowRate: ${b.slowRat
     this.walls = this.physics.add.staticGroup();
     this.losRects = []; // building footprints for line-of-sight checks
 
-    // Visuals (all batched): wet-street puddles under the buildings, then ALL buildings in one
-    // Graphics object (material tint + rooftop detail) — the big map has 800+ buildings, so
-    // individual GameObjects would tank the frame rate.
-    drawGroundDetail(this, this.worldLayer);
-    drawBuildingsBatched(this, this.worldLayer, BUILDINGS);
-
     // Physics + LOS: an invisible static body (centre backstop for the Arcade collider) and a
-    // footprint rect per building.
+    // footprint rect per building. (Visuals are drawn per-chunk in _buildChunks below.)
     BUILDINGS.forEach((b) => {
       const { x, y, w, h } = b;
       const body = this.walls.create(x + w / 2, y + h / 2, "_px");
@@ -3398,14 +3392,51 @@ bleed: { fastFrac: ${b.fastFrac}, fastRate: ${b.fastRate}, slowRate: ${b.slowRat
 
     // Spatial index of the wall rects (losRects) so the capsule resolver + LOS test only the
     // buildings NEAR an agent instead of all ~800+ every frame. The map is a lattice, so a uniform
-    // bucket grid is the natural fit. Built BEFORE the markings, which query it to skip open ground.
+    // bucket grid is the natural fit. Built BEFORE the chunks, whose markings query it.
     this._buildWallGrid();
 
-    // Road lane dashes on every street (visual only)
-    this._drawRoadMarkings();
+    // Static city visuals, CHUNKED so only what's near the camera is drawn.
+    this._buildChunks();
+  }
 
-    // Emissive neon signage + rooftop beacons (ADD-blend layer; the camera Bloom post-FX blooms it).
-    drawNeon(this, this.worldLayer, BUILDINGS);
+  // Split the static art (puddles + road markings + buildings + emissive neon) into a grid of
+  // per-chunk Graphics, then show only the chunks near the camera each frame (_updateChunkVisibility).
+  // Phaser re-tessellates a Graphics every frame with no culling, so drawing the whole 18k×12k city
+  // as one object tanks the frame rate; per-chunk visibility bounds the per-frame work to the view.
+  _buildChunks() {
+    const C = 2400;
+    this._chSize = C;
+    this._chCols = Math.ceil(WORLD_WIDTH / C);
+    this._chRows = Math.ceil(WORLD_HEIGHT / C);
+    this._chunks = [];
+    for (let r = 0; r < this._chRows; r++) {
+      for (let c = 0; c < this._chCols; c++) {
+        const bounds = { x: c * C, y: r * C, right: (c + 1) * C, bottom: (r + 1) * C };
+        const under = this.add.graphics().setDepth(1); // puddles + road markings (under buildings)
+        const bld   = this.add.graphics().setDepth(2); // buildings
+        const neon  = this.add.graphics().setDepth(5).setBlendMode(Phaser.BlendModes.ADD);
+        this.worldLayer.add(under); this.worldLayer.add(bld); this.worldLayer.add(neon);
+        drawPuddles(under, bounds);
+        this._drawMarkings(under, bounds);
+        drawBuildings(bld, BUILDINGS, bounds);
+        drawNeonInto(neon, BUILDINGS, bounds);
+        this._chunks.push({ c, r, gfx: [under, bld, neon] });
+      }
+    }
+    this._updateChunkVisibility();
+  }
+
+  // Show only chunks overlapping the camera view (+1 chunk of margin so buildings straddling a
+  // chunk edge never pop). Cheap: a visibility flag per chunk.
+  _updateChunkVisibility() {
+    if (!this._chunks) return;
+    const v = this.cameras.main.worldView, C = this._chSize;
+    const c0 = Math.floor(v.x / C) - 1, c1 = Math.floor(v.right / C) + 1;
+    const r0 = Math.floor(v.y / C) - 1, r1 = Math.floor(v.bottom / C) + 1;
+    for (const ch of this._chunks) {
+      const vis = ch.c >= c0 && ch.c <= c1 && ch.r >= r0 && ch.r <= r1;
+      if (ch.vis !== vis) { ch.vis = vis; for (const g of ch.gfx) g.setVisible(vis); }
+    }
   }
 
   // Bucket every wall rect into a uniform grid keyed by GRID_STEP-sized cells. A big wall spans
@@ -3427,9 +3458,8 @@ bleed: { fastFrac: ${b.fastFrac}, fastRate: ${b.fastRate}, slowRate: ${b.slowRat
     }
   }
 
-  _drawRoadMarkings() {
-    const g = this.add.graphics().setDepth(1);
-    this.worldLayer.add(g);
+  // Draw the lane markings that fall in `bounds` into the passed (chunk) Graphics.
+  _drawMarkings(g, bounds) {
     g.lineStyle(2, 0xcccccc, 0.7);
 
     // Lane markings along the REAL drivable roads — one pass per NavGrid edge. Tying markings to
@@ -3453,6 +3483,9 @@ bleed: { fastFrac: ${b.fastFrac}, fastRate: ${b.fastRate}, slowRate: ${b.slowRat
       for (const b of nav.nbr[a]) {
         if (b < a) continue; // each edge once (adjacency is symmetric)
         const B = nav.ij(b), pb = nav.pos(b);
+        // Cull to this chunk by the edge midpoint (drawn once, by whichever chunk owns the midpoint).
+        const cmx = (pa.x + pb.x) / 2, cmy = (pa.y + pb.y) / 2;
+        if (cmx < bounds.x || cmx >= bounds.right || cmy < bounds.y || cmy >= bounds.bottom) continue;
         const horizontal = A.j === B.j;
         // Street width needs the position: streetWidthV/H resolve the district on each side of the
         // line at (line, row/col). (Passing only the line — the old 1-arg call — silently resolved
@@ -4911,6 +4944,9 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
   }
 
   update(_time, delta) {
+    // Show only the city chunks near the camera (cheap; runs even while frozen so the view is right).
+    this._updateChunkVisibility();
+
     // Frozen after a bust (R restarts) or while paused (P resumes) — both keys
     // are handled by their keydown listeners, so just hold here.
     if (this.busted || this.paused || this._inBriefing) {

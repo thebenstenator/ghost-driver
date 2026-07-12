@@ -31,26 +31,27 @@ const whiteMix = (hex, t) => toHex(((hex >> 16) & 255) + (255 - ((hex >> 16) & 2
   ((hex >> 8) & 255) + (255 - ((hex >> 8) & 255)) * t, (hex & 255) + (255 - (hex & 255)) * t);
 const hash = (n) => { const x = Math.sin(n * 127.1 + 311.7) * 43758.5453; return x - Math.floor(x); };
 const matOf = (b) => MAT[districtIdAt(b.x + b.w / 2, b.y + b.h / 2)] || MAT.backstreets;
+const inB = (x, y, b) => x >= b.x && x < b.right && y >= b.y && y < b.bottom;
 
-// Wet-street puddles (dark water + a faint neon reflection). Under the buildings, which cover any
-// that overlap. Low smoothness keeps the ellipse count cheap.
-export function drawGroundDetail(scene, worldLayer) {
-  const g = scene.add.graphics().setDepth(0.5);
-  worldLayer.add(g);
+// All of these draw INTO a passed Graphics, culled to `bounds` (a chunk rect {x,y,right,bottom}).
+// GameScene builds one set of Graphics per world chunk and only shows the chunks near the camera,
+// so the whole ~800-building city is never re-tessellated at once (see _buildChunks).
+
+// Wet-street puddles (dark water + a faint neon reflection). Low smoothness keeps them cheap.
+export function drawPuddles(g, bounds) {
   for (let i = 0; i < 380; i++) {
     const px = hash(i * 13 + 1) * WORLD_WIDTH, py = hash(i * 29 + 3) * WORLD_HEIGHT;
+    if (!inB(px, py, bounds)) continue;
     const rw = 16 + hash(i * 7) * 46, rh = 6 + hash(i * 11) * 16;
     g.fillStyle(0x0a0a0d, 0.6).fillEllipse(px, py, rw * 2, rh * 2, 10);
     g.fillStyle(NEON[Math.floor(hash(i * 5) * NEON.length)], 0.05).fillEllipse(px + rw * 0.2, py, rw * 1.4, rh, 10);
   }
-  return g;
 }
 
-// All buildings, batched: material tint + value jitter + height cues + rooftop detail.
-export function drawBuildingsBatched(scene, worldLayer, buildings) {
-  const g = scene.add.graphics().setDepth(2);
-  worldLayer.add(g);
+// Buildings whose CENTRE falls in bounds: material tint + value jitter + height cues + rooftop detail.
+export function drawBuildings(g, buildings, bounds) {
   for (const b of buildings) {
+    if (!inB(b.x + b.w / 2, b.y + b.h / 2, bounds)) continue;
     const mat = matOf(b);
     const j = (hash(b.x * 13 + b.y * 7) - 0.5) * 16; // per-building brightness jitter
     const roof = shade(mat.roof, j);
@@ -76,16 +77,16 @@ export function drawBuildingsBatched(scene, worldLayer, buildings) {
       if (hash(b.x + b.y * 3) > 0.72) g.fillStyle(shade(mat.roof, j - 26), 0.9).fillCircle(b.x + b.w * 0.7, b.y + b.h * 0.3, 9);
     }
   }
-  return g;
 }
 
-// Emissive layer: neon signage (bright tube + colour bloom) + red rooftop beacons, on an ADD blend
-// so light ACCUMULATES against the dark city. The camera Bloom post-FX then bleeds it outward.
-export function drawNeon(scene, worldLayer, buildings) {
-  const g = scene.add.graphics().setDepth(5).setBlendMode(Phaser.BlendModes.ADD);
-  worldLayer.add(g);
+// Emissive layer (draw into an ADD-blend Graphics): neon signage (bright tube + colour bloom) +
+// red rooftop beacons. ADD makes light ACCUMULATE against the dark city; the camera Bloom post-FX
+// then bleeds it outward. Culled to bounds by building centre.
+export function drawNeonInto(g, buildings, bounds) {
   for (const b of buildings) {
-    const dist = districtIdAt(b.x + b.w / 2, b.y + b.h / 2);
+    const cx = b.x + b.w / 2, cy = b.y + b.h / 2;
+    if (!inB(cx, cy, bounds)) continue;
+    const dist = districtIdAt(cx, cy);
     if (hash(b.x * 7 + b.y * 3) > (NEON_DENSITY[dist] ?? 0.15)) continue;
     const col = NEON[Math.floor(hash(b.x + b.y) * NEON.length)];
     const vert = hash(b.x * 3 + b.y) > 0.6;
@@ -98,9 +99,9 @@ export function drawNeon(scene, worldLayer, buildings) {
   }
   for (const b of buildings) {
     if (b.w < 90 || b.h < 90 || hash(b.x + b.y * 9) < 0.82) continue; // sparse rooftop beacons
+    if (!inB(b.x + b.w / 2, b.y + b.h / 2, bounds)) continue;
     const x = b.x + b.w * 0.3, y = b.y + b.h * 0.6;
     g.fillStyle(0xff3c3c, 0.5).fillCircle(x, y, 9);
     g.fillStyle(0xffc8c8, 1).fillCircle(x, y, 2.2);
   }
-  return g;
 }
