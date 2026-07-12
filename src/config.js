@@ -8,7 +8,7 @@ export const GAME_HEIGHT = 720;
 // facades), and the edge-aware NavGrid derives drivable connectivity from the result. So a
 // "big Financial block" and a "small Backstreets block" both live on the same lattice; the
 // difference is how many plots each building spans and which streets are capped.
-export const GRID_COLS = 22;   // fine plot columns (spans multiple districts)
+export const GRID_COLS = 26;   // fine plot columns (spans 5 district bands)
 export const GRID_ROWS = 16;   // fine plot rows
 export const BLOCK     = 200;  // one 1×1 plot footprint
 export const ROAD      = 112;  // street width between plots
