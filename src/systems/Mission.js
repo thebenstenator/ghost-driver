@@ -28,14 +28,15 @@ export const MISSIONS = [
     id: 'm1',
     name: 'THE SHAKEDOWN',
     briefing:
-      'A package is waiting across town — but the heat is already on your tail.\n' +
-      'Shake them, then sit on the Drop until it is secure (stay clear of their\n' +
-      'headlights). The moment you grab it they will know where you are — lose\n' +
-      'them again and make the Safehouse to call it a night.',
+      'A package is waiting out on the docks — clear across the bay — and the heat\n' +
+      'is already on your tail. Shake them, then sit on the Drop until it is secure\n' +
+      '(stay clear of their headlights). The moment you grab it they will know where\n' +
+      'you are — lose them again and make the safehouse in the Neon Mile, all the way\n' +
+      'back across town, to call it a night.',
     dropPoiId: 'drop',
-    safehousePoiId: 'safehouse',
+    safehousePoiId: 'safe_neon',
     dropDwell: 5, // seconds you must hold the Drop, uninterrupted and unseen, to secure it
-    reward: 2500,
+    reward: 3500,
   },
 ];
 export const missionById = (id) => MISSIONS.find((m) => m.id === id) || null;

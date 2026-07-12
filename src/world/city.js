@@ -66,8 +66,18 @@ for (const d of DISTRICTS) {
 financial.avenue = CB1 + (((CB2 - CB1) >> 1) | 1); // an odd-ish central Financial line = a through-road
 financial.vAlleys.add(financial.avenue + 4);       // one narrow Financial service lane
 
-const GARAGE_C = CB2 + 3, GARAGE_R = HB + 3; // one garage in the Backstreets
-const isGarage = (c, r) => c === GARAGE_C && r === GARAGE_R;
+// One garage per district (a hide spot + a mission safehouse). Each replaces a plot with a hollow
+// enclosure; in the big-block districts the generator skips the whole containing superblock, so the
+// garage sits in a small open forecourt (a natural approach).
+const GARAGE_PLOTS = [
+  { id: 'safe_industrial',  name: 'Ironworks Garage',   c: 6,  r: 6  },
+  { id: 'safe_neon',        name: 'Neon Mile Garage',   c: 5,  r: 28 },
+  { id: 'safe_financial',   name: 'Exchange Garage',    c: 21, r: 10 },
+  { id: 'safe_docks',       name: 'Dockside Garage',    c: 42, r: 6  },
+  { id: 'safe_backstreets', name: 'Backstreet Garage',  c: 44, r: 25 },
+];
+const isGaragePlot  = (c, r) => GARAGE_PLOTS.some((g) => g.c === c && g.r === r);
+const spanHasGarage = (c, r, cs, rs) => GARAGE_PLOTS.some((g) => g.c >= c && g.c < c + cs && g.r >= r && g.r < r + rs);
 const G_WALL = 16, G_DOOR = 96;
 const consumed = new Set();
 
@@ -102,19 +112,23 @@ function faceRect(c, r, cspan = 1, rspan = 1) {
 export const BUILDINGS = [];
 export const GARAGES = [];
 for (const d of DISTRICTS) d.gen(d);
+for (const gp of GARAGE_PLOTS) buildGarage(gp.c, gp.r); // after generation (which left the plots clear)
 
 // ── District generators (each stays within its region [c0,c1) × [r0,r1)) ───────────────────
 function genFinancial(d) {
   for (let r = d.r0; r < d.r1; r += 2)
-    for (let c = d.c0; c < d.c1; c += 2)
-      BUILDINGS.push(faceRect(c, r, Math.min(2, d.c1 - c), Math.min(2, d.r1 - r)));
+    for (let c = d.c0; c < d.c1; c += 2) {
+      const cs = Math.min(2, d.c1 - c), rs = Math.min(2, d.r1 - r);
+      if (spanHasGarage(c, r, cs, rs)) continue; // leave a forecourt for the garage
+      BUILDINGS.push(faceRect(c, r, cs, rs));
+    }
 }
 function genNeon(d) {
   for (let r = d.r0; r < d.r1; r++)
     for (let c = d.c0; c < d.c1; c++) {
       const i = pidx(c, r);
-      if (consumed.has(i)) continue;
-      if (hash(i * 3 + 2) < 0.25 && c + 1 < d.c1 && !consumed.has(pidx(c + 1, r))) {
+      if (consumed.has(i) || isGaragePlot(c, r)) continue;
+      if (hash(i * 3 + 2) < 0.25 && c + 1 < d.c1 && !consumed.has(pidx(c + 1, r)) && !isGaragePlot(c + 1, r)) {
         BUILDINGS.push(faceRect(c, r, 2, 1)); consumed.add(pidx(c + 1, r));
       } else BUILDINGS.push(faceRect(c, r, 1, 1));
     }
@@ -123,11 +137,10 @@ function genBackstreets(d) {
   for (let r = d.r0; r < d.r1; r++)
     for (let c = d.c0; c < d.c1; c++) {
       const i = pidx(c, r);
-      if (consumed.has(i)) continue;
-      if (isGarage(c, r)) { buildGarage(c, r); continue; }
+      if (consumed.has(i) || isGaragePlot(c, r)) continue;
       const hh = hash(i * 3 + 1);
-      const canRight = c + 1 < d.c1 && !consumed.has(pidx(c + 1, r)) && !isGarage(c + 1, r);
-      const canDown  = r + 1 < d.r1 && !consumed.has(pidx(c, r + 1)) && !isGarage(c, r + 1);
+      const canRight = c + 1 < d.c1 && !consumed.has(pidx(c + 1, r)) && !isGaragePlot(c + 1, r);
+      const canDown  = r + 1 < d.r1 && !consumed.has(pidx(c, r + 1)) && !isGaragePlot(c, r + 1);
       if (hh < 0.16 && canRight) { BUILDINGS.push(faceRect(c, r, 2, 1)); consumed.add(pidx(c + 1, r)); }
       else if (hh < 0.32 && canDown) { BUILDINGS.push(faceRect(c, r, 1, 2)); consumed.add(pidx(c, r + 1)); }
       else BUILDINGS.push(faceRect(c, r, 1, 1));
@@ -136,15 +149,19 @@ function genBackstreets(d) {
 function genIndustrial(d) {
   for (let r = d.r0; r < d.r1; r += 3)
     for (let c = d.c0; c < d.c1; c += 3) {
+      const cs = Math.min(3, d.c1 - c), rs = Math.min(3, d.r1 - r);
+      if (spanHasGarage(c, r, cs, rs)) continue;
       if (hash(pidx(c, r) * 5 + 3) < 0.15) continue; // open factory yard
-      BUILDINGS.push(faceRect(c, r, Math.min(3, d.c1 - c), Math.min(3, d.r1 - r)));
+      BUILDINGS.push(faceRect(c, r, cs, rs));
     }
 }
 function genDocks(d) {
   for (let r = d.r0; r < d.r1; r += 3)
     for (let c = d.c0; c < d.c1; c += 2) {
+      const cs = Math.min(2, d.c1 - c), rs = Math.min(3, d.r1 - r);
+      if (spanHasGarage(c, r, cs, rs)) continue;
       if (hash(pidx(c, r) * 7 + 4) < 0.35) continue; // open loading yard
-      BUILDINGS.push(faceRect(c, r, Math.min(2, d.c1 - c), Math.min(3, d.r1 - r)));
+      BUILDINGS.push(faceRect(c, r, cs, rs));
     }
 }
 
@@ -166,12 +183,22 @@ function buildGarage(c, r) {
   });
 }
 
+// --- Safehouses (one per district) ---
+// Each garage doubles as a safehouse POI (centre of its plot). GameScene renders the garages;
+// missions can target any of these. (GameScene may snap OPEN objectives to a road node, but a
+// safehouse is entered through its garage door, so its POI stays at the interior centre.)
+export const SAFEHOUSES = GARAGE_PLOTS.map((g) => ({
+  id: g.id, name: g.name, x: plotX(g.c) + BLOCK / 2, y: plotY(g.r) + BLOCK / 2, r: 60,
+}));
+
 // --- Points of Interest (mission destinations) ---
+// The Drop sits far out in the Docks (NE); the spawn is central (Financial), and Mission 1's
+// safehouse is in the Neon Mile (SW) — so the two legs cross most of the city. GameScene snaps the
+// Drop to the nearest road node so it's always reachable.
 const { xs: NAV_XS, ys: NAV_YS } = navLines();
 const node = (line, row) => ({ x: NAV_XS[line], y: NAV_YS[row] });
 export const POIS = [
-  { id: 'drop',      name: 'The Drop',      ...node(financial.avenue, HB),         r: 80 },
-  { id: 'safehouse', name: 'The Safehouse', x: plotX(GARAGE_C) + BLOCK / 2, y: plotY(GARAGE_R) + BLOCK / 2, r: 60 },
-  { id: 'docks',     name: 'The Docks',     ...node(CB2, Math.round(HB / 2)),      r: 80 },
+  { id: 'drop', name: 'The Drop', ...node(CB2 + 12, 4), r: 80 },
+  ...SAFEHOUSES,
 ];
 export const poiById = (id) => POIS.find((p) => p.id === id) || null;

@@ -621,6 +621,11 @@ export class GameScene extends Phaser.Scene {
     // _setupHud so it joins the HUD camera. All gated on this.mission — null for non-mission modes.
     this.mission = this.missionId ? new Mission(missionById(this.missionId)) : null;
     if (this.mission) {
+      // Snap the open-air Drop to the nearest road node so it's always drivable-to (its nominal
+      // spot can land inside a Docks warehouse). The safehouse is entered via its garage door, so
+      // it stays put.
+      const d = this.mission.drop;
+      if (d) { const p = this.navGrid.pos(this.navGrid.nearestNode(d.x, d.y)); d.x = p.x; d.y = p.y; }
       this.poiGfx = this.add.graphics().setDepth(6.5);
       this.worldLayer.add(this.poiGfx);
     }
