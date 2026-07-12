@@ -115,6 +115,20 @@ export class MenuScene extends Phaser.Scene {
     mt.on("pointerout", () => mt.setAlpha(0.75));
     mt.on("pointerdown", () => this.scene.start("MapTestScene"));
 
+    // --- Dev-only: edge-aware nav visualiser, above the map viewer. ---
+    const nt = this.add
+      .text(GAME_WIDTH - 16, GAME_HEIGHT - 66, "🧭 nav test →", {
+        fontFamily: NOIR.uiFont,
+        fontSize: "15px",
+        color: NOIR.amber,
+      })
+      .setOrigin(1, 0.5)
+      .setAlpha(0.75)
+      .setInteractive({ useHandCursor: true });
+    nt.on("pointerover", () => nt.setAlpha(1));
+    nt.on("pointerout", () => nt.setAlpha(0.75));
+    nt.on("pointerdown", () => this.scene.start("NavTestScene"));
+
     // --- Dev mode toggle (bottom-left corner) ---
     // Off by default. When on, the chase shows tuning panels + AI overlays; when off,
     // playtesters get a clean screen. Persisted, so it survives restarts.
@@ -134,6 +148,7 @@ export class MenuScene extends Phaser.Scene {
     renderDev();
     tb.setVisible(this._devOn); // testbed entry only when dev mode is on
     mt.setVisible(this._devOn); // map viewer likewise
+    nt.setVisible(this._devOn); // nav visualiser likewise
     devBox.on("pointerover", () => renderDev(true));
     devBox.on("pointerout", () => renderDev(false));
     devBox.on("pointerdown", () => {
@@ -142,6 +157,7 @@ export class MenuScene extends Phaser.Scene {
       renderDev(true);
       tb.setVisible(this._devOn);
       mt.setVisible(this._devOn);
+      nt.setVisible(this._devOn);
     });
 
     // --- Keyboard shortcuts ---
