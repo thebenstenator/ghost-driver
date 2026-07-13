@@ -688,11 +688,8 @@ export class GameScene extends Phaser.Scene {
       hud.push(this.objectiveText, this.beaconGfx, this.briefingText, this.resultText);
     this.cameras.main.ignore(hud); // world cam skips HUD
     this.uiCamera.ignore(this.worldLayer); // UI cam skips the world (and its future children)
-
-    // Bloom the WORLD camera only (not the HUD, which is on the UI cam): the dark noir city barely
-    // blooms, but the emissive neon / beacons / headlights bleed light outward. WebGL-only — guard
-    // for the Canvas fallback (no post-FX pipeline there).
-    if (this.cameras.main.postFX) this.cameras.main.postFX.addBloom(0xffffff, 1, 1, 1, 1.1);
+    // (No camera Bloom post-FX: it fogged the whole scene AND cost a full-screen multi-pass every
+    // frame. The neon's own ADD-blend glow carries the emissive look without either downside.)
 
     // Tear down the DOM tuning panels when the scene restarts / returns to menu,
     // otherwise they stack up duplicates on every R / menu cycle.

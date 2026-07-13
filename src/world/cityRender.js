@@ -93,9 +93,12 @@ export function drawNeonInto(g, buildings, bounds) {
     const len = 16 + hash(b.x + b.y * 5) * 26, th = 4;
     const sx = b.x + b.w * (0.18 + hash(b.x) * 0.64), sy = b.y + b.h - 4;
     const w = vert ? th : len, h = vert ? len : th, x = sx - w / 2, y = sy - h;
-    g.fillStyle(col, 0.22).fillRect(x - 10, y - 10, w + 20, h + 20); // wide soft bloom
-    g.fillStyle(col, 0.5).fillRect(x - 4, y - 4, w + 8, h + 8);       // tight bloom
-    g.fillStyle(whiteMix(col, 0.7), 1).fillRect(x, y, w, h);          // hot near-white tube
+    // Layered ADD glow (a faked gaussian falloff) → a soft emissive bloom without a full-screen
+    // post-FX pass. Widest+faintest first, up to the hot near-white tube.
+    g.fillStyle(col, 0.10).fillRect(x - 22, y - 22, w + 44, h + 44);
+    g.fillStyle(col, 0.18).fillRect(x - 11, y - 11, w + 22, h + 22);
+    g.fillStyle(col, 0.42).fillRect(x - 4, y - 4, w + 8, h + 8);
+    g.fillStyle(whiteMix(col, 0.7), 1).fillRect(x, y, w, h); // hot near-white tube
   }
   for (const b of buildings) {
     if (b.w < 90 || b.h < 90 || hash(b.x + b.y * 9) < 0.82) continue; // sparse rooftop beacons
