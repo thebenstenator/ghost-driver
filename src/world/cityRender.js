@@ -39,12 +39,11 @@ const inB = (x, y, b) => x >= b.x && x < b.right && y >= b.y && y < b.bottom;
 
 // Wet-street puddles (dark water + a faint neon reflection). Low smoothness keeps them cheap.
 export function drawPuddles(g, bounds) {
-  for (let i = 0; i < 380; i++) {
+  for (let i = 0; i < 170; i++) { // fewer, and just the dark water (the translucent reflection was overdraw)
     const px = hash(i * 13 + 1) * WORLD_WIDTH, py = hash(i * 29 + 3) * WORLD_HEIGHT;
     if (!inB(px, py, bounds)) continue;
     const rw = 16 + hash(i * 7) * 46, rh = 6 + hash(i * 11) * 16;
     g.fillStyle(0x0a0a0d, 0.6).fillEllipse(px, py, rw * 2, rh * 2, 10);
-    g.fillStyle(NEON[Math.floor(hash(i * 5) * NEON.length)], 0.05).fillEllipse(px + rw * 0.2, py, rw * 1.4, rh, 10);
   }
 }
 
@@ -56,14 +55,13 @@ export function drawBuildings(g, buildings, bounds) {
     const j = (hash(b.x * 13 + b.y * 7) - 0.5) * 16; // per-building brightness jitter
     const roof = shade(mat.roof, j);
 
-    g.fillStyle(0x000000, 0.38).fillRect(b.x + 6, b.y + 7, b.w, b.h);        // drop shadow (down-right)
+    // (No drop shadow: the old full-building-size translucent one was drawn UNDER the opaque
+    // sidewalk halo → fully covered, pure hidden overdraw. Separation comes from the halo + the lit
+    // edges + parapet.)
     g.fillStyle(arrHex(mat.walk), 1).fillRect(b.x - 8, b.y - 8, b.w + 16, b.h + 16); // sidewalk halo
     g.fillStyle(roof, 1).fillRect(b.x, b.y, b.w, b.h);                        // roof
-    // Height cues — lit top/left, shaded bottom/right.
-    g.fillStyle(shade(mat.roof, j + 20), 0.85).fillRect(b.x, b.y, b.w, 3);
-    g.fillStyle(shade(mat.roof, j + 12), 0.7).fillRect(b.x, b.y, 3, b.h);
-    g.fillStyle(shade(mat.roof, j - 18), 0.7).fillRect(b.x, b.y + b.h - 3, b.w, 3);
-    g.fillStyle(shade(mat.roof, j - 12), 0.7).fillRect(b.x + b.w - 3, b.y, 3, b.h);
+    g.fillStyle(shade(mat.roof, j + 20), 0.85).fillRect(b.x, b.y, b.w, 3);    // lit top edge
+    g.fillStyle(shade(mat.roof, j + 12), 0.7).fillRect(b.x, b.y, 3, b.h);     // lit left edge
     // Parapet + rooftop fixtures (only where there's room).
     if (b.w > 55 && b.h > 55) {
       g.lineStyle(1.5, shade(mat.roof, j - 12), 0.6).strokeRect(b.x + 9, b.y + 9, b.w - 18, b.h - 18);
@@ -93,11 +91,9 @@ export function drawNeonInto(g, buildings, bounds) {
     const len = 16 + hash(b.x + b.y * 5) * 26, th = 4;
     const sx = b.x + b.w * (0.18 + hash(b.x) * 0.64), sy = b.y + b.h - 4;
     const w = vert ? th : len, h = vert ? len : th, x = sx - w / 2, y = sy - h;
-    // Layered ADD glow (a faked gaussian falloff) → a soft emissive bloom without a full-screen
-    // post-FX pass. Widest+faintest first, up to the hot near-white tube.
-    g.fillStyle(col, 0.10).fillRect(x - 22, y - 22, w + 44, h + 44);
-    g.fillStyle(col, 0.18).fillRect(x - 11, y - 11, w + 22, h + 22);
-    g.fillStyle(col, 0.42).fillRect(x - 4, y - 4, w + 8, h + 8);
+    // One soft ADD glow + a hot near-white core. (Was 3 stacked glow rects — the widest translucent
+    // fills are the priciest thing on an iGPU, and one reads nearly the same.)
+    g.fillStyle(col, 0.28).fillRect(x - 12, y - 12, w + 24, h + 24);
     g.fillStyle(whiteMix(col, 0.7), 1).fillRect(x, y, w, h); // hot near-white tube
   }
   for (const b of buildings) {

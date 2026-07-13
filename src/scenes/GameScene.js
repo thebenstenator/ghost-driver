@@ -3527,7 +3527,7 @@ bleed: { fastFrac: ${b.fastFrac}, fastRate: ${b.fastRate}, slowRate: ${b.slowRat
   // width, perpendicular to travel. A 2-lane road → one centre line; 3-lane → two; an alley
   // (1 lane) → none.
   _laneMarkings(g, pa, pb, width, insetA, insetB) {
-    const lanes = Math.max(1, Math.min(6, Math.round(width / 56)));
+    const lanes = Math.max(1, Math.min(3, Math.round(width / 56))); // cap at 2 dividers (boulevards had 5 → many dash segments)
     if (lanes < 2) return;
     const dx = pb.x - pa.x, dy = pb.y - pa.y, len = Math.hypot(dx, dy) || 1;
     const nx = -dy / len, ny = dx / len; // unit perpendicular
