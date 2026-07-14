@@ -11,9 +11,15 @@ export const RAZORBACK = {
   bodySize:      26,   // AABB backstop, slightly narrower
 
   // --- Capsule collider (scene-level; read by GameScene via playerCapR/capHalfLen/mass) ---
-  capR:      11,  // wider car
-  capHalfLen: 10, // shorter body
+  capR:      8,   // baked by user
+  capHalfLen: 8,  // baked by user
   mass:      1.2, // Mass 1/5 — lightest; cops push it around more easily
+
+  // --- Light anchors (overrides sprite-dim fallback in CarLights) ---
+  // The razorback source is 1024×1536 with canvas padding around the car body, so the
+  // sprite bounds are larger than the visible silhouette. Tune these live via the car panel.
+  lightHalfLen: 18,  // effective half-length for tail/headlight placement (px)
+  lightHalfWid:  9,  // effective half-width for taillight lateral placement (px)
 
   // --- Engine ---
   maxSpeed:        780,  // Speed 5/5 — clearly faster than prowler (600), room above for Spectre

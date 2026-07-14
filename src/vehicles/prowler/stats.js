@@ -42,4 +42,11 @@ export const PROWLER = {
   entryKick:        0.45,   // radians snapped into drift on handbrake press
   entryKickDuration:  1.0,  // seconds for the cubic ease-out to complete
   entryKickCooldown:  1.0,  // seconds before another kick can fire
+
+  // --- Light anchors ---
+  // prowler.png fills its canvas (65×128 → halved → displayed 30×59), so sprite dims are
+  // a correct anchor. Baked explicitly so the car panel sliders have a concrete value.
+  // These reproduce the old sprite-dimension fallback exactly: (59/2)=29.5, (30/2)=15.
+  lightHalfLen: 29.5,
+  lightHalfWid: 15,
 };

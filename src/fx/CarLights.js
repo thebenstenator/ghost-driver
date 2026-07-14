@@ -64,33 +64,32 @@ export function ensureGlowTexture(scene) {
   }
 }
 
-// Light component templates per car kind. len/wid are on-screen px; circular lights set
-// len == wid. `beam` lights use the cone texture (emitter at the local fx,sx point, fanning
-// forward), so `len` = cone length and `wid` = cone far-end spread; others stay round.
-// `alpha` overrides the per-type default. Headlights are cool, wide and faint (the cone's
-// own gradient supplies the falloff); brake lamps are small and bright-on-brake.
-function componentsFor(kind, v) {
-  const halfLen = (v.sprite.displayHeight || 60) / 2;
-  const halfWid = (v.sprite.displayWidth || 32) / 2;
+// Light component templates per car kind. Positions are expressed as fractions of the
+// vehicle's effective half-dimensions (fxFrac × halfLen, sxFrac × halfWid) so they adapt
+// to any car size. sxFixed is an absolute pixel offset added on top of sxFrac (used for
+// headlights whose spread is in fixed px, not proportional to body width).
+// halfLen/halfWid are recomputed each frame from v.lightHalfLen / v.lightHalfWid — set
+// those on the vehicle stats to override the default sprite-dimension fallback.
+function componentsFor(kind) {
   if (kind === 'cop') {
     return [
       // Emergency bar — two bloomy blobs at the roof, double-blinking out of phase.
-      { type: 'flashRed',  fx: halfLen * 0.05, sx: -6, len: 34, wid: 34, color: 0xff1530 },
-      { type: 'flashBlue', fx: halfLen * 0.05, sx:  6, len: 34, wid: 34, color: 0x1f63ff },
-      // Cool, wide headlight cones with distance falloff (baked: bright 1.75, len 1.5, spread 1.25).
-      { type: 'head', fx: halfLen * 0.6, sx: -7, len: 150, wid: 105, color: 0xcfe0ff, alpha: 0.7, beam: true },
-      { type: 'head', fx: halfLen * 0.6, sx:  7, len: 150, wid: 105, color: 0xcfe0ff, alpha: 0.7, beam: true },
+      { type: 'flashRed',  fxFrac:  0.05, sxFrac: 0, sxFixed: -6, len: 34,  wid: 34,  color: 0xff1530 },
+      { type: 'flashBlue', fxFrac:  0.05, sxFrac: 0, sxFixed:  6, len: 34,  wid: 34,  color: 0x1f63ff },
+      // Cool, wide headlight cones (baked bright 1.75, len 1.5, spread 1.25).
+      { type: 'head', fxFrac:  0.6, sxFrac: 0, sxFixed: -7, len: 150, wid: 105, color: 0xcfe0ff, alpha: 0.7,  beam: true },
+      { type: 'head', fxFrac:  0.6, sxFrac: 0, sxFixed:  7, len: 150, wid: 105, color: 0xcfe0ff, alpha: 0.7,  beam: true },
       // Red tail lamps (−30% size).
-      { type: 'tail', fx: -halfLen * 0.9, sx: -halfWid * 0.55, len: 10.5, wid: 10.5, color: 0xff2a2a },
-      { type: 'tail', fx: -halfLen * 0.9, sx:  halfWid * 0.55, len: 10.5, wid: 10.5, color: 0xff2a2a },
+      { type: 'tail', fxFrac: -0.9, sxFrac: -0.55, sxFixed: 0, len: 10.5, wid: 10.5, color: 0xff2a2a },
+      { type: 'tail', fxFrac: -0.9, sxFrac:  0.55, sxFixed: 0, len: 10.5, wid: 10.5, color: 0xff2a2a },
     ];
   }
   // player (baked: bright 1.75, len 1.5, spread 1.25)
   return [
-    { type: 'head', fx: halfLen * 0.6, sx: -7, len: 172, wid: 119, color: 0xcfe0ff, alpha: 0.74, beam: true },
-    { type: 'head', fx: halfLen * 0.6, sx:  7, len: 172, wid: 119, color: 0xcfe0ff, alpha: 0.74, beam: true },
-    { type: 'tail', fx: -halfLen * 0.9, sx: -halfWid * 0.55, len: 11.2, wid: 11.2, color: 0xff2010 },
-    { type: 'tail', fx: -halfLen * 0.9, sx:  halfWid * 0.55, len: 11.2, wid: 11.2, color: 0xff2010 },
+    { type: 'head', fxFrac:  0.6, sxFrac: 0, sxFixed: -7, len: 172, wid: 119, color: 0xcfe0ff, alpha: 0.74, beam: true },
+    { type: 'head', fxFrac:  0.6, sxFrac: 0, sxFixed:  7, len: 172, wid: 119, color: 0xcfe0ff, alpha: 0.74, beam: true },
+    { type: 'tail', fxFrac: -0.9, sxFrac: -0.55, sxFixed: 0, len: 11.2, wid: 11.2, color: 0xff2010 },
+    { type: 'tail', fxFrac: -0.9, sxFrac:  0.55, sxFixed: 0, len: 11.2, wid: 11.2, color: 0xff2010 },
   ];
 }
 
@@ -103,7 +102,7 @@ export class CarLights {
     this.v = vehicle;
     this.kind = kind;
     this.tuning = tuning || DEFAULT_TUNING;
-    this.lights = componentsFor(kind, vehicle);
+    this.lights = componentsFor(kind);
     const depth = (vehicle.sprite.depth || 10) + 1;
     for (const L of this.lights) {
       const spr = scene.add.image(vehicle.sprite.x, vehicle.sprite.y, L.beam ? CONE_KEY : GLOW_KEY)
@@ -135,11 +134,19 @@ export class CarLights {
     const redOn  = t < 0.12 || (t > 0.22 && t < 0.34);
     const blueOn = (t > 0.50 && t < 0.62) || (t > 0.72 && t < 0.84);
 
+    // Effective half-dimensions — overrideable per vehicle so art with canvas padding can be
+    // tuned precisely. v.lightHalfLen / v.lightHalfWid come from the vehicle stats file;
+    // null/undefined falls back to the sprite's displayed size (works for cops automatically).
+    const halfLen = v.lightHalfLen ?? (v.sprite.displayHeight || 60) / 2;
+    const halfWid = v.lightHalfWid ?? (v.sprite.displayWidth  || 32) / 2;
+
     const T = this.tuning;
     for (const L of this.lights) {
       const s = L.spr;
+      const fx = L.fxFrac * halfLen;
+      const sx = L.sxFrac * halfWid + L.sxFixed;
       // World position from the local (fx, sx) frame: forward (cf,sf), right (-sf,cf).
-      s.setPosition(cx + cf * L.fx - sf * L.sx, cy + sf * L.fx + cf * L.sx);
+      s.setPosition(cx + cf * fx - sf * sx, cy + sf * fx + cf * sx);
       if (L.beam) s.setRotation(f); // orient headlight beam along travel
 
       let alpha = 0, sx2 = L.len, sy2 = L.wid;

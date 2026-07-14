@@ -4337,7 +4337,10 @@ this.gripSpeedRef    = ${s.gripSpeedRef};
 this.gripHandbrake   = ${s.gripHandbrake};
 this.entryKick         = ${s.entryKick};
 this.entryKickDuration = ${s.entryKickDuration};
-this.entryKickCooldown = ${s.entryKickCooldown};`);
+this.entryKickCooldown = ${s.entryKickCooldown};
+// Light anchors (null = use sprite dims)
+this.lightHalfLen = ${s.lightHalfLen ?? null};
+this.lightHalfWid = ${s.lightHalfWid ?? null};`);
           },
         },
         "copyStats",
@@ -4346,8 +4349,14 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
 
     // Capsule collider (the green dev circles) — live size, watch the overlay update.
     const cap = gui.addFolder("Capsule collider");
-    cap.add(this, "playerCapR", 8, 40, 1).name("Radius (width)");
+    cap.add(this, "playerCapR", 1, 40, 1).name("Radius (width)");
     cap.add(this, "playerCapHalfLen", 0, 40, 1).name("Spine half-length");
+
+    // Light anchors — override the sprite-dimension fallback so cars with canvas padding
+    // get taillights/headlights that sit on the actual bodywork. Updated live each frame.
+    const la = gui.addFolder("Light anchors");
+    la.add(car, "lightHalfLen", 1, 40, 0.5).name("Half-length (fwd/rear)");
+    la.add(car, "lightHalfWid",  1, 30, 0.5).name("Half-width (lateral)");
 
     // Lights & Sound — light knobs multiply the baked values (read live each frame by
     // CarLights); sound knobs bind to GameAudio (engine/siren vols read live, master +
