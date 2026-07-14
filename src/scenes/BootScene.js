@@ -7,6 +7,7 @@ export class BootScene extends Phaser.Scene {
 
   preload() {
     this.load.image('player_car',     'sprites/vehicles/prowler.png');
+    this.load.image('razorback',      'sprites/vehicles/razorback.png');
     this.load.image('cop_patrol',      'sprites/vehicles/cop_patrol.png');
     this.load.image('cop_interceptor', 'sprites/vehicles/cop_interceptor.png');
     this.load.image('cop_heavy',       'sprites/vehicles/cop_heavy.png');
@@ -43,6 +44,9 @@ export class BootScene extends Phaser.Scene {
   async create() {
     this._softenVehicleTextures([
       'player_car', 'cop_patrol', 'cop_interceptor', 'cop_heavy',
+      // razorback source is 1024×1536 — scale to ~34×51 px (≈ display size) so the
+      // GPU does a gentle 1:1 sample instead of a 30× downscale that would shimmer.
+      { key: 'razorback', scale: 34 / 1024 },
     ]);
     await this._loadFonts();
     this.scene.start('MenuScene');
@@ -64,18 +68,22 @@ export class BootScene extends Phaser.Scene {
     }
   }
 
-  // Moiré fix: the vehicle PNGs are ~128px tall but render at ~59px, so the GPU does a ~2x run-time
-  // downscale with no mipmaps (the art is non-power-of-two, so WebGL can't auto-mipmap it) — which
-  // shimmers/moirés on the fine body lines as the car rotates. Bake ONE high-quality half-size copy up
-  // front (browser canvas downscaling does a proper filtered shrink), giving ~1 texel per screen pixel
-  // so the run-time sampling is gentle and the moiré clears. Display size is set explicitly on each
-  // sprite, so the on-screen size is unchanged; no visible detail is lost at this render size.
-  _softenVehicleTextures(keys) {
-    for (const key of keys) {
+  // Moiré fix: vehicle PNGs render at ~30–60 px but may have much larger sources, so the GPU does a
+  // large run-time downscale with no mipmaps (non-power-of-two textures can't auto-mipmap in WebGL)
+  // — which shimmers/moirés on fine body lines as the car rotates. Bake ONE high-quality downscaled
+  // copy upfront (browser canvas downscaling does a proper filtered shrink), giving ~1 texel per
+  // screen pixel so the run-time sample is gentle and the moiré clears. Display size is set explicitly
+  // on each sprite, so on-screen size is unchanged; no visible detail is lost at this render size.
+  //
+  // Each entry is either a texture key string (scale = 0.5, i.e. halve the source) or an object
+  // { key, scale } for sprites whose source is much larger than 2× the display size (e.g. razorback).
+  _softenVehicleTextures(entries) {
+    for (const entry of entries) {
+      const { key, scale = 0.5 } = typeof entry === 'string' ? { key: entry } : entry;
       if (!this.textures.exists(key)) continue;
       const img = this.textures.get(key).getSourceImage();
-      const w = Math.max(1, Math.round(img.width / 2));
-      const h = Math.max(1, Math.round(img.height / 2));
+      const w = Math.max(1, Math.round(img.width  * scale));
+      const h = Math.max(1, Math.round(img.height * scale));
       const cv = document.createElement('canvas');
       cv.width = w;
       cv.height = h;

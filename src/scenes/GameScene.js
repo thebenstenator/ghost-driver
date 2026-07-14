@@ -1,6 +1,7 @@
 import Phaser from "phaser";
 import GUI from "lil-gui";
 import { PlayerCar } from "../entities/PlayerCar.js";
+import { vehicleById } from "../vehicles/catalog.js";
 import { CopCar } from "../entities/CopCar.js";
 import { NavGrid } from "../ai/NavGrid.js";
 import { segmentClear } from "../ai/lineOfSight.js";
@@ -58,6 +59,17 @@ export class GameScene extends Phaser.Scene {
     } catch (e) {
       /* ignore */
     }
+  }
+
+  // Selected playable vehicle — persisted so the garage choice carries into every run.
+  static VEHICLE_KEY = "gd_vehicle";
+  static getVehicle() {
+    try { return localStorage.getItem(GameScene.VEHICLE_KEY) || "prowler"; }
+    catch (e) { return "prowler"; }
+  }
+  static setVehicle(id) {
+    try { localStorage.setItem(GameScene.VEHICLE_KEY, id); }
+    catch (e) { /* ignore */ }
   }
 
   // Player gadget loadout (≤3 gadget ids, in slot order). Persisted so the menu choice sticks.
@@ -192,7 +204,8 @@ export class GameScene extends Phaser.Scene {
     this.navGrid = new NavGrid();
     this._buildWorld();
     const spawn = this.navGrid.pos(this.navGrid.nearestNode(WORLD_WIDTH / 2, WORLD_HEIGHT / 2));
-    this.car = new PlayerCar(this, spawn.x, spawn.y);
+    this._vehicleStats = vehicleById(GameScene.getVehicle()).stats;
+    this.car = new PlayerCar(this, spawn.x, spawn.y, this._vehicleStats);
     this.worldLayer.add(this.car.sprite);
     // Shared light-tuning multipliers (brightness/size), adjusted live in the car panel.
     this.lightTuning = { head: 1, headLen: 1, headWid: 1, brake: 1, flash: 1 };
@@ -206,9 +219,9 @@ export class GameScene extends Phaser.Scene {
     // Player CAPSULE collider (custom): Arcade's body can't rotate, so the car is modelled
     // as 3 circles along its spine and pushed out of walls by hand (rounded → slides along
     // corners). The Arcade square above stays as a centre backstop. (Cars are the next step.)
-    this.playerCapHalfLen = 13; // circle offset from centre along the car's facing (player −10%)
-    this.playerCapR       = 10; // capsule radius (≈ half the car width)
-    this.playerMass       = 1.5; // capsule-collision weight vs cops (heavier → shoves them)
+    this.playerCapHalfLen = this._vehicleStats.capHalfLen; // capsule spine half-length
+    this.playerCapR       = this._vehicleStats.capR;       // capsule radius (≈ half car width)
+    this.playerMass       = this._vehicleStats.mass;       // capsule weight vs cops
     // Capsule SOLVER quality. Iterating a Gauss–Seidel position solve (with a small slop +
     // relaxation) does two things at once: it stops a packed cluster from jittering (single-
     // pass pushes never converge → buzz), and it lets a STACK propagate resistance so a swarm
@@ -4363,7 +4376,7 @@ this.entryKickCooldown = ${s.entryKickCooldown};`);
     st.add(this, "illumSpeedRef", 100, 600, 10).name("Re-lit at speed (px/s)");
 
     // Persist across refresh (binds directly to the car, so load sets car fields).
-    this._persistPanel(gui, "gd_carTuning_v13"); // bumped: added tire-smoke levers
+    this._persistPanel(gui, "gd_carTuning_v14"); // bumped: per-vehicle stats files (prowler/razorback)
 
     gui.domElement.style.position = "fixed";
     gui.domElement.style.top = "8px";
