@@ -13,6 +13,15 @@ export const PROWLER = {
   capHalfLen: 13, // circle offset from centre along spine (−10% vs raw half-height)
   mass:     1.5,  // capsule-collision weight vs cops (heavier → shoves them more)
 
+  // --- Notoriety / stealth (Stealth 5/5 — best in the roster) ---
+  // heatRate multiplies how fast active pursuit accrues heat (PursuitLevel.activeRate).
+  // The prowler blends into traffic, so a chase escalates SLOWLY — its whole point is
+  // low-heat operation: you can actually cool a pursuit down and it ends.
+  // stealth (1-5) → cop reinforcement urgency: a lone cop treats a spotting as a routine
+  // stop and is slow to call it in (see PursuitLevel notoriety).
+  heatRate: 0.6,
+  stealth:  5,
+
   // --- Engine ---
   maxSpeed:        600,
   maxReverseSpeed: 220,

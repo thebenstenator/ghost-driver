@@ -574,11 +574,19 @@ export class GameScene extends Phaser.Scene {
     // Escalation brain (Pursuit Mode only). Heat → level → cop cap; reinforcements
     // trickle in toward the cap on a timer + an instant one each level-up.
     this.pursuitLevel = this.pursuitMode ? new PursuitLevel() : null;
-    // Seed the timer to the full interval so the 2nd cop arrives AFTER it, not instantly
-    // (a 0 here dispatched a reinforcement on frame 1 → "started with 2 cops").
+    // Notoriety from the selected car: heatRate scales how fast a chase ESCALATES (heat);
+    // stealth (1-5 → 0..1 notoriety) scales how fast cops CALL IN reinforcements.
+    if (this.pursuitLevel) {
+      this.pursuitLevel.heatRate  = this._vehicleStats.heatRate ?? 1;
+      this.pursuitLevel.notoriety = (5 - (this._vehicleStats.stealth ?? 3)) / 4;
+    }
+    // Seed the timer with the cold-start recognition delay so the first reinforcement
+    // reflects the car + starting heat (a stealthy cold car gets a routine-stop beat; a
+    // notorious/hot one is called in fast). 0 would dispatch on frame 1 → "started with 2".
     this._reinforceTimer = this.pursuitLevel
-      ? this.pursuitLevel.cfg().reinforce
+      ? this.pursuitLevel.firstReinforceDelay()
       : 0;
+    this._pursuitPrevState = PursuitState.IDLE; // for cold-start (routine-stop) detection
 
     // Spawn the chosen number of cops, approaching from different sides. The player
     // starts at (cx,cy), so each cop faces that point — south faces north, west faces
@@ -1351,6 +1359,18 @@ export class GameScene extends Phaser.Scene {
   // bleeds once ditched/standing down — so a brief LOS flicker can't bleed a level.
   _updatePursuitLevel(state, dt) {
     const P = this.pursuitLevel;
+    // Cold start of a pursuit EPISODE (from parked/standing-down — not a mid-chase re-spot,
+    // where you're already "made"): reset the reinforcement clock to the recognition delay.
+    // Stealthy/cold cars get the routine-stop beat; notorious or already-hot ones ~none.
+    if (
+      state === PursuitState.ACTIVE &&
+      (this._pursuitPrevState === PursuitState.IDLE ||
+        this._pursuitPrevState === PursuitState.RETURNING)
+    ) {
+      this._reinforceTimer = P.firstReinforceDelay();
+    }
+    this._pursuitPrevState = state;
+
     const phase =
       state === PursuitState.ACTIVE
         ? "ACTIVE"
@@ -1364,7 +1384,7 @@ export class GameScene extends Phaser.Scene {
     // Level-up: immediately call in one reinforcement (then the timer fills the rest).
     if (dLevel > 0 && this.cops.length < cap && state === PursuitState.ACTIVE) {
       this._dispatchReinforcement();
-      this._reinforceTimer = P.cfg().reinforce;
+      this._reinforceTimer = P.reinforceEvery();
     }
     // Bled down a level: retire the extra cop(s) — they peel off the chase.
     if (dLevel < 0) while (this.cops.length > cap) this._retireFarthestCop();
@@ -1374,10 +1394,10 @@ export class GameScene extends Phaser.Scene {
       this._reinforceTimer -= dt;
       if (this._reinforceTimer <= 0) {
         this._dispatchReinforcement();
-        this._reinforceTimer = P.cfg().reinforce;
+        this._reinforceTimer = P.reinforceEvery();
       }
     } else if (this.cops.length >= cap) {
-      this._reinforceTimer = P.cfg().reinforce; // hold full until a slot opens
+      this._reinforceTimer = P.reinforceEvery(); // hold full until a slot opens
     }
   }
 
@@ -1824,7 +1844,7 @@ export class GameScene extends Phaser.Scene {
       // wrecking a cop doesn't thin the pack into an easy ditch — especially at low-cap early levels.
       this._reinforceTimer = Math.min(
         this._reinforceTimer,
-        this.pursuitLevel.cfg().reinforce * this.disableReinforceMult,
+        this.pursuitLevel.reinforceEvery() * this.disableReinforceMult,
       );
     }
     if (this.copLog)
@@ -3314,6 +3334,15 @@ this.spikeStripLen = ${this.spikeStripLen}; this.spikeLifetime = ${this.spikeLif
     heat.add(P.bleed, "fastRate", 0, 20, 0.5).name("Bleed fast rate /s");
     heat.add(P.bleed, "slowRate", 0, 5, 0.1).name("Bleed slow rate /s");
 
+    // Reinforcement urgency — how the CAR's notoriety + live heat compress the call-in
+    // cadence and the cold-start "routine stop" grace. Notoriety is set per-vehicle at
+    // spawn (shown here live/tunable); the two gains shape how hard it bites.
+    const rf = gui.addFolder("Reinforcement");
+    rf.add(P, "notoriety", 0, 1, 0.05).name("Notoriety (car)");
+    rf.add(P.reinforceUrgencyCfg, "cadenceGain", 0, 1, 0.05).name("Urgency→cadence");
+    rf.add(P.reinforceUrgencyCfg, "recognition", 0, 2, 0.05).name("Cold-start grace ×");
+    rf.close();
+
     // One folder per level — every lever live. `span` (time to next level) is omitted
     // on the top level (nothing to escalate to). reaction/cooldown/boxTrigger re-apply
     // to the live cops/director on change. Rosters are data (the intended unit mix);
@@ -3336,7 +3365,7 @@ this.spikeStripLen = ${this.spikeStripLen}; this.spikeLifetime = ${this.spikeLif
       .add({ copy: () => this._copyPursuitLevels() }, "copy")
       .name("Copy Levels → Console");
 
-    this._persistPanel(gui, "gd_pursuitLevel4"); // bumped: reinforce values rebaked
+    this._persistPanel(gui, "gd_pursuitLevel5"); // bumped: added reinforcement-urgency knobs
 
     gui.domElement.style.position = "fixed";
     gui.domElement.style.top = "8px";
@@ -3347,10 +3376,11 @@ this.spikeStripLen = ${this.spikeStripLen}; this.spikeLifetime = ${this.spikeLif
   // Paste-ready dump of the live pursuit-level tuning (numbers only — rosters/roadblock flags
   // stay authored in code). Drop into PursuitLevel.defaultConfig.
   _copyPursuitLevels() {
-    const P = this.pursuitLevel, b = P.bleed;
+    const P = this.pursuitLevel, b = P.bleed, ru = P.reinforceUrgencyCfg;
     let s = `// --- Pursuit levels (paste numbers into PursuitLevel.defaultConfig) ---
 activeRate: ${P.activeRate}, ramHeat: ${P.ramHeat}, heatFloor: ${P.heatFloor}, disableHeat: ${P.disableHeat},
-bleed: { fastFrac: ${b.fastFrac}, fastRate: ${b.fastRate}, slowRate: ${b.slowRate} },\n`;
+bleed: { fastFrac: ${b.fastFrac}, fastRate: ${b.fastRate}, slowRate: ${b.slowRate} },
+reinforceUrgency: { cadenceGain: ${ru.cadenceGain}, recognition: ${ru.recognition} },\n`;
     for (let lv = 1; lv <= P.maxLevel; lv++) {
       const L = P.levels[lv], span = lv < P.maxLevel ? L.span : 0;
       s += `// L${lv}: span ${span}, cap ${L.cap}, reinforce ${L.reinforce}, cooldown ${L.cooldown}, reaction ${L.reaction}, boxTrigger ${L.boxTrigger}\n`;

@@ -35,6 +35,12 @@ export class PursuitLevel {
       // Fast-then-slow bleed: shed `fastFrac` of the current level's span at
       // `fastRate`, then drop to `slowRate` toward the floor.
       bleed: { fastFrac: 0.5, fastRate: 4.0, slowRate: 0.5 },
+      // Reinforcement urgency: how a NOTORIOUS car or an already-HOT situation compresses
+      // the per-level reinforce interval + shortens the cold-start "recognition" beat.
+      //   • cadenceGain — max fraction the ongoing interval is compressed at full urgency.
+      //   • recognition — extra cold-start delay (× base interval) at ZERO urgency, i.e.
+      //     the "routine stop" grace a stealthy car gets before the FIRST call-in.
+      reinforceUrgency: { cadenceGain: 0.5, recognition: 0.75 },
       // Roster keys are authored SPECIALS-FIRST: _nextReinforcementType dispatches the first
       // unmet type, so the level's threat units arrive before filler patrols. Caps verified
       // (L3 6, L4 10, L5 16). `roadblocks` gates the pursuit-side auto-spawn (difficulty derived
@@ -68,6 +74,16 @@ export class PursuitLevel {
     // Clone the rows so the dev panel mutating them can't corrupt the static default
     // (which the next scene restart would otherwise inherit).
     this.levels = c.levels.map(l => (l ? { ...l } : null));
+
+    // Per-vehicle notoriety, set by the scene from the selected car's stats:
+    //   • heatRate  — multiplies ACTIVE heat accrual (stealthy < 1; conspicuous > 1).
+    //   • notoriety — 0..1 (inverse of the Stealth stat); scales how fast cops CALL IN
+    //     reinforcements. Both default to the stat-agnostic baseline (nothing changes
+    //     until a vehicle overrides them).
+    this.heatRate    = 1;
+    this.notoriety   = 0;
+    // Guard the spread so a mission config lacking reinforceUrgency doesn't NaN the math.
+    this.reinforceUrgencyCfg = { cadenceGain: 0.5, recognition: 0.75, ...(c.reinforceUrgency || {}) };
 
     this.heat        = this.heatFloor;
     this._level      = 1;
@@ -103,6 +119,29 @@ export class PursuitLevel {
   addHeat(n)    { const e = this._enter(); this.heat = Math.min(e[this.maxLevel], this.heat + n);                this._level = this._levelFromHeat(e); }
   atMax()       { return this.heat >= this.maxHeat - 0.5; }
 
+  // ── Reinforcement cadence (vehicle notoriety + live heat) ───────────────────────
+  // Urgency (0..1): a notorious car OR an already-hot situation makes cops call it in
+  // faster. Reads LIVE heat, so once heat persists across missions, a car that starts a
+  // job hot gets fast call-ins for free — no extra logic.
+  reinforceUrgency() {
+    const heatN = this.maxHeat ? this.heat / this.maxHeat : 0;
+    return Math.max(0, Math.min(1, this.notoriety + heatN));
+  }
+
+  // Ongoing seconds between reinforcement dispatches: the current level's base interval,
+  // mildly compressed by urgency (never below (1 − cadenceGain) × base).
+  reinforceEvery() {
+    return this.cfg().reinforce * (1 - this.reinforceUrgencyCfg.cadenceGain * this.reinforceUrgency());
+  }
+
+  // Delay before the FIRST reinforcement of a fresh (cold-start) pursuit — the "routine
+  // stop" beat. A stealthy car spotted cold gets up to recognition × base of extra grace
+  // on top of the normal interval; urgency erodes that grace toward just the interval.
+  firstReinforceDelay() {
+    return this.cfg().reinforce * this.reinforceUrgencyCfg.recognition * (1 - this.reinforceUrgency())
+         + this.reinforceEvery();
+  }
+
   // Progress (0..1) within the current level, for the HUD meter. Top level reads full.
   heatFraction() {
     const e = this._enter();
@@ -119,7 +158,7 @@ export class PursuitLevel {
     const ceiling = e[this.maxLevel];
 
     if (phase === 'ACTIVE') {
-      this.heat = Math.min(ceiling, this.heat + this.activeRate * dt);
+      this.heat = Math.min(ceiling, this.heat + this.activeRate * this.heatRate * dt);
     } else if (phase === 'BLEED') {
       if (this._prevPhase !== 'BLEED') {                       // entering the withdraw bleed
         this._bleedStart = this.heat;

@@ -21,6 +21,15 @@ export const RAZORBACK = {
   lightHalfLen: 20,  // +10% from 18 — scales with the larger display size
   lightHalfWid: 10,  // +10% from 9
 
+  // --- Notoriety / stealth (Stealth 2/5 — conspicuous) ---
+  // heatRate multiplies active-pursuit heat accrual. The razorback is a known quantity —
+  // a chase boils toward a full pursuit FAST. Balances the top speed: you can ditch cops
+  // trivially, but you're right back at high heat, so the escape never really finishes.
+  // stealth (1-5) → cop reinforcement urgency: it has a reputation, so cops call it in
+  // near-immediately on sight (see PursuitLevel notoriety).
+  heatRate: 1.6,
+  stealth:  2,
+
   // --- Engine ---
   maxSpeed:        780,  // Speed 5/5 — clearly faster than prowler (600), room above for Spectre
   maxReverseSpeed: 180,  // light car, less reverse grunt
