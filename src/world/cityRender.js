@@ -27,15 +27,8 @@ const inB = (x, y, b) => x >= b.x && x < b.right && y >= b.y && y < b.bottom;
 // GameScene builds one set of Graphics per world chunk and only shows the chunks near the camera,
 // so the whole ~800-building city is never re-tessellated at once (see _buildChunks).
 
-// Wet-street puddles (dark water + a faint neon reflection). Low smoothness keeps them cheap.
-export function drawPuddles(g, bounds) {
-  for (let i = 0; i < 170; i++) { // fewer, and just the dark water (the translucent reflection was overdraw)
-    const px = hash(i * 13 + 1) * WORLD_WIDTH, py = hash(i * 29 + 3) * WORLD_HEIGHT;
-    if (!inB(px, py, bounds)) continue;
-    const rw = 16 + hash(i * 7) * 46, rh = 6 + hash(i * 11) * 16;
-    g.fillStyle(0x0a0a0d, 0.6).fillEllipse(px, py, rw * 2, rh * 2, 10);
-  }
-}
+// Puddles removed for performance (iGPU translucent ellipses are expensive).
+export function drawPuddles(_g, _bounds) {}
 
 // Buildings whose CENTRE falls in bounds: material tint + value jitter + height cues + rooftop detail.
 export function drawBuildings(g, buildings, bounds) {
@@ -52,18 +45,7 @@ export function drawBuildings(g, buildings, bounds) {
     g.fillStyle(roof, 1).fillRect(b.x, b.y, b.w, b.h);                        // roof
     g.fillStyle(shade(mat.roof, j + 20), 0.85).fillRect(b.x, b.y, b.w, 3);    // lit top edge
     g.fillStyle(shade(mat.roof, j + 12), 0.7).fillRect(b.x, b.y, 3, b.h);     // lit left edge
-    // Parapet + rooftop fixtures (only where there's room).
-    if (b.w > 55 && b.h > 55) {
-      g.lineStyle(1.5, shade(mat.roof, j - 12), 0.6).strokeRect(b.x + 9, b.y + 9, b.w - 18, b.h - 18);
-      const nF = 1 + Math.floor(hash(b.x * 3 + b.y) * 3);
-      g.fillStyle(shade(mat.roof, j - 22), 0.92);
-      for (let k = 0; k < nF; k++) {
-        const fw = 12 + hash(b.x + k * 5) * 26, fh = 12 + hash(b.y + k * 7) * 26;
-        const fx = b.x + 16 + hash(b.x + k * 11) * (b.w - 32 - fw), fy = b.y + 16 + hash(b.y + k * 17) * (b.h - 32 - fh);
-        if (fw > 0 && fh > 0 && fx > b.x && fy > b.y) g.fillRect(fx, fy, fw, fh);
-      }
-      if (hash(b.x + b.y * 3) > 0.72) g.fillStyle(shade(mat.roof, j - 26), 0.9).fillCircle(b.x + b.w * 0.7, b.y + b.h * 0.3, 9);
-    }
+    // Rooftop detail (parapet stroke + fixtures + water tank) removed for performance.
   }
 }
 
