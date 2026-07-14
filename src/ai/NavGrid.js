@@ -117,14 +117,14 @@ export class NavGrid {
     const sep = this.index(bi, bj);
     if (this.valid[sep]) return sep;
 
-    let best = sep, bestD = Infinity;
+    let best = -1, bestD = Infinity;
     for (let idx = 0; idx < this.valid.length; idx++) {
       if (!this.valid[idx]) continue;
       const p = this.pos(idx);
       const d = (p.x - x) * (p.x - x) + (p.y - y) * (p.y - y);
       if (d < bestD) { bestD = d; best = idx; }
     }
-    return best;
+    return best >= 0 ? best : sep; // sep is invalid too, but it's the best we have
   }
 
   // Nearest VALID node to (px,py) that lies AHEAD of origin (ox,oy) along `dir` — its offset
@@ -159,8 +159,9 @@ export class NavGrid {
     visited[start] = 1;
     let reached = false;
 
-    while (queue.length) {
-      const cur = queue.shift();
+    let head = 0;
+    while (head < queue.length) {
+      const cur = queue[head++];
       if (cur === goal) { reached = true; break; }
       for (const nb of this.nbr[cur]) {
         if (!visited[nb]) { visited[nb] = 1; prev[nb] = cur; queue.push(nb); }
@@ -189,8 +190,9 @@ export class NavGrid {
     visited[start] = 1;
     const result = [];
 
-    while (queue.length) {
-      const cur = queue.shift();
+    let head = 0;
+    while (head < queue.length) {
+      const cur = queue[head++];
       if (cur !== start) result.push(cur);
       if (depth[cur] >= maxDepth) continue;
       for (const nb of this.nbr[cur]) {

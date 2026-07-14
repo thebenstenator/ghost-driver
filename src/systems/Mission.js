@@ -95,15 +95,15 @@ export class Mission {
 
   // --- Display accessors the scene reads back ---
   get objectiveLabel() {
+    const dropName = this.drop?.name ?? '(unknown)';
+    const safeName = this.safe?.name ?? '(unknown)';
     switch (this.state) {
       case MissionState.GOTO_DROP:
-        if (this._blocked) return `${this.drop.name} — shake them first!`;
-        if (this._inCircle) {
-          return `Securing ${this.drop.name}…  ${Math.ceil(this.dropDwell - this._dwell)}s`;
-        }
-        return `Reach ${this.drop.name} and lie low`;
+        if (this._blocked) return `${dropName} — shake them first!`;
+        if (this._inCircle) return `Securing ${dropName}…  ${Math.ceil(this.dropDwell - this._dwell)}s`;
+        return `Reach ${dropName} and lie low`;
       case MissionState.TO_SAFEHOUSE:
-        return `Reach ${this.safe.name} unseen`;
+        return `Reach ${safeName} unseen`;
       default:
         return '';
     }

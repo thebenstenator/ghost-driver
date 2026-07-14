@@ -9,19 +9,10 @@
 import Phaser from "phaser";
 import { WORLD_WIDTH, WORLD_HEIGHT } from "../config.js";
 import { districtIdAt } from "./city.js";
+import { hash, MAT, NEON, NEON_DENSITY } from "./cityColors.js";
 
 export const GROUND_COLOR = 0x141416;
 
-// Per-district materials [r,g,b] — dark + desaturated; identity is subtle tint + value, not colour.
-const MAT = {
-  financial:   { roof: [47, 46, 51], walk: [38, 38, 43] }, // warm marble-grey
-  neon:        { roof: [42, 38, 48], walk: [34, 31, 39] }, // faint violet-dark
-  industrial:  { roof: [48, 42, 36], walk: [38, 33, 25] }, // rust/brown-dark
-  docks:       { roof: [36, 43, 49], walk: [28, 35, 40] }, // cold blue-grey
-  backstreets: { roof: [42, 42, 44], walk: [32, 32, 34] }, // neutral
-};
-const NEON = [0x2ce8d0, 0xff3bc8, 0xffb020, 0xff5050, 0x49b8ff, 0x8f6bff];
-const NEON_DENSITY = { neon: 0.62, backstreets: 0.30, docks: 0.18, industrial: 0.12, financial: 0.22 };
 
 const clampC = (v) => Math.max(0, Math.min(255, Math.round(v)));
 const toHex = (r, g, b) => (clampC(r) << 16) | (clampC(g) << 8) | clampC(b);
@@ -29,7 +20,6 @@ const arrHex = (a) => toHex(a[0], a[1], a[2]);
 const shade = (base, d) => toHex(base[0] + d, base[1] + d, base[2] + d);
 const whiteMix = (hex, t) => toHex(((hex >> 16) & 255) + (255 - ((hex >> 16) & 255)) * t,
   ((hex >> 8) & 255) + (255 - ((hex >> 8) & 255)) * t, (hex & 255) + (255 - (hex & 255)) * t);
-const hash = (n) => { const x = Math.sin(n * 127.1 + 311.7) * 43758.5453; return x - Math.floor(x); };
 const matOf = (b) => MAT[districtIdAt(b.x + b.w / 2, b.y + b.h / 2)] || MAT.backstreets;
 const inB = (x, y, b) => x >= b.x && x < b.right && y >= b.y && y < b.bottom;
 
@@ -86,7 +76,7 @@ export function drawNeonInto(g, buildings, bounds) {
     if (!inB(cx, cy, bounds)) continue;
     const dist = districtIdAt(cx, cy);
     if (hash(b.x * 7 + b.y * 3) > (NEON_DENSITY[dist] ?? 0.15)) continue;
-    const col = NEON[Math.floor(hash(b.x + b.y) * NEON.length)];
+    const col = arrHex(NEON[Math.floor(hash(b.x + b.y) * NEON.length)]);
     const vert = hash(b.x * 3 + b.y) > 0.6;
     const len = 16 + hash(b.x + b.y * 5) * 26, th = 4;
     const sx = b.x + b.w * (0.18 + hash(b.x) * 0.64), sy = b.y + b.h - 4;

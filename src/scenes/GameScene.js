@@ -625,7 +625,10 @@ export class GameScene extends Phaser.Scene {
       // spot can land inside a Docks warehouse). The safehouse is entered via its garage door, so
       // it stays put.
       const d = this.mission.drop;
-      if (d) { const p = this.navGrid.pos(this.navGrid.nearestNode(d.x, d.y)); d.x = p.x; d.y = p.y; }
+      if (d) {
+        const p = this.navGrid.pos(this.navGrid.nearestNode(d.x, d.y));
+        this.mission.drop = { ...d, x: p.x, y: p.y }; // clone so the POIS module export is not mutated
+      }
       this.poiGfx = this.add.graphics().setDepth(6.5);
       this.worldLayer.add(this.poiGfx);
     }
@@ -772,11 +775,12 @@ export class GameScene extends Phaser.Scene {
     }
     // Spread the off-screen cops around you so some come from ahead (toward the safehouse), not all
     // from behind. _tryRespawnCop biases to each cop's seeded bearing and keeps them respawnSpacing apart.
+    const toSpread = this.cops.filter((c) => this._offCamera(c.sprite.x, c.sprite.y));
     let i = 0;
     for (const cop of this.cops) {
       if (!this._offCamera(cop.sprite.x, cop.sprite.y)) continue; // already near/on-screen — leave it
       if (this.pursuitLevel) cop.ai.reactionTime = this.pursuitLevel.cfg().reaction;
-      const a = (i++ / target) * Math.PI * 2 + Math.random() * 0.6;
+      const a = (i++ / Math.max(1, toSpread.length)) * Math.PI * 2 + Math.random() * 0.6;
       cop.sprite.setPosition(px + Math.cos(a) * this.respawnBandMax, py + Math.sin(a) * this.respawnBandMax);
       if (!this._tryRespawnCop(cop, px, py)) {
         const x = Phaser.Math.Clamp(px + Math.cos(a) * this.respawnBandMin, 120, WORLD_WIDTH - 120);
@@ -836,18 +840,22 @@ export class GameScene extends Phaser.Scene {
           .setDepth(60)
       : null;
     if (cop.modeLabel) this.worldLayer.add(cop.modeLabel);
-    this.physics.add.collider(cop.sprite, this.walls);
+    cop._colliders = [];
+    cop._colliders.push(this.physics.add.collider(cop.sprite, this.walls));
     // Player↔cop contact: bump heat in Pursuit Mode (the "minor collision" escalator),
     // throttled so a sustained scrape doesn't spike it every frame.
-    this.physics.add.collider(cop.sprite, this.car.sprite, () => {
+    cop._colliders.push(this.physics.add.collider(cop.sprite, this.car.sprite, () => {
       if (this.pursuitLevel && this.time.now - (this._lastRamAt || 0) > 600) {
         this._lastRamAt = this.time.now;
         this.pursuitLevel.addHeat(this.pursuitLevel.ramHeat);
       }
-    });
+    }));
     // Cops bump off each other rather than stacking
-    for (const other of this.cops)
-      this.physics.add.collider(cop.sprite, other.sprite);
+    for (const other of this.cops) {
+      const cc = this.physics.add.collider(cop.sprite, other.sprite);
+      cop._colliders.push(cc);
+      (other._colliders ??= []).push(cc);
+    }
     this.cops.push(cop);
     return cop;
   }
@@ -936,6 +944,7 @@ export class GameScene extends Phaser.Scene {
     }
 
     const area = this._searchArea();
+    const areaSet = new Set(area);
 
     // COMMIT to the current target until we PHYSICALLY reach it. Don't abandon it
     // just because we now SEE it (that was the dithering bug: spotting the node a
@@ -946,7 +955,7 @@ export class GameScene extends Phaser.Scene {
     // the node sits behind a wall we can't thread). Without this, a cop that can't
     // reach its node recommits to it forever: drive at the wall, K-turn, drive at the
     // SAME wall, loop for 30s+. On abandon we mark it covered so nobody re-picks it.
-    if (cop._searchNode != null && area.includes(cop._searchNode)) {
+    if (cop._searchNode != null && areaSet.has(cop._searchNode)) {
       const p = this.navGrid.pos(cop._searchNode);
       const d = Phaser.Math.Distance.Between(
         cop.sprite.x,
@@ -980,6 +989,9 @@ export class GameScene extends Phaser.Scene {
     const fanDir =
       this.pursuit.lastKnownDir +
       (((cop.searchSlot || 0) - (n - 1) / 2) / n) * Math.PI;
+    const claimedNodes = new Set(
+      this.cops.filter((o) => o !== cop).map((o) => o._searchNode).filter((n) => n != null),
+    );
     let best = area[0],
       bestCost = Infinity;
     for (const idx of area) {
@@ -1010,8 +1022,7 @@ export class GameScene extends Phaser.Scene {
         cost += 1e6; // freshly covered — avoid
       else if (!neverSeen) cost += 3000; // seen but stale — re-check only if no frontier left
       // never-seen nodes (the expanding frontier) get no penalty, so they win
-      if (this.cops.some((o) => o !== cop && o._searchNode === idx))
-        cost += 8000; // claimed by another cop
+      if (claimedNodes.has(idx)) cost += 8000; // claimed by another cop
       if (cost < bestCost) {
         bestCost = cost;
         best = idx;
@@ -1298,7 +1309,6 @@ export class GameScene extends Phaser.Scene {
     const a = cop.ai;
     a._unstuck = null;
     a._stuckTime = 0;
-    a._losTimer = 0;
     a._path = null;
     a._goalNode = -1;
     a._aimHist = [];
@@ -1437,6 +1447,10 @@ export class GameScene extends Phaser.Scene {
       }
     }
     if (!far) return;
+    for (const c of (far._colliders ?? [])) c.destroy();
+    for (const cop of this.cops) {
+      if (cop !== far && cop._colliders) cop._colliders = cop._colliders.filter((c) => c.active);
+    }
     this.cops = this.cops.filter((c) => c !== far);
     if (far.modeLabel) far.modeLabel.destroy();
     if (far.lights) far.lights.destroy();
@@ -1610,7 +1624,11 @@ export class GameScene extends Phaser.Scene {
 
   // Remove every cop AND wreck (sprites, labels, tweens, stale director refs).
   _clearCops() {
+    const destroyed = new Set();
     for (const cop of [...this.cops, ...this.wrecks]) {
+      for (const c of (cop._colliders ?? [])) {
+        if (!destroyed.has(c)) { c.destroy(); destroyed.add(c); }
+      }
       this.tweens.killTweensOf(cop.sprite);
       if (cop.modeLabel) cop.modeLabel.destroy();
       if (cop.lights) cop.lights.destroy();
