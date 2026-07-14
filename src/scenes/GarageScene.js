@@ -334,7 +334,7 @@ export class GarageScene extends Phaser.Scene {
       }
       const label = this._choiceLabels[i];
       if (owned) label.setText(def.short).setColor(on ? NOIR.green : NOIR.dim);
-      else label.setText(`$${def.price.toLocaleString()}`).setColor(hover ? NOIR.amber : "#6a6a4a");
+      else label.setText(def.price != null ? `$${def.price.toLocaleString()}` : "?").setColor(hover ? NOIR.amber : "#6a6a4a");
     });
   }
 }

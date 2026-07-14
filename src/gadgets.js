@@ -95,6 +95,7 @@ export const GADGETS = [
     id: "grapple",
     name: "Grappling Hook",
     short: "GRAPPLE",
+    price: 3000,
     deploy: "_fireGrapple",
     hudColor: "#ffb14a",
     color: 0xffb14a,
