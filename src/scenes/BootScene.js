@@ -46,7 +46,7 @@ export class BootScene extends Phaser.Scene {
       'player_car', 'cop_patrol', 'cop_interceptor', 'cop_heavy',
       // razorback source is 1024×1536 — scale to ~34×51 px (≈ display size) so the
       // GPU does a gentle 1:1 sample instead of a 30× downscale that would shimmer.
-      { key: 'razorback', scale: 34 / 1024 },
+      { key: 'razorback', scale: 37 / 1024 },
     ]);
     await this._loadFonts();
     this.scene.start('MenuScene');

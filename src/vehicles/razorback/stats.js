@@ -6,9 +6,9 @@
 export const RAZORBACK = {
   // --- Sprite / display ---
   texture:       'razorback',
-  displayWidth:  34,   // wider, more aggressive stance than prowler (30)
-  displayHeight: 51,   // lower-slung; source is 1024×1536 (2:3), so 34×51 keeps the ratio
-  bodySize:      26,   // AABB backstop, slightly narrower
+  displayWidth:  37,   // +10% from 34
+  displayHeight: 56,   // +10% from 51; source is 1024×1536 (2:3), ratio preserved
+  bodySize:      26,   // AABB backstop (capsule does the real work)
 
   // --- Capsule collider (scene-level; read by GameScene via playerCapR/capHalfLen/mass) ---
   capR:      8,   // baked by user
@@ -18,8 +18,8 @@ export const RAZORBACK = {
   // --- Light anchors (overrides sprite-dim fallback in CarLights) ---
   // The razorback source is 1024×1536 with canvas padding around the car body, so the
   // sprite bounds are larger than the visible silhouette. Tune these live via the car panel.
-  lightHalfLen: 18,  // effective half-length for tail/headlight placement (px)
-  lightHalfWid:  9,  // effective half-width for taillight lateral placement (px)
+  lightHalfLen: 20,  // +10% from 18 — scales with the larger display size
+  lightHalfWid: 10,  // +10% from 9
 
   // --- Engine ---
   maxSpeed:        780,  // Speed 5/5 — clearly faster than prowler (600), room above for Spectre
