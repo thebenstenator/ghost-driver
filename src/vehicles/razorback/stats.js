@@ -13,7 +13,10 @@ export const RAZORBACK = {
   // --- Capsule collider (scene-level; read by GameScene via playerCapR/capHalfLen/mass) ---
   capR:      8,   // baked by user
   capHalfLen: 8,  // baked by user
-  mass:      1.2, // Mass 1/5 — lightest; cops push it around more easily
+  mass:      0.8, // Mass 1/5 — lightest in the roster, BELOW a patrol cop (1.0), so in the
+                  // capsule resolver it's the car that gets shoved: cops bully it around and it
+                  // can't muscle out of a pileup. Pairs with the speed-scaled rubber band — you
+                  // stay safe by staying CLEAR, but one mistake into a box is punishing.
 
   // --- Light anchors (overrides sprite-dim fallback in CarLights) ---
   // The razorback source is 1024×1536 with canvas padding around the car body, so the

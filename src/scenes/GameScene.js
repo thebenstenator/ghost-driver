@@ -416,21 +416,28 @@ export class GameScene extends Phaser.Scene {
     this.rbGrip = 0.9; // grip (low & high) at full blend — near on-rails
     this.rbTurnMult = 1.6; // turn-rate multiplier at full blend
     this.rbSpeedBoost = 115; // px/s added to top speed at full blend
-    // Patrol rubber band: softens how fast a chasing PATROL (slow, 495 vs player 600) gets straight-lined
-    // away in the early levels. Its top-speed cap ramps up toward patrolBandSpeed between patrolBandStart
-    // (no boost) and patrolBandFull (full boost) px behind you, so the bleed SLOWS at a VISIBLE distance.
-    // CRITICAL: these are anchored to what you can SEE, not sightRange (900px). At full chase speed the
-    // camera zoom-out shows ~510px behind you, so a band keyed off the 900px sight edge would only ever
-    // engage AFTER the cop left the screen — the boost happened but you never saw it. Start/full sit
-    // inside the visible band so the slowed catch-up reads on-screen. bandSpeed is kept BELOW the player's
-    // 600, so a patrol never fully keeps pace — it just falls behind gently (~25px/s at full band instead
-    // of 105), drifting back rather than locking onto you. See _applyPatrolBand().
+    // The bands below cap a lagging cop's top speed so a fast car can't straight-line
+    // away forever. They MUST scale with the CURRENT car: the constants used to be baked
+    // for the 600 prowler (575/610), which sit far under the razorback's 780 — so every
+    // catch-up ceiling was below the player and a straight line was a free escape. We anchor
+    // them to the live player top speed instead, so they self-tune for the razorback and any
+    // future fast car (Spectre/Phantom) with no per-car hand-tuning.
+    this.playerMaxSpeed = this._vehicleStats.maxSpeed; // live anchor for all the bands below
+    this.rbOvertake = 15; // px/s a far (rejoin) cop may exceed YOUR top by, so it can actually close
+    // Patrol rubber band: softens how fast a chasing PATROL (slow, ~495 base) gets straight-lined
+    // away in the early levels. Its top-speed cap ramps up toward (playerTop − patrolBandGap) between
+    // patrolBandStart (no boost) and patrolBandFull (full boost) px behind you, so the bleed SLOWS at a
+    // VISIBLE distance. CRITICAL: these are anchored to what you can SEE, not sightRange (900px). At full
+    // chase speed the camera zoom-out shows ~510px behind you, so a band keyed off the 900px sight edge
+    // would only ever engage AFTER the cop left the screen — the boost happened but you never saw it.
+    // Start/full sit inside the visible band so the slowed catch-up reads on-screen. The cap is kept a
+    // GAP below YOUR top so a patrol never fully keeps pace — it falls behind gently (~gap px/s at full
+    // band instead of the full deficit), drifting back rather than locking on. See _applyPatrolBand().
     this.patrolBandEnabled = true;
     this.patrolBandStart = 320;  // px behind you where the cap starts ramping up (no boost nearer than this)
-    this.patrolBandFull  = 480;  // px behind you where the cap hits patrolBandSpeed (kept inside the visible edge)
-    this.patrolBandSpeed = 575;  // px/s — patrol top speed at full band. BELOW the player's 600 on purpose:
-                                 // the band slows the bleed (falls behind ~25px/s instead of 105) but never
-                                 // lets a patrol fully keep pace, so it drifts back gradually, not locks on.
+    this.patrolBandFull  = 480;  // px behind you where the cap hits (playerTop − gap) (inside the visible edge)
+    this.patrolBandGap   = 25;   // px/s the full-band cap sits BELOW your top speed: a patrol drifts back at
+                                 // this rate on a straight (so you shake it by cornering/LOS, not by holding W).
     // Spawn ease-in: a freshly placed/relocated cop EASES in rather than rocketing at you — capped
     // slow while far, ramping to match your speed as the gap closes, then it hands off to normal
     // chasing. Caps maxSpeed via min() AFTER the rejoin band, so a fresh far cop reads as "arriving".
@@ -1134,7 +1141,11 @@ export class GameScene extends Phaser.Scene {
       0,
       1,
     );
-    cop.maxSpeed = cop.baseMaxSpeed + this.rbSpeedBoost * f;
+    // Full-blend target: the cop's own boosted top, OR just above YOUR top if that's higher
+    // (a slow cop can't close a fast car otherwise). max() keeps the prowler's old ~610 while
+    // letting a far cop rejoin a 780 razorback. Linear(base, base+boost, f) == the old formula.
+    const rbTarget = Math.max(cop.baseMaxSpeed + this.rbSpeedBoost, this.playerMaxSpeed + this.rbOvertake);
+    cop.maxSpeed = Phaser.Math.Linear(cop.baseMaxSpeed, rbTarget, f);
     cop.gripLow = Phaser.Math.Linear(cop.baseGripLow, this.rbGrip, f);
     cop.gripHigh = Phaser.Math.Linear(cop.baseGripHigh, this.rbGrip, f);
     const turnMult = 1 + (this.rbTurnMult - 1) * f;
@@ -1164,15 +1175,15 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
-  // Patrol rubber band: a PATROL (495 top vs the player's 600) gets straight-lined off trivially
-  // in the early levels — drive in a line, pull away 105px/s, gone. This raises a chasing patrol's
-  // top-speed cap toward patrolBandSpeed (just above player top) as the gap grows from patrolBandStart
-  // to patrolBandFull px behind you, so it stops growing while the cop is still ON SCREEN (these are
-  // anchored to the visible band ~510px at speed, NOT the 900px sight edge — see the field comment).
-  // It does NOT help it CLOSE — the cap only matches you, so you still ditch patrols by cornering /
-  // garages / gadgets, just not by driving straight. Patrols only (interceptor/spike are already
-  // faster + boosted; heavy is a blocker) and ACTIVE only (a blind/searching patrol isn't "in view").
-  // Distance-based, no LOS coupling. Applied AFTER the rejoin + overtake boosts, taken as a MAX.
+  // Patrol rubber band: a PATROL (~495 top) gets straight-lined off trivially in the early levels —
+  // drive in a line, pull away, gone. This raises a chasing patrol's top-speed cap toward
+  // (playerTop − patrolBandGap) as the gap grows from patrolBandStart to patrolBandFull px behind you,
+  // so it stops growing while the cop is still ON SCREEN (anchored to the visible band ~510px at speed,
+  // NOT the 900px sight edge — see the field comment). The cap tracks YOUR live top speed, so a fast car
+  // (razorback 780) can't outrun it the way the old baked-575 cap let it. It does NOT help the cop CLOSE —
+  // the cap sits a gap below you, so you still ditch patrols by cornering / breaking LOS / gadgets, just
+  // not by holding W. Patrols only (interceptor/spike are already faster + boosted; heavy is a blocker)
+  // and ACTIVE only (a blind/searching patrol isn't "in view"). Applied AFTER the rejoin boost, as a MAX.
   _applyPatrolBand(cop, dist, active) {
     if (!this.patrolBandEnabled || !active || cop.unitType !== "patrol") return;
     const f = Phaser.Math.Clamp(
@@ -1181,7 +1192,8 @@ export class GameScene extends Phaser.Scene {
       1,
     );
     if (f <= 0) return;
-    const cap = Phaser.Math.Linear(cop.baseMaxSpeed, this.patrolBandSpeed, f);
+    const bandTop = this.playerMaxSpeed - this.patrolBandGap; // tracks the live car's top speed
+    const cap = Phaser.Math.Linear(cop.baseMaxSpeed, bandTop, f);
     if (cap > cop.maxSpeed) {
       cop.maxSpeed = cap;
       cop.ai.maxApproachSpeed = Math.max(cop.ai.maxApproachSpeed, cap);
@@ -4629,10 +4641,11 @@ this.withdrawColor = ${hex(f.withdrawColor)};`;
       rbGrip: this.rbGrip,
       rbTurnMult: this.rbTurnMult,
       rbSpeedBoost: this.rbSpeedBoost,
+      rbOvertake: this.rbOvertake,
       patrolBandEnabled: this.patrolBandEnabled,
       patrolBandStart: this.patrolBandStart,
       patrolBandFull: this.patrolBandFull,
-      patrolBandSpeed: this.patrolBandSpeed,
+      patrolBandGap: this.patrolBandGap,
       respawnEnabled: this.respawnEnabled,
       respawnDist: this.respawnDist,
       respawnTime: this.respawnTime,
@@ -4812,6 +4825,10 @@ this.withdrawColor = ${hex(f.withdrawColor)};`;
       .name("Speed boost at full")
       .onChange(apply);
     rejoin
+      .add(this.copTuning, "rbOvertake", 0, 200, 5)
+      .name("Overtake vs your top")
+      .onChange(apply);
+    rejoin
       .add(this.copTuning, "patrolBandEnabled")
       .name("Patrol rubber band")
       .onChange(apply);
@@ -4824,8 +4841,8 @@ this.withdrawColor = ${hex(f.withdrawColor)};`;
       .name("Patrol band full (px)")
       .onChange(apply);
     rejoin
-      .add(this.copTuning, "patrolBandSpeed", 495, 800, 5)
-      .name("Patrol band top speed")
+      .add(this.copTuning, "patrolBandGap", 0, 200, 5)
+      .name("Patrol gap below you")
       .onChange(apply);
 
     const respawn = gui.addFolder("Respawn (lost cops)");
@@ -4883,7 +4900,8 @@ arriveRadius: ${t.arriveRadius}, senseDist: ${t.senseDist}, directRange: ${t.dir
 boxTriggerSpeed: ${t.boxTriggerSpeed}, boxEngageRange: ${t.boxEngageRange}, boxAhead: ${t.boxAhead}, boxBehind: ${t.boxBehind},
 // --- Separation + rejoin band + search (GameScene) ---
 sepRadius: ${t.sepRadius}, sepStrength: ${t.sepStrength},
-rbStart: ${t.rbStart}, rbFull: ${t.rbFull}, rbGrip: ${t.rbGrip}, rbTurnMult: ${t.rbTurnMult}, rbSpeedBoost: ${t.rbSpeedBoost},
+rbStart: ${t.rbStart}, rbFull: ${t.rbFull}, rbGrip: ${t.rbGrip}, rbTurnMult: ${t.rbTurnMult}, rbSpeedBoost: ${t.rbSpeedBoost}, rbOvertake: ${t.rbOvertake},
+patrolBandGap: ${t.patrolBandGap}, patrolBandStart: ${t.patrolBandStart}, patrolBandFull: ${t.patrolBandFull},
 respawnEnabled: ${t.respawnEnabled}, respawnDist: ${t.respawnDist}, respawnTime: ${t.respawnTime},
 searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${t.searchMaxDepth}, coverageTTL: ${t.coverageTTL}, searchDirBias: ${t.searchDirBias}, searchDwell: ${t.searchDwell}, searchStall: ${t.searchStall}`);
           },
@@ -4894,7 +4912,7 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
 
     // Persist across refresh. Key bumped to v16: huntLead removed (blind cops now go
     // straight to last-known, no forward projection).
-    this._persistPanel(gui, "gd_copTuning33"); // bumped: active-blind speed floor (lone cops keep contact)
+    this._persistPanel(gui, "gd_copTuning34"); // bumped: bands anchored to live player top (patrolBandGap + rbOvertake)
 
     gui.domElement.style.position = "fixed";
     gui.domElement.style.top = "8px";
@@ -4987,12 +5005,13 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
     this.patrolBandEnabled = t.patrolBandEnabled;
     this.patrolBandStart = t.patrolBandStart;
     this.patrolBandFull = t.patrolBandFull;
-    this.patrolBandSpeed = t.patrolBandSpeed;
+    this.patrolBandGap = t.patrolBandGap;
     this.rbStart = t.rbStart;
     this.rbFull = t.rbFull;
     this.rbGrip = t.rbGrip;
     this.rbTurnMult = t.rbTurnMult;
     this.rbSpeedBoost = t.rbSpeedBoost;
+    this.rbOvertake = t.rbOvertake;
     this.respawnEnabled = t.respawnEnabled;
     this.respawnDist = t.respawnDist;
     this.respawnTime = t.respawnTime;
