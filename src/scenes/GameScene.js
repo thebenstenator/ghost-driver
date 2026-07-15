@@ -362,7 +362,11 @@ export class GameScene extends Phaser.Scene {
     // (Stage 2) will yank one into the lane behind you as a blocker. Deterministic placement.
     this.parkedCars = [];
     this.parkedDensity = 0.3;   // chance a building gets a curbside car (sparse — one occasionally)
-    this.parkedCarMass = 8;     // heavy so a bump barely budges it (reads as "parked")
+    this.parkedCarMass = 2.5;   // civilian car at rest: heavier than a roadblock (1.5) so it has some
+                                // inertia and a gentle brush barely moves it, but a real crash SHOVES it
+                                // (the resolver's push scales with closing speed) — not the immovable wall
+                                // that mass 8 made it. It slides on impact; it doesn't spin (parked cars
+                                // don't integrate angVel — only translation). Live-tunable in the panel.
 
     // --- Gadget: Grappling Hook (player) — fire at the nearest parked car and YANK it into the road
     // behind you, where it lands broadside as a shovable blocker for the cops on your tail. The
@@ -434,8 +438,12 @@ export class GameScene extends Phaser.Scene {
     // GAP below YOUR top so a patrol never fully keeps pace — it falls behind gently (~gap px/s at full
     // band instead of the full deficit), drifting back rather than locking on. See _applyPatrolBand().
     this.patrolBandEnabled = true;
-    this.patrolBandStart = 320;  // px behind you where the cap starts ramping up (no boost nearer than this)
-    this.patrolBandFull  = 480;  // px behind you where the cap hits (playerTop − gap) (inside the visible edge)
+    // Engage the band CLOSE behind you: with these small, the no-boost zone (0→start) is short, so
+    // a fast car can't open a quick gap and corner away before the band grips. Bigger start/full let
+    // a patrol (base ~495) shed 285px/s vs a 780 car and be gone around a corner in ~1s — the "outrun
+    // a single cop" hole. Kept well inside the visible band (~510px at speed) so the catch-up reads.
+    this.patrolBandStart = 140;  // px behind you where the cap starts ramping up (no boost nearer than this)
+    this.patrolBandFull  = 300;  // px behind you where the cap hits (playerTop − gap) (inside the visible edge)
     this.patrolBandGap   = 25;   // px/s the full-band cap sits BELOW your top speed: a patrol drifts back at
                                  // this rate on a straight (so you shake it by cornering/LOS, not by holding W).
     // Spawn ease-in: a freshly placed/relocated cop EASES in rather than rocketing at you — capped
@@ -4521,7 +4529,7 @@ this.lightHalfWid = ${s.lightHalfWid ?? null};`);
       .onChange((v) => { for (const c of this.parkedCars) { c.mass = v; c.body.body.mass = v; } });
     pk.add({ respawn: () => this._spawnParkedCars() }, "respawn").name("Respawn");
 
-    this._persistPanel(gui, "gd_gadgetTune_v21"); // bumped: grapple live-wake reel (reel snap)
+    this._persistPanel(gui, "gd_gadgetTune_v22"); // bumped: parked car mass 8→2.5 (pushable, not a wall)
 
     // Anchored to the BOTTOM-RIGHT so the panel grows UPWARD when folders expand and stays
     // clear of the bottom-left spawn panel. CRITICAL: clear top/left to "auto" — lil-gui's
@@ -4912,7 +4920,7 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
 
     // Persist across refresh. Key bumped to v16: huntLead removed (blind cops now go
     // straight to last-known, no forward projection).
-    this._persistPanel(gui, "gd_copTuning34"); // bumped: bands anchored to live player top (patrolBandGap + rbOvertake)
+    this._persistPanel(gui, "gd_copTuning35"); // bumped: patrol band engages sooner (start 320→140, full 480→300)
 
     gui.domElement.style.position = "fixed";
     gui.domElement.style.top = "8px";
