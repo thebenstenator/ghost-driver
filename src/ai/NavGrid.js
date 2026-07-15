@@ -146,6 +146,35 @@ export class NavGrid {
     return best >= 0 ? best : this.nearestNode(px, py);
   }
 
+  // Walk the road graph from the node nearest (px,py), each hop taking the neighbour best
+  // ALIGNED with `dir` (must be genuinely forward — positive dot), until at least `dist` px are
+  // covered or the road stops heading that way. Returns { idx, heading, covered } where heading
+  // is the direction of the final hop (axis-aligned on the lattice). Used to place a roadblock
+  // on the road the traveller is ACTUALLY on, ahead of them — unlike nearestNode(projectedPoint),
+  // which snaps to whatever node is geometrically closest and often lands on a side street.
+  nodeAlongHeading(px, py, dir, dist) {
+    const dx = Math.cos(dir), dy = Math.sin(dir);
+    let cur = this.nearestNode(px, py);
+    let covered = 0, heading = dir;
+    const guard = this.cols + this.rows; // a walk can't exceed the lattice span
+    for (let steps = 0; steps < guard && covered < dist; steps++) {
+      const cp = this.pos(cur);
+      let best = -1, bestDot = 1e-3; // require a meaningfully-forward hop, never sideways/back
+      for (const nb of this.nbr[cur]) {
+        const np = this.pos(nb);
+        const ex = np.x - cp.x, ey = np.y - cp.y, len = Math.hypot(ex, ey) || 1;
+        const dot = (ex / len) * dx + (ey / len) * dy;
+        if (dot > bestDot) { bestDot = dot; best = nb; }
+      }
+      if (best < 0) break; // road doesn't continue forward — stop at the last node reached
+      const np = this.pos(best);
+      heading = Math.atan2(np.y - cp.y, np.x - cp.x);
+      covered += Math.hypot(np.x - cp.x, np.y - cp.y);
+      cur = best;
+    }
+    return { idx: cur, heading, covered };
+  }
+
   // BFS shortest path (in node count) from start to goal over real edges. Returns an array of
   // node indices including both endpoints, [start] if already there, or [start] if unreachable
   // (goal walled off) — callers treat a path that never arrives as "can't get there from here".

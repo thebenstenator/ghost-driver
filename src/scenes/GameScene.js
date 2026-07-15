@@ -1969,13 +1969,15 @@ export class GameScene extends Phaser.Scene {
     return 5; // L5 — max
   }
 
-  // Place a roadblock down the player's predicted travel (for the testbed Spawn button).
+  // Place a roadblock down the road the player is actually driving. Walk the nav graph along the
+  // travel heading (not a projected point snapped to the nearest node, which lands on side streets)
+  // so the block sits ON the player's path, ahead of them, broadside across that road.
   _spawnRoadblockAhead(difficulty) {
     const car = this.car, px = car.sprite.x, py = car.sprite.y;
     const dir = car.getSpeed() > 40 ? Math.atan2(car.vy, car.vx) : car.facing;
-    const tx = px + Math.cos(dir) * this.roadblockDist, ty = py + Math.sin(dir) * this.roadblockDist;
-    const p = this.navGrid.pos(this.navGrid.nearestNode(tx, ty));
-    this._spawnRoadblock(p.x, p.y, dir, difficulty);
+    const { idx, heading } = this.navGrid.nodeAlongHeading(px, py, dir, this.roadblockDist);
+    const p = this.navGrid.pos(idx);
+    this._spawnRoadblock(p.x, p.y, heading, difficulty);
   }
 
   _removeRoadblock(rb) {
