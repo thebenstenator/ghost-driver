@@ -4437,7 +4437,7 @@ this.lightHalfWid = ${s.lightHalfWid ?? null};`);
     st.add(this, "illumSpeedRef", 100, 600, 10).name("Re-lit at speed (px/s)");
 
     // Persist across refresh (binds directly to the car, so load sets car fields).
-    this._persistPanel(gui, "gd_carTuning_v14"); // bumped: per-vehicle stats files (prowler/razorback)
+    this._persistPanel(gui, `gd_carTuning_${GameScene.getVehicle()}_v1`); // per-vehicle key so each car saves independently
 
     gui.domElement.style.position = "fixed";
     gui.domElement.style.top = "8px";

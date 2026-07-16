@@ -122,7 +122,13 @@ export class CarLights {
     const v = this.v;
     const f = v.facing;
     const cf = Math.cos(f), sf = Math.sin(f);
-    const cx = v.sprite.x, cy = v.sprite.y;
+    // Read position from the physics body center, not sprite.x/y.
+    // Phaser's update order: physics.world.update() (body.center updated) → scene.update()
+    // (our code) → physics.world.postUpdate() (sprite.x/y synced from body). If we read
+    // sprite.x/y here it's still last frame's position — one frame of lag at 780 px/s = 12+ px.
+    const b = v.sprite.body;
+    const cx = b ? b.center.x : v.sprite.x;
+    const cy = b ? b.center.y : v.sprite.y;
     const dead = !!v.disabled;
     // Kill-lights is a hard on/off: head/tail lamps are fully on, or fully dark while v.lightsOff.
     // (GameScene snaps lightsOff back to false at speed, so there's no fade to do here.)
