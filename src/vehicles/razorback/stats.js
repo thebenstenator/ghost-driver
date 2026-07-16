@@ -11,8 +11,8 @@ export const RAZORBACK = {
   bodySize:      26,   // AABB backstop (capsule does the real work)
 
   // --- Capsule collider (scene-level; read by GameScene via playerCapR/capHalfLen/mass) ---
-  capR:      8,   // baked by user
-  capHalfLen: 8,  // baked by user
+  capR:      10,
+  capHalfLen: 11,
   mass:      0.8, // Mass 1/5 — lightest in the roster, BELOW a patrol cop (1.0), so in the
                   // capsule resolver it's the car that gets shoved: cops bully it around and it
                   // can't muscle out of a pileup. Pairs with the speed-scaled rubber band — you
@@ -21,8 +21,8 @@ export const RAZORBACK = {
   // --- Light anchors (overrides sprite-dim fallback in CarLights) ---
   // The razorback source is 1024×1536 with canvas padding around the car body, so the
   // sprite bounds are larger than the visible silhouette. Tune these live via the car panel.
-  lightHalfLen: 26,  // +20% from 22
-  lightHalfWid: 13,  // +20% from 11
+  lightHalfLen: 32.5,
+  lightHalfWid: 13,
 
   // --- Notoriety / stealth (Stealth 2/5 — conspicuous) ---
   // heatRate multiplies active-pursuit heat accrual. The razorback is a known quantity —
