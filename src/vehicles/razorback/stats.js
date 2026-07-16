@@ -6,8 +6,8 @@
 export const RAZORBACK = {
   // --- Sprite / display ---
   texture:       'razorback',
-  displayWidth:  40,   // +8% from 37
-  displayHeight: 60,   // +8% from 56; source is 1024×1536 (2:3), ratio preserved
+  displayWidth:  48,   // +20% from 40
+  displayHeight: 72,   // +20% from 60; source is 1024×1536 (2:3), ratio preserved
   bodySize:      26,   // AABB backstop (capsule does the real work)
 
   // --- Capsule collider (scene-level; read by GameScene via playerCapR/capHalfLen/mass) ---
@@ -21,8 +21,8 @@ export const RAZORBACK = {
   // --- Light anchors (overrides sprite-dim fallback in CarLights) ---
   // The razorback source is 1024×1536 with canvas padding around the car body, so the
   // sprite bounds are larger than the visible silhouette. Tune these live via the car panel.
-  lightHalfLen: 22,  // +8% from 20
-  lightHalfWid: 11,  // +8% from 10
+  lightHalfLen: 26,  // +20% from 22
+  lightHalfWid: 13,  // +20% from 11
 
   // --- Notoriety / stealth (Stealth 2/5 — conspicuous) ---
   // heatRate multiplies active-pursuit heat accrual. The razorback is a known quantity —
