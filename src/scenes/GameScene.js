@@ -722,6 +722,7 @@ export class GameScene extends Phaser.Scene {
       this.garageText,
       ...this.gadgetTexts,
       this.screenFx.gfx,
+      this.minimapContentGfx,
       this.minimapGfx,
     ];
     if (this.debugText) hud.push(this.debugText);
@@ -3966,7 +3967,17 @@ reinforceUrgency: { cadenceGain: ${ru.cadenceGain}, recognition: ${ru.recognitio
         .setDepth(102)
         .setAlpha(0);
     }
-    this.minimapGfx = this.add.graphics().setScrollFactor(0).setDepth(100);
+    // Minimap: content (rotates, clipped to circle) + overlay (border + player blip, no clip)
+    const mmR = 100;
+    const mmCx = this.scale.width - mmR - 14, mmCy = this.scale.height - mmR - 14;
+    this._mmCx = mmCx; this._mmCy = mmCy; this._mmR = mmR;
+    // Geometry mask clips buildings/cops to the circle (no overflow).
+    const mmMaskGfx = this.make.graphics({ add: false });
+    mmMaskGfx.fillStyle(0xffffff, 1).fillCircle(mmCx, mmCy, mmR - 1);
+    this.minimapContentGfx = this.add.graphics().setScrollFactor(0).setDepth(100);
+    this.minimapContentGfx.setMask(mmMaskGfx.createGeometryMask());
+    // Border + player blip drawn above the mask so they're never clipped.
+    this.minimapGfx = this.add.graphics().setScrollFactor(0).setDepth(101);
   }
 
   _togglePause() {
@@ -4088,67 +4099,66 @@ reinforceUrgency: { cadenceGain: ${ru.cadenceGain}, recognition: ${ru.recognitio
   // turns BLUE while heat is paused (pre-ditch cooldown / lost LOS) or bleeding down
   // during withdraw. Every cleared level stays filled as the base, so each new level's
   _drawMinimap() {
-    const g = this.minimapGfx;
-    g.clear();
-    const W = this.scale.width, H = this.scale.height;
-    const R = 100, RANGE = 2800;
-    const cx = W - R - 14, cy = H - R - 14;
-    const S = R / RANGE;
+    const cx = this._mmCx, cy = this._mmCy, R = this._mmR;
+    const RANGE = 2800, S = R / RANGE;
     const px = this.car.sprite.x, py = this.car.sprite.y;
     const f = this.car.facing;
     const sinF = Math.sin(f), cosF = Math.cos(f);
 
-    // Rotate a world offset into minimap screen offset so player heading → up (-Y).
-    const proj = (wx, wy) => {
-      const dx = wx - px, dy = wy - py;
-      return [(-dx * sinF + dy * cosF) * S, (-dx * cosF - dy * sinF) * S];
-    };
+    // Project a world offset (relative to player) → minimap screen offset.
+    // Rotation maps player heading to screen-up (-Y).
+    const proj = (dx, dy) => [(-dx * sinF + dy * cosF) * S, (-dx * cosF - dy * sinF) * S];
 
-    g.fillStyle(0x0c0c10, 0.88).fillCircle(cx, cy, R);
+    // Content layer (clipped to circle by the geometry mask)
+    const cg = this.minimapContentGfx;
+    cg.clear();
+    cg.fillStyle(0x0c0c10, 0.88).fillCircle(cx, cy, R + 2); // dark background
 
-    // Buildings
-    g.fillStyle(0x2c2c38, 1);
+    // Buildings — project all 4 corners so they rotate correctly with the world view
+    cg.fillStyle(0x2c2c38, 1);
     const cullR2 = (RANGE + 300) * (RANGE + 300);
     for (const b of BUILDINGS) {
-      const bx = b.x + b.w / 2, by = b.y + b.h / 2;
-      const ddx = bx - px, ddy = by - py;
-      if (ddx * ddx + ddy * ddy > cullR2) continue;
-      const [rx, ry] = proj(bx, by);
-      if (rx * rx + ry * ry > (R + 20) * (R + 20)) continue;
-      const mw = Math.max(2, b.w * S), mh = Math.max(2, b.h * S);
-      g.fillRect(cx + rx - mw / 2, cy + ry - mh / 2, mw, mh);
+      const bdx = b.x + b.w / 2 - px, bdy = b.y + b.h / 2 - py;
+      if (bdx * bdx + bdy * bdy > cullR2) continue;
+      const [rcx, rcy] = proj(bdx, bdy);
+      if (rcx * rcx + rcy * rcy > (R + 20) * (R + 20)) continue;
+      const hw = b.w / 2, hh = b.h / 2;
+      const pts = [
+        proj(bdx - hw, bdy - hh), proj(bdx + hw, bdy - hh),
+        proj(bdx + hw, bdy + hh), proj(bdx - hw, bdy + hh),
+      ].map(([rx, ry]) => ({ x: cx + rx, y: cy + ry }));
+      cg.fillPoints(pts, true, true);
     }
 
-    // Cops — bright red when aware (has the player), dimmer when patrolling
+    // Cops — bright red when aware (actively chasing), dim orange when patrolling
     for (const cop of this.cops) {
-      const [rx, ry] = proj(cop.sprite.x, cop.sprite.y);
+      const [rx, ry] = proj(cop.sprite.x - px, cop.sprite.y - py);
       if (rx * rx + ry * ry > R * R) continue;
-      g.fillStyle(cop.aware ? 0xff2424 : 0xff7744, 1).fillCircle(cx + rx, cy + ry, 4);
+      cg.fillStyle(cop.aware ? 0xff2424 : 0xff7744, 1).fillCircle(cx + rx, cy + ry, 4);
     }
     for (const cop of this.wrecks) {
-      const [rx, ry] = proj(cop.sprite.x, cop.sprite.y);
+      const [rx, ry] = proj(cop.sprite.x - px, cop.sprite.y - py);
       if (rx * rx + ry * ry > R * R) continue;
-      g.fillStyle(0x555566, 1).fillCircle(cx + rx, cy + ry, 3);
+      cg.fillStyle(0x555566, 1).fillCircle(cx + rx, cy + ry, 3);
     }
 
-    // Mission target — yellow chevron, clamped to the circle edge when off-screen
+    // Mission target — yellow dot, clamped to circle edge when off-screen
     if (this.mission) {
       const poi = this.mission.targetPoi;
       if (poi) {
-        const [rx, ry] = proj(poi.x, poi.y);
-        const edgeR = R - 9;
-        const d2 = rx * rx + ry * ry;
+        const [rx, ry] = proj(poi.x - px, poi.y - py);
+        const edgeR = R - 8, d2 = rx * rx + ry * ry;
         let mx, my;
         if (d2 <= edgeR * edgeR) { mx = cx + rx; my = cy + ry; }
         else { const d = Math.sqrt(d2); mx = cx + (rx / d) * edgeR; my = cy + (ry / d) * edgeR; }
-        g.fillStyle(0xffd23f, 1).fillTriangle(mx, my - 5, mx - 4, my + 4, mx + 4, my + 4);
+        cg.fillStyle(0xffd23f, 1).fillCircle(mx, my, 5);
       }
     }
 
-    // Player — white upward triangle at the centre (map rotates; player is always up)
+    // Overlay layer (not masked): player blip always at centre pointing up + white border
+    const g = this.minimapGfx;
+    g.clear();
     g.fillStyle(0xffffff, 1).fillTriangle(cx, cy - 7, cx - 5, cy + 5, cx + 5, cy + 5);
-
-    // Border
     g.lineStyle(2, 0xffffff, 1).strokeCircle(cx, cy, R);
   }
 
