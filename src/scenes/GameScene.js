@@ -376,12 +376,14 @@ export class GameScene extends Phaser.Scene {
     this.grappleCooldown = 20;     // s between grapples (cooldown gadget, not fixed charges)
     this.grappleCdRemaining = 0;   // s left on the cooldown (0 = ready)
     this.grappleRange = 260;       // px — the nearest parked car within this is grabbed
+    this.grappleFrontMax = 40;     // px a car may be AHEAD of you and still be grabbable — only cars to
+                                   // the SIDE or (slightly) BEHIND qualify; anything clearly in front is out
     this.grappleReelRate = 0.11;   // ease-OUT reel toward your LIVE wake anchor (per-60fps frame; higher = snappier yank)
-    this.grapplePullTime = 0.9;    // s CAP on the reel — it lands by now even if you're outrunning it
+    this.grapplePullTime = 0.5;    // s CAP on the reel — it lands by now even if you're outrunning it
     this.grappleLandBehind = 60;   // px behind you the car lands (broadside across your lane)
     this.grappleLandMass = 3;      // landed-blocker mass — cops SHOVE through (slowed), not a wall
     this.grappleLifetime = 20;     // s the landed blocker persists before it despawns
-    this.grappleTug = 0.45;        // fraction of YOUR speed shed per second while pulling (feel the weight)
+    this.grappleTug = 0.65;        // fraction of YOUR speed shed per second while pulling (feel the weight)
     this.sightRange = 900; // px — cop spotting range in clear line
     this.proximityRange = 70; // px — sensed THROUGH walls only at point-blank (can't
     // lose someone on your bumper). Kept small on purpose:
@@ -2061,15 +2063,20 @@ export class GameScene extends Phaser.Scene {
     if (this.busted || this.paused) return;
     if (this.grappleCdRemaining > 0) return; // still cooling down
     const px = this.car.sprite.x, py = this.car.sprite.y;
-    // Nearest parked car within range (sparse placement → simple nearest is enough).
+    const f = this.car.getSpeed() > 40 ? Math.atan2(this.car.vy, this.car.vx) : this.car.facing;
+    const cf = Math.cos(f), sf = Math.sin(f);
+    // Nearest parked car within range that is NOT in front of you — only to the side or behind (its
+    // forward distance along your travel must be ≤ grappleFrontMax). You can't hook a car you're
+    // driving straight at. (Sparse placement → simple nearest among the eligible is enough.)
     let target = null, best = this.grappleRange * this.grappleRange;
     for (const c of this.parkedCars) {
-      const d = (c.body.x - px) ** 2 + (c.body.y - py) ** 2;
+      const dx = c.body.x - px, dy = c.body.y - py;
+      if (dx * cf + dy * sf > this.grappleFrontMax) continue; // in front → not grabbable
+      const d = dx * dx + dy * dy;
       if (d < best) { best = d; target = c; }
     }
-    if (!target) return; // nothing in reach — don't start the cooldown
+    if (!target) return; // nothing eligible in reach — don't start the cooldown
     this.grappleCdRemaining = this.grappleCooldown;
-    const f = this.car.getSpeed() > 40 ? Math.atan2(this.car.vy, this.car.vx) : this.car.facing;
     this.parkedCars = this.parkedCars.filter((c) => c !== target);
 
     // Anim: the hook grabs the car's BACK corner and REELS that point toward a LIVE anchor in your
@@ -4500,6 +4507,7 @@ this.lightHalfWid = ${s.lightHalfWid ?? null};`);
     const grapple = gui.addFolder("Grappling Hook (F)");
     grapple.add(this, "grappleCooldown", 3, 60, 1).name("Cooldown (s)");
     grapple.add(this, "grappleRange", 80, 500, 10).name("Grab range (px)");
+    grapple.add(this, "grappleFrontMax", -100, 200, 5).name("Front cutoff (px ahead)");
     grapple.add(this, "grappleReelRate", 0.03, 0.4, 0.01).name("Reel snap");
     grapple.add(this, "grapplePullTime", 0.2, 2, 0.05).name("Pull time cap (s)");
     grapple.add(this, "grappleTug", 0, 2, 0.05).name("Tug drag (feel weight)");
@@ -4531,7 +4539,7 @@ this.lightHalfWid = ${s.lightHalfWid ?? null};`);
       .onChange((v) => { for (const c of this.parkedCars) { c.mass = v; c.body.body.mass = v; } });
     pk.add({ respawn: () => this._spawnParkedCars() }, "respawn").name("Respawn");
 
-    this._persistPanel(gui, "gd_gadgetTune_v22"); // bumped: parked car mass 8→2.5 (pushable, not a wall)
+    this._persistPanel(gui, "gd_gadgetTune_v23"); // bumped: grapple front cutoff + pull/tug bake
 
     // Anchored to the BOTTOM-RIGHT so the panel grows UPWARD when folders expand and stays
     // clear of the bottom-left spawn panel. CRITICAL: clear top/left to "auto" — lil-gui's
