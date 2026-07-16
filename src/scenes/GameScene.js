@@ -722,6 +722,7 @@ export class GameScene extends Phaser.Scene {
       this.garageText,
       ...this.gadgetTexts,
       this.screenFx.gfx,
+      this.minimapGfx,
     ];
     if (this.debugText) hud.push(this.debugText);
     if (this.copCountText) hud.push(this.copCountText);
@@ -3965,6 +3966,7 @@ reinforceUrgency: { cadenceGain: ${ru.cadenceGain}, recognition: ${ru.recognitio
         .setDepth(102)
         .setAlpha(0);
     }
+    this.minimapGfx = this.add.graphics().setScrollFactor(0).setDepth(100);
   }
 
   _togglePause() {
@@ -4085,6 +4087,71 @@ reinforceUrgency: { cadenceGain: ${ru.cadenceGain}, recognition: ${ru.recognitio
   // Pursuit-Mode heat meter: thin bar under the status. Fill colour deepens with level;
   // turns BLUE while heat is paused (pre-ditch cooldown / lost LOS) or bleeding down
   // during withdraw. Every cleared level stays filled as the base, so each new level's
+  _drawMinimap() {
+    const g = this.minimapGfx;
+    g.clear();
+    const W = this.scale.width, H = this.scale.height;
+    const R = 100, RANGE = 2800;
+    const cx = W - R - 14, cy = H - R - 14;
+    const S = R / RANGE;
+    const px = this.car.sprite.x, py = this.car.sprite.y;
+    const f = this.car.facing;
+    const sinF = Math.sin(f), cosF = Math.cos(f);
+
+    // Rotate a world offset into minimap screen offset so player heading → up (-Y).
+    const proj = (wx, wy) => {
+      const dx = wx - px, dy = wy - py;
+      return [(-dx * sinF + dy * cosF) * S, (-dx * cosF - dy * sinF) * S];
+    };
+
+    g.fillStyle(0x0c0c10, 0.88).fillCircle(cx, cy, R);
+
+    // Buildings
+    g.fillStyle(0x2c2c38, 1);
+    const cullR2 = (RANGE + 300) * (RANGE + 300);
+    for (const b of BUILDINGS) {
+      const bx = b.x + b.w / 2, by = b.y + b.h / 2;
+      const ddx = bx - px, ddy = by - py;
+      if (ddx * ddx + ddy * ddy > cullR2) continue;
+      const [rx, ry] = proj(bx, by);
+      if (rx * rx + ry * ry > (R + 20) * (R + 20)) continue;
+      const mw = Math.max(2, b.w * S), mh = Math.max(2, b.h * S);
+      g.fillRect(cx + rx - mw / 2, cy + ry - mh / 2, mw, mh);
+    }
+
+    // Cops — bright red when aware (has the player), dimmer when patrolling
+    for (const cop of this.cops) {
+      const [rx, ry] = proj(cop.sprite.x, cop.sprite.y);
+      if (rx * rx + ry * ry > R * R) continue;
+      g.fillStyle(cop.aware ? 0xff2424 : 0xff7744, 1).fillCircle(cx + rx, cy + ry, 4);
+    }
+    for (const cop of this.wrecks) {
+      const [rx, ry] = proj(cop.sprite.x, cop.sprite.y);
+      if (rx * rx + ry * ry > R * R) continue;
+      g.fillStyle(0x555566, 1).fillCircle(cx + rx, cy + ry, 3);
+    }
+
+    // Mission target — yellow chevron, clamped to the circle edge when off-screen
+    if (this.mission) {
+      const poi = this.mission.targetPoi;
+      if (poi) {
+        const [rx, ry] = proj(poi.x, poi.y);
+        const edgeR = R - 9;
+        const d2 = rx * rx + ry * ry;
+        let mx, my;
+        if (d2 <= edgeR * edgeR) { mx = cx + rx; my = cy + ry; }
+        else { const d = Math.sqrt(d2); mx = cx + (rx / d) * edgeR; my = cy + (ry / d) * edgeR; }
+        g.fillStyle(0xffd23f, 1).fillTriangle(mx, my - 5, mx - 4, my + 4, mx + 4, my + 4);
+      }
+    }
+
+    // Player — white upward triangle at the centre (map rotates; player is always up)
+    g.fillStyle(0xffffff, 1).fillTriangle(cx, cy - 7, cx - 5, cy + 5, cx + 5, cy + 5);
+
+    // Border
+    g.lineStyle(2, 0xffffff, 1).strokeCircle(cx, cy, R);
+  }
+
   // colour BUILDS ON TOP of the previous one instead of refilling an empty track. Flashes
   // "REINFORCEMENTS INCOMING" on each dispatch. `state` selects the colour phase.
   _drawHeatBar(state) {
@@ -5625,6 +5692,7 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
     this._drawBustBar();
     if (this.mission) this._updateMissionHud();
     this._drawHeatBar(state);
+    this._drawMinimap();
     // Screen-edge pursuit glow — mode mirrors the heat-bar phase. PURSUE flashes red on a NEW
     // chase / a re-spot AFTER a ditch (not on a brief HOLD re-acquire); HOLD is the blue lost-sight
     // hold; COOLDOWN flashes blue as the ditch lands; WITHDRAW flashes white then fades to nothing.
