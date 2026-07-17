@@ -4130,6 +4130,19 @@ reinforceUrgency: { cadenceGain: ${ru.cadenceGain}, recognition: ${ru.recognitio
       cg.fillPoints(pts, true, true);
     }
 
+    // Safehouses — same 4-corner projection as buildings but blue
+    cg.fillStyle(0x3388ff, 1);
+    for (const gar of GARAGES) {
+      const bdx = gar.x + gar.w / 2 - px, bdy = gar.y + gar.h / 2 - py;
+      if (bdx * bdx + bdy * bdy > cullR2) continue;
+      const hw = gar.w / 2, hh = gar.h / 2;
+      const pts = [
+        proj(bdx - hw, bdy - hh), proj(bdx + hw, bdy - hh),
+        proj(bdx + hw, bdy + hh), proj(bdx - hw, bdy + hh),
+      ].map(([rx, ry]) => ({ x: cx + rx, y: cy + ry }));
+      cg.fillPoints(pts, true, true);
+    }
+
     // Cops — bright red when aware (actively chasing), dim orange when patrolling
     for (const cop of this.cops) {
       const [rx, ry] = proj(cop.sprite.x - px, cop.sprite.y - py);
