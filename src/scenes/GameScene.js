@@ -4102,12 +4102,9 @@ reinforceUrgency: { cadenceGain: ${ru.cadenceGain}, recognition: ${ru.recognitio
     const cx = this._mmCx, cy = this._mmCy, R = this._mmR;
     const RANGE = 2800, S = R / RANGE;
     const px = this.car.sprite.x, py = this.car.sprite.y;
-    const f = this.car.facing;
-    const sinF = Math.sin(f), cosF = Math.cos(f);
 
-    // Project a world offset (relative to player) → minimap screen offset.
-    // Rotation maps player heading to screen-up (-Y).
-    const proj = (dx, dy) => [(-dx * sinF + dy * cosF) * S, (-dx * cosF - dy * sinF) * S];
+    // Fixed (north-up) map — just scale, no rotation.
+    const proj = (dx, dy) => [dx * S, dy * S];
 
     // Content layer (clipped to circle by the geometry mask)
     const cg = this.minimapContentGfx;
@@ -4168,10 +4165,17 @@ reinforceUrgency: { cadenceGain: ${ru.cadenceGain}, recognition: ${ru.recognitio
       }
     }
 
-    // Overlay layer (not masked): player blip always at centre pointing up + white border
+    // Overlay layer (not masked): player heading arrow + white border
     const g = this.minimapGfx;
     g.clear();
-    g.fillStyle(0xffffff, 1).fillTriangle(cx, cy - 7, cx - 5, cy + 5, cx + 5, cy + 5);
+    // Triangle tip points in the player's facing direction on the fixed map.
+    // Local coords: tip (0,-7), base corners (-5,+5),(+5,+5) pointing UP.
+    // Rotate by (facing + π/2) to convert from world angle to screen direction.
+    const f = this.car.facing;
+    const ra = f + Math.PI / 2, rc = Math.cos(ra), rs = Math.sin(ra);
+    const rv = (lx, ly) => [cx + lx * rc - ly * rs, cy + lx * rs + ly * rc];
+    const [t1x, t1y] = rv(0, -7), [t2x, t2y] = rv(-5, 5), [t3x, t3y] = rv(5, 5);
+    g.fillStyle(0xffffff, 1).fillTriangle(t1x, t1y, t2x, t2y, t3x, t3y);
     g.lineStyle(2, 0xffffff, 1).strokeCircle(cx, cy, R);
   }
 
