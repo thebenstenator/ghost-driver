@@ -194,6 +194,7 @@ export const TOOLTIPS = {
   // ── Parked cars (grapple targets) ───────────────────────────────────────────
   parkedDensity: "Chance a building gets a curbside parked car (re-scatters on change). Raise for more grapple targets around the map; lower for sparser streets.",
   parkedCarMass: "How heavy a parked car is in collisions. Raise so bumping one barely moves it (reads as truly parked); lower to shove them around more easily.",
+  parkedMinStreet: "Parked cars only spawn against streets at least this wide (px). Streets narrower than this (e.g. 60px alleys) stay clear so a car — or two across from each other — can't seal the passage. Lower to allow cars in tighter lanes.",
 
   // ── Stealth (Kill Lights) ───────────────────────────────────────────────────
   killLightsRange: "Clear-LOS spotting range (px) for a SLOW, lights-off player. Lower = cops lose a blacked-out crawling car from closer in (easier ditch).",

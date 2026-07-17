@@ -367,6 +367,8 @@ export class GameScene extends Phaser.Scene {
                                 // (the resolver's push scales with closing speed) — not the immovable wall
                                 // that mass 8 made it. It slides on impact; it doesn't spin (parked cars
                                 // don't integrate angVel — only translation). Live-tunable in the panel.
+    this.parkedMinStreet = 110; // don't park on an edge facing a street narrower than this — a car in a
+                                // 60px alley (+ one across from it) seals the passage. Keeps alleys clear.
 
     // --- Gadget: Grappling Hook (player) — fire at the nearest parked car and YANK it into the road
     // behind you, where it lands broadside as a shovable blocker for the cops on your tail. The
@@ -2032,12 +2034,22 @@ export class GameScene extends Phaser.Scene {
       const row = Math.floor((b.y - MARGIN) / GRID_STEP);
       const seed = row * GRID_COLS + col;
       if (H(seed) > this.parkedDensity) continue; // sparse
-      const edges = []; // only interior road-facing edges (skip the outer margin)
-      if (col < GRID_COLS - 1) edges.push('R');
-      if (col > 0) edges.push('L');
-      if (row < GRID_ROWS - 1) edges.push('B');
-      if (row > 0) edges.push('T');
-      if (!edges.length) continue;
+      // Eligible edges = interior road-facing AND the road there is wide enough (streets vary now:
+      // 60px alleys up to 640px avenues). A car offsets a fixed curbOff into the road, so in a narrow
+      // alley it — plus one across from it — seals the passage; only park on streets ≥ parkedMinStreet.
+      const brow = Math.floor((b.y + b.h / 2 - MARGIN) / GRID_STEP); // building's plot row/col for the
+      const bcol = Math.floor((b.x + b.w / 2 - MARGIN) / GRID_STEP); // width lookup (per-line, ~district)
+      const kL = Math.floor((b.x - MARGIN + ROAD / 2) / GRID_STEP);         // road line left of the building
+      const kR = Math.ceil((b.x + b.w - MARGIN + ROAD / 2) / GRID_STEP);    // …right
+      const jT = Math.floor((b.y - MARGIN + ROAD / 2) / GRID_STEP);         // …above
+      const jB = Math.ceil((b.y + b.h - MARGIN + ROAD / 2) / GRID_STEP);    // …below
+      const wideEnough = (w) => w >= this.parkedMinStreet;
+      const edges = [];
+      if (kR > 0 && kR < GRID_COLS && wideEnough(streetWidthV(kR, brow))) edges.push('R');
+      if (kL > 0 && kL < GRID_COLS && wideEnough(streetWidthV(kL, brow))) edges.push('L');
+      if (jB > 0 && jB < GRID_ROWS && wideEnough(streetWidthH(jB, bcol))) edges.push('B');
+      if (jT > 0 && jT < GRID_ROWS && wideEnough(streetWidthH(jT, bcol))) edges.push('T');
+      if (!edges.length) continue; // no wide-enough street to park against
       const edge = edges[Math.floor(H(seed + 1) * edges.length) % edges.length];
       const f = 0.3 + H(seed + 2) * 0.4;        // along-face fraction (clear of the corners)
       const flip = H(seed + 3) < 0.5 ? 0 : Math.PI; // parked facing either way
@@ -4631,9 +4643,12 @@ this.lightHalfWid = ${s.lightHalfWid ?? null};`);
     pk.add(this, "parkedCarMass", 1, 20, 0.5)
       .name("Mass (planted-ness)")
       .onChange((v) => { for (const c of this.parkedCars) { c.mass = v; c.body.body.mass = v; } });
+    pk.add(this, "parkedMinStreet", 60, 300, 5)
+      .name("Min street width (px)")
+      .onChange(() => this._spawnParkedCars()); // re-scatter (skips narrower streets)
     pk.add({ respawn: () => this._spawnParkedCars() }, "respawn").name("Respawn");
 
-    this._persistPanel(gui, "gd_gadgetTune_v23"); // bumped: grapple front cutoff + pull/tug bake
+    this._persistPanel(gui, "gd_gadgetTune_v24"); // bumped: parkedMinStreet (keep alleys clear)
 
     // Anchored to the BOTTOM-RIGHT so the panel grows UPWARD when folders expand and stays
     // clear of the bottom-left spawn panel. CRITICAL: clear top/left to "auto" — lil-gui's
