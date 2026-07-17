@@ -45,18 +45,21 @@ export class PursuitLevel {
       // unmet type, so the level's threat units arrive before filler patrols. Caps verified
       // (L3 6, L4 10, L5 16). `roadblocks` gates the pursuit-side auto-spawn (difficulty derived
       // from level in GameScene): L3 = light, L4 = escalating, L5 = max.
+      // `searchers` = transient units called in when a chase is LOST (breaks LOS): they close
+      // from AHEAD on the escape vector to re-establish contact, may exceed `cap` briefly, and are
+      // trimmed back to cap once the chase re-engages (see GameScene search-burst). Scales with heat.
       levels: [
         null,
-        // span  cap  reinforce cooldown reaction boxTrigger   roster (specials-first)
-        { span: 35,  cap: 2,  reinforce: 15, cooldown: 20, reaction: 0.18, boxTrigger: 150,
+        // span  cap  reinforce cooldown reaction boxTrigger  searchers  roster (specials-first)
+        { span: 35,  cap: 2,  reinforce: 15, cooldown: 20, reaction: 0.18, boxTrigger: 150, searchers: 2,
           roster: { patrol: 2 } },                                                   // L1
-        { span: 60,  cap: 4,  reinforce: 18, cooldown: 30, reaction: 0.10, boxTrigger: 220,
+        { span: 60,  cap: 4,  reinforce: 18, cooldown: 30, reaction: 0.10, boxTrigger: 220, searchers: 3,
           roster: { patrol: 4 } },                                                   // L2
-        { span: 120, cap: 6,  reinforce: 25, cooldown: 35, reaction: 0.08, boxTrigger: 240,
+        { span: 120, cap: 6,  reinforce: 25, cooldown: 35, reaction: 0.08, boxTrigger: 240, searchers: 4,
           roster: { interceptor: 2, patrol: 4 }, roadblocks: true },                 // L3
-        { span: 240, cap: 10, reinforce: 30, cooldown: 40, reaction: 0.06, boxTrigger: 260,
+        { span: 240, cap: 10, reinforce: 30, cooldown: 40, reaction: 0.06, boxTrigger: 260, searchers: 5,
           roster: { heavy: 2, interceptor: 2, spike: 1, patrol: 5 }, roadblocks: true }, // L4
-        { span: 0,   cap: 16, reinforce: 40, cooldown: 45, reaction: 0.05, boxTrigger: 280,
+        { span: 0,   cap: 16, reinforce: 40, cooldown: 45, reaction: 0.05, boxTrigger: 280, searchers: 6,
           roster: { heavy: 3, interceptor: 3, spike: 3, patrol: 7 }, roadblocks: 'max', heli: true }, // L5
       ],
     };

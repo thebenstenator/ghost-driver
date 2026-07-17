@@ -563,6 +563,23 @@ export class GameScene extends Phaser.Scene {
     this.searchSpeed = 300; // UNIFORM cop speed while searching — they sweep at a flat brisk pace
                             // (kinematic grip + cornerFloor remove the per-intersection braking that
                             // otherwise drops a physics searcher to ~110). See _applyNavProfile.
+    this.searchSpeedGain = 0.10; // +10%/level above 1 to the search sweep speed, so higher heat sweeps
+                            // faster and actually reaches where you fled before the ditch timer expires.
+                            // Safe on corners: searchers run the near-on-rails nav profile (rbGrip). See
+                            // _searchSpeed(). L1 = 300, L5 = 420.
+    // Search-burst: when a chase is LOST (LOS breaks) and you haven't ditched, call in transient
+    // "searcher" units that close from AHEAD on your escape vector to re-establish contact. They may
+    // exceed the level cap; once the chase re-engages for a sustained beat we trim back to cap by
+    // retiring the farthest. Count is per-level (PursuitLevel.searchers). See _dispatchSearchers.
+    this.searchBurstEnabled  = true;
+    this.searchBurstDelay    = 4;   // s of continuous LOS-loss (pre-ditch) before searchers are called
+    this.searchBurstCooldown = 8;   // s after a burst before a NEW loss can burst again (anti-swarm on juking)
+    this.searchReengageTrim  = 5;   // s of sustained ACTIVE re-engagement before over-cap searchers are trimmed
+    this.searchLateral       = 380; // px the ahead-spawn is offset onto a PARALLEL street (not your lane)
+    this._searchLostClock    = 0;   // s LOS has been lost this search episode (drives the burst)
+    this._searchBurstDone    = false; // one burst per lost-chase episode
+    this._searchBurstCdUntil = 0;   // time.now gate for the re-burst cooldown
+    this._activeSince        = 0;   // time.now the current ACTIVE stretch began (for reconciliation)
     this.activeBlindFloor = 360; // px/s floor for an ACTIVE-but-BLIND (LONE) cop navigating the roads:
                             // holds pace through corners so a lone cop KEEPS CONTACT while a teammate has
                             // eyes on you, instead of corner-braking to ~220 and falling back (the "one-cop
@@ -1178,7 +1195,7 @@ export class GameScene extends Phaser.Scene {
   // band's grip for these cops; when neither case holds, cornerFloor → 0 and the rejoin band owns grip.
   _applyNavProfile(cop, slow, active) {
     let floor = 0;
-    if (slow) floor = this.searchSpeed;
+    if (slow) floor = this._searchSpeed();
     else if (active && !cop.hasLOS) floor = this.activeBlindFloor;
     cop.ai.cornerFloor = floor;
     if (floor > 0) {
@@ -1395,6 +1412,10 @@ export class GameScene extends Phaser.Scene {
     ) {
       this._reinforceTimer = P.firstReinforceDelay();
     }
+    // Mark when the current ACTIVE stretch began — reconciliation waits for a SUSTAINED re-engage
+    // (a real chase, not a one-frame re-spot) before trimming over-cap searchers.
+    if (state === PursuitState.ACTIVE && this._pursuitPrevState !== PursuitState.ACTIVE)
+      this._activeSince = this.time.now;
     this._pursuitPrevState = state;
 
     const phase =
@@ -1424,6 +1445,38 @@ export class GameScene extends Phaser.Scene {
       }
     } else if (this.cops.length >= cap) {
       this._reinforceTimer = P.reinforceEvery(); // hold full until a slot opens
+    }
+
+    // Search-burst: LOS lost (in SEARCH, pre-ditch) for searchBurstDelay → call in the level's
+    // searchers to close from ahead. One burst per lost-chase episode, gated by a re-burst cooldown
+    // so juking in and out of sight can't stack a swarm. Re-arms once the chase goes ACTIVE again.
+    if (this.searchBurstEnabled && state === PursuitState.SEARCH && !this.pursuit.ditched) {
+      this._searchLostClock += dt;
+      if (
+        !this._searchBurstDone &&
+        this._searchLostClock >= this.searchBurstDelay &&
+        this.time.now >= this._searchBurstCdUntil
+      ) {
+        const n = P.cfg().searchers || 0;
+        if (n > 0) this._dispatchSearchers(n);
+        this._searchBurstDone = true;
+        this._searchBurstCdUntil = this.time.now + this.searchBurstCooldown * 1000;
+      }
+    } else {
+      this._searchLostClock = 0;
+      this._searchBurstDone = false; // re-arm for the next lost chase (cooldown still applies)
+    }
+
+    // Reconcile over-cap (searcher) units back to the heat cap — but ONLY on a sustained re-engage
+    // (real chase resumed) or once standing down. Never mid-search: that's when they're doing their job.
+    if (this.cops.length > cap) {
+      const sustained =
+        state === PursuitState.ACTIVE &&
+        this.time.now - this._activeSince >= this.searchReengageTrim * 1000;
+      const standDown =
+        state === PursuitState.RETURNING || state === PursuitState.IDLE;
+      if (sustained || standDown)
+        while (this.cops.length > cap) this._retireFarthestCop();
     }
   }
 
@@ -1485,6 +1538,48 @@ export class GameScene extends Phaser.Scene {
       console.log(
         `[t=${(this.time.now / 1000).toFixed(2)}] DISPATCH cop${this.cops.length - 1} (L${this.pursuitLevel.level}, ${this.cops.length} active)`,
       );
+  }
+
+  // Search-burst: spawn `n` transient searchers that close from AHEAD on the player's escape vector,
+  // offset onto PARALLEL streets (not your lane), off-camera. They join the search sweep immediately
+  // (driving back toward last-known → through the corridor you fled into) to re-establish contact.
+  // Interception is POSITIONAL (where they spawn), never a wall-piercing target — so they still obey
+  // the blind-nav rules (navigate to last-known, no anticipation). Flagged _searcher; allowed over cap.
+  _dispatchSearchers(n) {
+    const px = this.car.sprite.x, py = this.car.sprite.y, car = this.car;
+    const dir = car.getSpeed() > 40 ? Math.atan2(car.vy, car.vx) : car.facing;
+    const perpx = -Math.sin(dir), perpy = Math.cos(dir);
+    const lkNode = this.navGrid.nearestNode(this.pursuit.lastKnown.x, this.pursuit.lastKnown.y);
+    for (let i = 0; i < n; i++) {
+      const cop = this._spawnCop(px, py, "patrol");
+      cop.ai.reactionTime = this.pursuitLevel.cfg().reaction;
+      cop._searcher = true;
+      const lat = this.searchLateral * (i % 2 === 0 ? 1 : -1); // alternate flanks ahead
+      // First off-camera node ahead + laterally offset — nearestNodeAhead keeps it in front of you.
+      let spot = null;
+      for (let d = this.interceptAheadDist; d <= this.interceptAheadDist + 900; d += 150) {
+        const tx = px + Math.cos(dir) * d + perpx * lat;
+        const ty = py + Math.sin(dir) * d + perpy * lat;
+        const p = this.navGrid.pos(this.navGrid.nearestNodeAhead(tx, ty, px, py, dir));
+        if (!spot) spot = p;
+        if (this._offCamera(p.x, p.y, this.respawnMargin)) { spot = p; break; }
+      }
+      this._placeCop(cop, spot.x, spot.y, px, py); // face back toward the player / escape corridor
+      cop._searchNode = lkNode;                    // join the sweep this frame
+    }
+    this._reinforceFlashUntil = this.time.now + 1400;
+    if (this.copLog)
+      console.log(
+        `[t=${(this.time.now / 1000).toFixed(2)}] SEARCH-BURST +${n} (L${this.pursuitLevel.level}, ${this.cops.length} active)`,
+      );
+  }
+
+  // Level-scaled search sweep speed — higher heat sweeps faster (searchSpeedGain/level) so cops
+  // reach where you fled before the ditch timer runs out. Corner-safe via the near-on-rails nav
+  // profile. Falls back to the flat base when there's no pursuit level (sandbox).
+  _searchSpeed() {
+    const lvl = this.pursuitLevel ? this.pursuitLevel.level : 1;
+    return this.searchSpeed * (1 + this.searchSpeedGain * (lvl - 1));
   }
 
   // Remove the cop farthest from the player from the active pursuit (used on bleed-down).
@@ -3395,6 +3490,7 @@ this.spikeStripLen = ${this.spikeStripLen}; this.spikeLifetime = ${this.spikeLif
       const f = gui.addFolder(`Level ${lv}`);
       if (lv < P.maxLevel) f.add(L, "span", 5, 600, 5).name("Time to next (s)");
       f.add(L, "cap", 1, 20, 1).name("Cop cap");
+      f.add(L, "searchers", 0, 10, 1).name("Search-burst count");
       f.add(L, "reinforce", 2, 40, 1).name("Reinforce (s)");
       f.add(L, "cooldown", 5, 90, 1).name("Cooldown (s)").onChange(relevel);
       f.add(L, "reaction", 0, 0.5, 0.01).name("Reaction (s)").onChange(relevel);
@@ -3408,7 +3504,7 @@ this.spikeStripLen = ${this.spikeStripLen}; this.spikeLifetime = ${this.spikeLif
       .add({ copy: () => this._copyPursuitLevels() }, "copy")
       .name("Copy Levels → Console");
 
-    this._persistPanel(gui, "gd_pursuitLevel5"); // bumped: added reinforcement-urgency knobs
+    this._persistPanel(gui, "gd_pursuitLevel6"); // bumped: per-level search-burst count
 
     gui.domElement.style.position = "fixed";
     gui.domElement.style.top = "8px";
@@ -3426,7 +3522,7 @@ bleed: { fastFrac: ${b.fastFrac}, fastRate: ${b.fastRate}, slowRate: ${b.slowRat
 reinforceUrgency: { cadenceGain: ${ru.cadenceGain}, recognition: ${ru.recognition} },\n`;
     for (let lv = 1; lv <= P.maxLevel; lv++) {
       const L = P.levels[lv], span = lv < P.maxLevel ? L.span : 0;
-      s += `// L${lv}: span ${span}, cap ${L.cap}, reinforce ${L.reinforce}, cooldown ${L.cooldown}, reaction ${L.reaction}, boxTrigger ${L.boxTrigger}\n`;
+      s += `// L${lv}: span ${span}, cap ${L.cap}, searchers ${L.searchers}, reinforce ${L.reinforce}, cooldown ${L.cooldown}, reaction ${L.reaction}, boxTrigger ${L.boxTrigger}\n`;
     }
     console.log(s);
   }
@@ -4777,6 +4873,7 @@ this.withdrawColor = ${hex(f.withdrawColor)};`;
       respawnDist: this.respawnDist,
       respawnTime: this.respawnTime,
       searchSpeed: this.searchSpeed,
+      searchSpeedGain: this.searchSpeedGain,
       activeBlindFloor: this.activeBlindFloor,
       searchDepth: this.searchDepth,
       searchMaxDepth: this.searchMaxDepth,
@@ -4784,6 +4881,11 @@ this.withdrawColor = ${hex(f.withdrawColor)};`;
       searchDirBias: this.searchDirBias,
       searchDwell: this.searchDwell,
       searchStall: this.searchStall,
+      searchBurstEnabled: this.searchBurstEnabled,
+      searchBurstDelay: this.searchBurstDelay,
+      searchBurstCooldown: this.searchBurstCooldown,
+      searchReengageTrim: this.searchReengageTrim,
+      searchLateral: this.searchLateral,
       boxTriggerSpeed: this.director.boxTriggerSpeed,
       boxEngageRange: this.director.boxEngageRange,
       boxAhead: this.director.boxAhead,
@@ -4902,6 +5004,10 @@ this.withdrawColor = ${hex(f.withdrawColor)};`;
       .name("Search speed cap")
       .onChange(apply);
     pack
+      .add(this.copTuning, "searchSpeedGain", 0, 0.4, 0.02)
+      .name("Search speed +/level")
+      .onChange(apply);
+    pack
       .add(this.copTuning, "activeBlindFloor", 0, 600, 10)
       .name("Active-blind floor (0=off)")
       .onChange(apply);
@@ -4928,6 +5034,23 @@ this.withdrawColor = ${hex(f.withdrawColor)};`;
     pack
       .add(this.copTuning, "searchStall", 1, 8, 0.5)
       .name("Search give-up (s)")
+      .onChange(apply);
+    pack.add(this.copTuning, "searchBurstEnabled").name("Search-burst: on").onChange(apply);
+    pack
+      .add(this.copTuning, "searchBurstDelay", 0, 12, 0.5)
+      .name("Burst: LOS-lost delay (s)")
+      .onChange(apply);
+    pack
+      .add(this.copTuning, "searchBurstCooldown", 0, 30, 1)
+      .name("Burst: re-arm cooldown (s)")
+      .onChange(apply);
+    pack
+      .add(this.copTuning, "searchReengageTrim", 0, 15, 0.5)
+      .name("Burst: trim after re-engage (s)")
+      .onChange(apply);
+    pack
+      .add(this.copTuning, "searchLateral", 0, 800, 20)
+      .name("Burst: side offset (px)")
       .onChange(apply);
 
     const rejoin = gui.addFolder("Rejoin (far cops)");
@@ -5030,7 +5153,8 @@ sepRadius: ${t.sepRadius}, sepStrength: ${t.sepStrength},
 rbStart: ${t.rbStart}, rbFull: ${t.rbFull}, rbGrip: ${t.rbGrip}, rbTurnMult: ${t.rbTurnMult}, rbSpeedBoost: ${t.rbSpeedBoost}, rbOvertake: ${t.rbOvertake},
 patrolBandGap: ${t.patrolBandGap}, patrolBandStart: ${t.patrolBandStart}, patrolBandFull: ${t.patrolBandFull},
 respawnEnabled: ${t.respawnEnabled}, respawnDist: ${t.respawnDist}, respawnTime: ${t.respawnTime},
-searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${t.searchMaxDepth}, coverageTTL: ${t.coverageTTL}, searchDirBias: ${t.searchDirBias}, searchDwell: ${t.searchDwell}, searchStall: ${t.searchStall}`);
+searchSpeed: ${t.searchSpeed}, searchSpeedGain: ${t.searchSpeedGain}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${t.searchMaxDepth}, coverageTTL: ${t.coverageTTL}, searchDirBias: ${t.searchDirBias}, searchDwell: ${t.searchDwell}, searchStall: ${t.searchStall},
+searchBurst: { on: ${t.searchBurstEnabled}, delay: ${t.searchBurstDelay}, cooldown: ${t.searchBurstCooldown}, trim: ${t.searchReengageTrim}, lateral: ${t.searchLateral} }`);
           },
         },
         "copyStats",
@@ -5039,7 +5163,7 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
 
     // Persist across refresh. Key bumped to v16: huntLead removed (blind cops now go
     // straight to last-known, no forward projection).
-    this._persistPanel(gui, "gd_copTuning35"); // bumped: patrol band engages sooner (start 320→140, full 480→300)
+    this._persistPanel(gui, "gd_copTuning36"); // bumped: search-burst + level-scaled search speed
 
     gui.domElement.style.position = "fixed";
     gui.domElement.style.top = "8px";
@@ -5143,6 +5267,7 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
     this.respawnDist = t.respawnDist;
     this.respawnTime = t.respawnTime;
     this.searchSpeed = t.searchSpeed;
+    this.searchSpeedGain = t.searchSpeedGain;
     this.activeBlindFloor = t.activeBlindFloor;
     this.searchDepth = t.searchDepth;
     this.searchMaxDepth = t.searchMaxDepth;
@@ -5150,6 +5275,11 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
     this.searchDirBias = t.searchDirBias;
     this.searchDwell = t.searchDwell;
     this.searchStall = t.searchStall;
+    this.searchBurstEnabled = t.searchBurstEnabled;
+    this.searchBurstDelay = t.searchBurstDelay;
+    this.searchBurstCooldown = t.searchBurstCooldown;
+    this.searchReengageTrim = t.searchReengageTrim;
+    this.searchLateral = t.searchLateral;
     this.director.boxTriggerSpeed = t.boxTriggerSpeed;
     this.director.boxEngageRange = t.boxEngageRange;
     this.director.boxAhead = t.boxAhead;
@@ -5554,7 +5684,7 @@ searchSpeed: ${t.searchSpeed}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${
         (state === PursuitState.SEARCH && !hunting) ||
         state === PursuitState.RETURNING;
       cop.ai.speedCap = slow
-        ? this.searchSpeed
+        ? this._searchSpeed()
         : state === PursuitState.ACTIVE && cop.maneuverSpeedCap != null
           ? cop.maneuverSpeedCap
           : Infinity;
