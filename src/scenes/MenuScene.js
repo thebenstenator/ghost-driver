@@ -8,16 +8,20 @@ import {
   addMenuItem,
 } from "../ui/noirTheme.js";
 
-// Title screen: the noir cityscape as the backdrop, a big Cinzel title, and a slim right-side
-// nav (Oswald, semi-transparent → grows + opaques on hover). Loadout/economy lives in
-// GarageScene now; controls live in OptionsScene. Dev mode stays here, bottom-left.
+// Title screen: a per-car noir cityscape (the equipped car — with its wet-road reflection — is
+// baked into the backdrop plate), a big Cinzel title, and a slim right-side nav (Oswald,
+// semi-transparent → grows + opaques on hover). Loadout/economy lives in GarageScene; controls
+// live in OptionsScene.
 export class MenuScene extends Phaser.Scene {
   constructor() {
     super({ key: "MenuScene" });
   }
 
   create() {
-    addNoirBackground(this, 0.18);
+    // Pick the backdrop baked with the equipped car; fall back to the neutral plate for any car
+    // whose scene art doesn't exist yet.
+    const carBg = `title_bg_${GameScene.getVehicle()}`;
+    addNoirBackground(this, 0.18, this.textures.exists(carBg) ? carBg : "title_bg");
 
     // --- Title ---
     this.add
@@ -42,14 +46,14 @@ export class MenuScene extends Phaser.Scene {
     // Panel behind the nav — sized to hug the menu column (right edge fixed at navX+40, since
     // hover-grow scales the text about its own right-aligned origin and never moves that edge).
     // Adjust the (x, y, w, h) args below to resize/reposition it.
-    addPanel(this, GAME_WIDTH - 300, 200, 360, 345, 0.4);
+    addPanel(this, GAME_WIDTH - 300, 200, 360, 322, 0.4);
 
     addMenuItem(this, navX, 226, "CAREER", {
       size: 36,
       onClick: () => this._start(1, true, "m1"),
     });
     this.add
-      .text(navX, 262, "reach the drop · lose the cops · get paid", {
+      .text(navX, 252, "reach the drop · lose the cops · get paid", {
         fontFamily: NOIR.uiFont,
         fontSize: "13px",
         color: NOIR.dim,
@@ -57,12 +61,12 @@ export class MenuScene extends Phaser.Scene {
       .setOrigin(1, 0)
       .setAlpha(0.55);
 
-    addMenuItem(this, navX, 330, "PURSUIT MODE", {
+    addMenuItem(this, navX, 302, "PURSUIT MODE", {
       size: 26,
       onClick: () => this._start(1, true),
     });
     this.add
-      .text(navX, 358, "endless — difficulty escalates with the heat", {
+      .text(navX, 322, "endless — difficulty escalates with the heat", {
         fontFamily: NOIR.uiFont,
         fontSize: "12px",
         color: NOIR.dim,
@@ -70,17 +74,25 @@ export class MenuScene extends Phaser.Scene {
       .setOrigin(1, 0)
       .setAlpha(0.5);
 
-    addMenuItem(this, navX, 412, "FREE DRIVE", {
+    addMenuItem(this, navX, 372, "GARAGE", {
+      size: 26,
+      onClick: () => this.scene.start("GarageScene"),
+    });
+    this.add
+      .text(navX, 392, "choose your vehicle & gadgets", {
+        fontFamily: NOIR.uiFont,
+        fontSize: "12px",
+        color: NOIR.dim,
+      })
+      .setOrigin(1, 0)
+      .setAlpha(0.5);
+
+    addMenuItem(this, navX, 442, "FREE DRIVE", {
       size: 26,
       onClick: () => this._start(0),
     });
 
-    addMenuItem(this, navX, 470, "GARAGE", {
-      size: 26,
-      onClick: () => this.scene.start("GarageScene"),
-    });
-
-    addMenuItem(this, navX, 518, "OPTIONS", {
+    addMenuItem(this, navX, 490, "OPTIONS", {
       size: 26,
       onClick: () => this.scene.start("OptionsScene"),
     });

@@ -17,9 +17,11 @@ export const NOIR = {
 
 // The full-bleed background image (1672x941, exactly 16:9 — no crop needed) + a dark scrim so
 // text stays legible over whatever's behind it (the art has bright spots — signage, rain glow).
-export function addNoirBackground(scene, scrimAlpha = 0.35) {
+// `key` lets a scene swap the backdrop (the title screen picks a per-car baked plate); it
+// defaults to the neutral carless plate used by Garage/Options.
+export function addNoirBackground(scene, scrimAlpha = 0.35, key = "title_bg") {
   const bg = scene.add
-    .image(GAME_WIDTH / 2, GAME_HEIGHT / 2, "title_bg")
+    .image(GAME_WIDTH / 2, GAME_HEIGHT / 2, key)
     .setDisplaySize(GAME_WIDTH, GAME_HEIGHT);
   const scrim = scene.add.rectangle(
     GAME_WIDTH / 2,

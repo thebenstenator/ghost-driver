@@ -1,4 +1,5 @@
 import Phaser from 'phaser';
+import { VEHICLES } from '../vehicles/catalog.js';
 
 export class BootScene extends Phaser.Scene {
   constructor() {
@@ -11,7 +12,15 @@ export class BootScene extends Phaser.Scene {
     this.load.image('cop_patrol',      'sprites/vehicles/cop_patrol.png');
     this.load.image('cop_interceptor', 'sprites/vehicles/cop_interceptor.png');
     this.load.image('cop_heavy',       'sprites/vehicles/cop_heavy.png');
-    this.load.image('title_bg',        'ui/title-screen.png');
+    // Neutral carless backdrop — used by Garage/Options and as the title-screen fallback for any
+    // car whose baked scene doesn't exist yet.
+    this.load.image('title_bg',        'ui/title-screen-clean.png');
+
+    // Per-vehicle title backdrops, keyed `title_bg_<id>` from `title-screen-<id>.png` — the whole
+    // noir scene with that car (and its wet-road reflection) baked in, so the menu just swaps the
+    // plate by equipped car. A car with no scene yet simply fails to load (a harmless 404) and its
+    // key won't exist — MenuScene checks for the texture and falls back to the neutral plate.
+    for (const v of VEHICLES) this.load.image(`title_bg_${v.id}`, `ui/title-screen-${v.id}.png`);
 
     // Engine samples — decoded into the WebAudio context GameAudio reuses. Keys are
     // `eng_<car>_<band>`; GameAudio crossfades the bands by speed→RPM. If any are
