@@ -576,6 +576,9 @@ export class GameScene extends Phaser.Scene {
     this.searchBurstCooldown = 8;   // s after a burst before a NEW loss can burst again (anti-swarm on juking)
     this.searchReengageTrim  = 5;   // s of sustained ACTIVE re-engagement before over-cap searchers are trimmed
     this.searchLateral       = 380; // px the ahead-spawn is offset onto a PARALLEL street (not your lane)
+    this.searchMinDist       = 650; // px — a searcher spawn spot must be at least this far from you AND
+                                    // off-camera; near the map edge (no road far enough ahead) it falls
+                                    // back to an off-screen relocate instead of popping in close.
     this._searchLostClock    = 0;   // s LOS has been lost this search episode (drives the burst)
     this._searchBurstDone    = false; // one burst per lost-chase episode
     this._searchBurstCdUntil = 0;   // time.now gate for the re-burst cooldown
@@ -1555,16 +1558,35 @@ export class GameScene extends Phaser.Scene {
       cop.ai.reactionTime = this.pursuitLevel.cfg().reaction;
       cop._searcher = true;
       const lat = this.searchLateral * (i % 2 === 0 ? 1 : -1); // alternate flanks ahead
-      // First off-camera node ahead + laterally offset — nearestNodeAhead keeps it in front of you.
+      // First node ahead + laterally offset that's genuinely OFF-CAMERA and past searchMinDist —
+      // no on-screen/close fallback (that was the map-edge pop-in). nearestNodeAhead keeps it in front.
       let spot = null;
       for (let d = this.interceptAheadDist; d <= this.interceptAheadDist + 900; d += 150) {
         const tx = px + Math.cos(dir) * d + perpx * lat;
         const ty = py + Math.sin(dir) * d + perpy * lat;
         const p = this.navGrid.pos(this.navGrid.nearestNodeAhead(tx, ty, px, py, dir));
-        if (!spot) spot = p;
-        if (this._offCamera(p.x, p.y, this.respawnMargin)) { spot = p; break; }
+        if (
+          Phaser.Math.Distance.Between(p.x, p.y, px, py) >= this.searchMinDist &&
+          this._offCamera(p.x, p.y, this.respawnMargin)
+        ) { spot = p; break; }
       }
-      this._placeCop(cop, spot.x, spot.y, px, py); // face back toward the player / escape corridor
+      if (spot) {
+        this._placeCop(cop, spot.x, spot.y, px, py); // face back toward the player / escape corridor
+      } else {
+        // Near the map edge (no clear road far enough ahead) — relocate off-screen from ANY bearing
+        // rather than spawn on top of you. Reuse the Tier-2 respawn; clamped band as a last resort.
+        cop.sprite.setPosition(
+          px + Math.cos(Math.random() * Math.PI * 2) * this.respawnBandMax,
+          py + Math.sin(Math.random() * Math.PI * 2) * this.respawnBandMax,
+        );
+        if (!this._tryRespawnCop(cop, px, py)) {
+          const a = Math.random() * Math.PI * 2;
+          const x = Phaser.Math.Clamp(px + Math.cos(a) * this.respawnBandMin, 120, WORLD_WIDTH - 120);
+          const y = Phaser.Math.Clamp(py + Math.sin(a) * this.respawnBandMin, 120, WORLD_HEIGHT - 120);
+          const p = this.navGrid.pos(this.navGrid.nearestNode(x, y));
+          this._placeCop(cop, p.x, p.y, px, py);
+        }
+      }
       cop._searchNode = lkNode;                    // join the sweep this frame
     }
     this._reinforceFlashUntil = this.time.now + 1400;
@@ -4886,6 +4908,7 @@ this.withdrawColor = ${hex(f.withdrawColor)};`;
       searchBurstCooldown: this.searchBurstCooldown,
       searchReengageTrim: this.searchReengageTrim,
       searchLateral: this.searchLateral,
+      searchMinDist: this.searchMinDist,
       boxTriggerSpeed: this.director.boxTriggerSpeed,
       boxEngageRange: this.director.boxEngageRange,
       boxAhead: this.director.boxAhead,
@@ -5052,6 +5075,10 @@ this.withdrawColor = ${hex(f.withdrawColor)};`;
       .add(this.copTuning, "searchLateral", 0, 800, 20)
       .name("Burst: side offset (px)")
       .onChange(apply);
+    pack
+      .add(this.copTuning, "searchMinDist", 200, 1400, 20)
+      .name("Burst: min spawn dist (px)")
+      .onChange(apply);
 
     const rejoin = gui.addFolder("Rejoin (far cops)");
     rejoin
@@ -5154,7 +5181,7 @@ rbStart: ${t.rbStart}, rbFull: ${t.rbFull}, rbGrip: ${t.rbGrip}, rbTurnMult: ${t
 patrolBandGap: ${t.patrolBandGap}, patrolBandStart: ${t.patrolBandStart}, patrolBandFull: ${t.patrolBandFull},
 respawnEnabled: ${t.respawnEnabled}, respawnDist: ${t.respawnDist}, respawnTime: ${t.respawnTime},
 searchSpeed: ${t.searchSpeed}, searchSpeedGain: ${t.searchSpeedGain}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${t.searchMaxDepth}, coverageTTL: ${t.coverageTTL}, searchDirBias: ${t.searchDirBias}, searchDwell: ${t.searchDwell}, searchStall: ${t.searchStall},
-searchBurst: { on: ${t.searchBurstEnabled}, delay: ${t.searchBurstDelay}, cooldown: ${t.searchBurstCooldown}, trim: ${t.searchReengageTrim}, lateral: ${t.searchLateral} }`);
+searchBurst: { on: ${t.searchBurstEnabled}, delay: ${t.searchBurstDelay}, cooldown: ${t.searchBurstCooldown}, trim: ${t.searchReengageTrim}, lateral: ${t.searchLateral}, minDist: ${t.searchMinDist} }`);
           },
         },
         "copyStats",
@@ -5280,6 +5307,7 @@ searchBurst: { on: ${t.searchBurstEnabled}, delay: ${t.searchBurstDelay}, cooldo
     this.searchBurstCooldown = t.searchBurstCooldown;
     this.searchReengageTrim = t.searchReengageTrim;
     this.searchLateral = t.searchLateral;
+    this.searchMinDist = t.searchMinDist ?? 650; // guard: absent from a pre-existing saved panel
     this.director.boxTriggerSpeed = t.boxTriggerSpeed;
     this.director.boxEngageRange = t.boxEngageRange;
     this.director.boxAhead = t.boxAhead;
