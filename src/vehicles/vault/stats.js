@@ -19,17 +19,18 @@ export const VAULT = {
   lightHalfLen: 36,
   lightHalfWid: 18,
 
-  // --- Notoriety / stealth (Stealth 1/5 — zero anonymity) ---
-  // Pursuit clock runs fast. An armored truck in traffic is not subtle.
-  heatRate: 3.0,
-  stealth:  1,
+  // --- Notoriety / stealth (Stealth 3/5 — legitimately expected on the road) ---
+  // An armored truck in traffic is unremarkable until it starts running.
+  // Heat escalates at roughly prowler pace; stealth posture is the whole point.
+  heatRate: 0.65,
+  stealth:  3,
 
   // --- Engine (Accel 1/5, Speed 2/5) ---
   maxSpeed:        390,  // Speed 2/5 — decisively slower than prowler (600)
   maxReverseSpeed: 100,
   acceleration:    175,  // Accel 1/5 — grinds up to speed
-  hardBrakeForce:  620,  // takes real distance to stop
-  brakeForce:      480,
+  hardBrakeForce:  90,   // takes real distance to stop — ~4s from top speed
+  brakeForce:      75,   // S-key equally sluggish; must pre-brake for every turn
   reverseAccel:    110,
 
   // --- Steering (Handling 2/5) ---
@@ -42,7 +43,7 @@ export const VAULT = {
 
   // --- Drag ---
   handBrakeDrag:  0.988,   // heavy — slides further than expected but slowly
-  coastDrag:      0.990,   // keeps momentum well (Newton: mass keeps rolling)
+  coastDrag:      0.986,   // bleeds speed slowly when coasting into turns
   accelDragBase:  0.9940,  // top-speed drag ceiling kicks in early
   accelDragCurve: 0.035,   // steep ceiling — power runs out fast
 
