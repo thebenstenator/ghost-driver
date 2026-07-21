@@ -35,7 +35,7 @@ export class Vehicle {
     this._pitYaw       = 0; // external yaw force (rad/s) from a cop PITting the rear quarter; the
                             // director sets it each frame, update() applies + clears it (countersteerable)
 
-    // --- Default stats (Pilgrim baseline sedan) ---
+    // --- Default stats (Prowler baseline sedan) ---
     this.maxSpeed        = 600;
     this.maxReverseSpeed = 220;
     this.acceleration    = 345;

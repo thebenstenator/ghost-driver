@@ -1,7 +1,12 @@
-// Vault — armored truck (Speed 2/5, Accel 1/5, Handling 2/5, Mass 5/5, Stealth 1/5)
+// Vault — armored truck (Speed 1/5, Accel 1/5, Handling 2/5, Mass 5/5)
 // "They can't stop what they can't move."
 // Built for survival, not escape. Cop impacts are physics work for them, not for you.
 // The tradeoff: you will NOT outrun a pursuit — you have to outlast it, or route it.
+//
+// The code below is the source of truth for this car (playtest-tuned): low heat
+// accrual (heatRate 0.65) and an unremarkable-in-traffic posture — an armored truck
+// is expected on the road until it starts running. Any earlier stat-tier notes are
+// superseded by the values here.
 
 export const VAULT = {
   // --- Sprite / display ---
