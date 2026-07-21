@@ -5521,9 +5521,17 @@ searchBurst: { on: ${t.searchBurstEnabled}, delay: ${t.searchBurstDelay}, cooldo
                    "capsules", "logic", "hud", "minimap", "screenfx", "misc"];
     const phases = {};
     for (const label of order) phases[label] = +((this._profAcc[label] || 0) / n).toFixed(2);
+    // Layer tag — records which render sublayers were visible this sample, so a recording made
+    // while cycling 1/2/3/M self-documents (M=markings B=buildings N=neon m=minimap, '-'=hidden).
+    const tag =
+      (this._layerShow[0] ? "M" : "-") +
+      (this._layerShow[1] ? "B" : "-") +
+      (this._layerShow[2] ? "N" : "-") +
+      (this.minimapVisible ? "m" : "-");
     const sample = {
       t: Math.round(this.time.now),
       cops: this.cops.length,
+      tag,
       fps: +this.game.loop.actualFps.toFixed(1),
       update: +(this._profUpdate / n).toFixed(2),
       render: +(this._profRender / n).toFixed(2),
@@ -5533,6 +5541,7 @@ searchBurst: { on: ${t.searchBurstEnabled}, delay: ${t.searchBurstDelay}, cooldo
 
     const lines = [
       `PROFILER (F)${this._profRec ? "  ● REC" : ""}  cops:${sample.cops}`,
+      `layers  ${tag}`,
       `fps     ${sample.fps.toFixed(0).padStart(5)}`,
       `frame   ${(1000 / Math.max(1, sample.fps)).toFixed(1).padStart(5)} ms`,
       `update  ${sample.update.toFixed(1).padStart(5)} ms`,
@@ -5586,17 +5595,19 @@ searchBurst: { on: ${t.searchBurstEnabled}, delay: ${t.searchBurstDelay}, cooldo
     if (!samples.length) { console.log("[profiler] no samples recorded"); return; }
     const order = ["effects", "player", "perception", "director", "cops",
                    "capsules", "logic", "hud", "minimap", "screenfx", "misc"];
+    // Group by cop-load AND layer tag, so both a calm/hot comparison and a 1/2/3/M layer-isolation
+    // sweep separate into their own rows automatically.
     const groups = {};
     for (const s of samples) {
-      const k = this._loadBucket(s.cops);
+      const k = `${this._loadBucket(s.cops)}  ${s.tag || "----"}`;
       (groups[k] = groups[k] || []).push(s);
     }
-    const summary = Object.entries(groups).map(([load, arr]) => {
+    const summary = Object.entries(groups).map(([config, arr]) => {
       const avg = (f) => arr.reduce((a, s) => a + f(s), 0) / arr.length;
       const ph = {};
       for (const l of order) ph[l] = +avg((s) => s.phases[l] || 0).toFixed(2);
       return {
-        load, samples: arr.length,
+        config, samples: arr.length,
         fpsAvg: +avg((s) => s.fps).toFixed(1),
         fpsMin: +Math.min(...arr.map((s) => s.fps)).toFixed(1),
         updateMs: +avg((s) => s.update).toFixed(2),
@@ -5615,8 +5626,9 @@ searchBurst: { on: ${t.searchBurstEnabled}, delay: ${t.searchBurstDelay}, cooldo
     };
     console.log("── GHOST DRIVER PERF SUMMARY ─────────────────────────");
     console.log(`GPU: ${payload.gpu} · cores: ${payload.cpuCores}`);
+    console.log("tag legend: M=markings B=buildings N=neon m=minimap ('-' = hidden)");
     console.table(summary.map(({ phases, ...r }) => r));
-    for (const g of summary) console.log(`${g.load} phases:`, g.phases);
+    for (const g of summary) console.log(`${g.config} phases:`, g.phases);
     try {
       const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
       const url = URL.createObjectURL(blob);
