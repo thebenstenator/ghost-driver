@@ -1,12 +1,12 @@
-// Vault — armored truck (Speed 1/5, Accel 1/5, Handling 2/5, Mass 5/5)
+// Vault — armored truck (Speed 1/5, Accel 1/5, Handling 2/5, Mass 5/5, Stealth 1/5)
 // "They can't stop what they can't move."
 // Built for survival, not escape. Cop impacts are physics work for them, not for you.
 // The tradeoff: you will NOT outrun a pursuit — you have to outlast it, or route it.
 //
-// The code below is the source of truth for this car (playtest-tuned): low heat
-// accrual (heatRate 0.65) and an unremarkable-in-traffic posture — an armored truck
-// is expected on the road until it starts running. Any earlier stat-tier notes are
-// superseded by the values here.
+// The code below is the source of truth for this car (playtest-tuned). These are the
+// PURSUIT-MODE defaults: a running armored truck is conspicuous (low stealth → cops call
+// it in fast), but slow to boil once the chase is on (low heatRate). Missions that want a
+// "blend into traffic until you run" feel should raise stealth via a per-mission override.
 
 export const VAULT = {
   // --- Sprite / display ---
@@ -24,11 +24,12 @@ export const VAULT = {
   lightHalfLen: 36,
   lightHalfWid: 18,
 
-  // --- Notoriety / stealth (Stealth 3/5 — legitimately expected on the road) ---
-  // An armored truck in traffic is unremarkable until it starts running.
-  // Heat escalates at roughly prowler pace; stealth posture is the whole point.
+  // --- Notoriety / stealth (Stealth 1/5 — a running armored truck is unmistakable) ---
+  // stealth (1-5) → cop reinforcement urgency via notoriety = (5-stealth)/4: LOW stealth =
+  // conspicuous = cops call it in fast. heatRate (< 1) keeps ACTIVE-pursuit escalation slow —
+  // hard to hide, slow to boil. Missions can override stealth up for a blend-in premise.
   heatRate: 0.65,
-  stealth:  3,
+  stealth:  1,
 
   // --- Engine (Accel 1/5, Speed 2/5) ---
   maxSpeed:        500,  // drag-limited to ~215 actual top speed
