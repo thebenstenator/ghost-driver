@@ -162,10 +162,12 @@ export class GarageScene extends Phaser.Scene {
 
   _buildVehicleSelector(cx) {
     const CARD_W = 210, CARD_H = 140, GAP = 46;
+    const n = VEHICLES.length;
     // Store card geometry so _renderVehicleCards can redraw without recomputing.
+    // Centred for any N: card i sits at cx + (i - (n-1)/2) * (CARD_W + GAP).
     this._vehicleCards = VEHICLES.map((def, i) => ({
       def,
-      x: cx + (i === 0 ? -(CARD_W / 2 + GAP / 2) : (CARD_W / 2 + GAP / 2)),
+      x: cx + (i - (n - 1) / 2) * (CARD_W + GAP),
       y: VEH_Y,
       w: CARD_W,
       h: CARD_H,

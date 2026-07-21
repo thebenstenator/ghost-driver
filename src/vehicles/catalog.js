@@ -2,6 +2,7 @@
 // (garage UI, save/load, GameScene creation). Stats live in their own per-vehicle file.
 import { PROWLER } from './prowler/stats.js';
 import { RAZORBACK } from './razorback/stats.js';
+import { VAULT } from './vault/stats.js';
 
 export const VEHICLES = [
   {
@@ -17,6 +18,13 @@ export const VEHICLES = [
     flavor:  'Fast enough to outrun the mistake of driving it.',
     stats:   RAZORBACK,
     speed: 5, accel: 4, handling: 3,
+  },
+  {
+    id:      'vault',
+    name:    'The Vault',
+    flavor:  "They can't stop what they can't move.",
+    stats:   VAULT,
+    speed: 2, accel: 1, handling: 2,
   },
 ];
 

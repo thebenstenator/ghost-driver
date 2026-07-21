@@ -9,6 +9,7 @@ export class BootScene extends Phaser.Scene {
   preload() {
     this.load.image('player_car',     'sprites/vehicles/prowler.png');
     this.load.image('razorback',      'sprites/vehicles/razorback.png');
+    this.load.image('vault',          'sprites/vehicles/vault.png');
     this.load.image('cop_patrol',      'sprites/vehicles/cop_patrol.png');
     this.load.image('cop_interceptor', 'sprites/vehicles/cop_interceptor.png');
     this.load.image('cop_heavy',       'sprites/vehicles/cop_heavy.png');
@@ -56,6 +57,7 @@ export class BootScene extends Phaser.Scene {
       // razorback source is 1024×1536 — scale to ~34×51 px (≈ display size) so the
       // GPU does a gentle 1:1 sample instead of a 30× downscale that would shimmer.
       { key: 'razorback', scale: 48 / 1024 },
+      { key: 'vault',     scale: 56 / 1024 },
     ]);
     await this._loadFonts();
     this.scene.start('MenuScene');
