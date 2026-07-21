@@ -740,6 +740,7 @@ export class GameScene extends Phaser.Scene {
       this.bustLabel,
       this.bustedText,
       this.pausedText,
+      this.quitText,
       this.heatGfx,
       this.heatLabel,
       this.reinforceText,
@@ -3805,8 +3806,8 @@ reinforceUrgency: { cadenceGain: ${ru.cadenceGain}, recognition: ${ru.recognitio
     // SPACE-handbrake during play (that's polled separately, not a keydown).
     this.input.keyboard.on("keydown-SPACE", () => this._dismissBriefing());
     this.input.keyboard.on("keydown-ENTER", () => this._dismissBriefing());
-    // Back to the menu
-    this.input.keyboard.on("keydown-M", () => this.scene.start("MenuScene"));
+    // Back to the menu — confirmed, not instant (see _quitToMenu)
+    this.input.keyboard.on("keydown-M", () => this._quitToMenu());
     // Pause toggle
     this.input.keyboard.on("keydown-P", () => this._togglePause());
 
@@ -4060,6 +4061,20 @@ reinforceUrgency: { cadenceGain: ${ru.cadenceGain}, recognition: ${ru.recognitio
       .setDepth(101)
       .setAlpha(0);
 
+    // M-quit confirm hint — shown by _quitToMenu while its confirm window is armed.
+    this.quitText = this.add
+      .text(width / 2, this.scale.height / 2 + 90, "press M again to quit to menu", {
+        fontFamily: "monospace",
+        fontSize: "20px",
+        fontStyle: "bold",
+        color: "#ffd23f",
+        align: "center",
+      })
+      .setOrigin(0.5)
+      .setScrollFactor(0)
+      .setDepth(101)
+      .setAlpha(0);
+
     // --- Mission UI (Phase 3) — only built for a mission run; null otherwise ---
     if (this.mission) {
       const h = this.scale.height;
@@ -4117,6 +4132,27 @@ reinforceUrgency: { cadenceGain: ${ru.cadenceGain}, recognition: ${ru.recognitio
     this.minimapContentGfx.setMask(mmMaskGfx.createGeometryMask());
     // Border + player blip drawn above the mask so they're never clipped.
     this.minimapGfx = this.add.graphics().setScrollFactor(0).setDepth(101);
+  }
+
+  // M = quit to menu. End screens (busted / mission over) quit instantly — their prompts
+  // literally advertise "M for menu". But mid-run, one stray keystroke must not vaporize
+  // a chase: the first press arms a short confirm window (with an on-screen hint), and
+  // only a second M inside it actually quits.
+  _quitToMenu() {
+    if (this.busted) {
+      this.scene.start("MenuScene");
+      return;
+    }
+    if (this._quitArmed && this.time.now < this._quitArmed) {
+      this.scene.start("MenuScene");
+      return;
+    }
+    this._quitArmed = this.time.now + 1500;
+    this.quitText.setAlpha(1);
+    this.time.delayedCall(1500, () => {
+      // Only clear if a fresh press hasn't re-armed a newer window meanwhile.
+      if (this.time.now >= this._quitArmed) this.quitText.setAlpha(0);
+    });
   }
 
   _togglePause() {
