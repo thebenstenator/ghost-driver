@@ -3639,6 +3639,10 @@ reinforceUrgency: { cadenceGain: ${ru.cadenceGain}, recognition: ${ru.recognitio
     this._chCols = Math.ceil(WORLD_WIDTH / C);
     this._chRows = Math.ceil(WORLD_HEIGHT / C);
     this._chunks = [];
+    // Per-sublayer master switches (index matches the gfx array below: 0=markings+puddles,
+    // 1=buildings, 2=neon). Toggled with 1/2/3 to price each layer's RENDER cost — a hidden
+    // Graphics is skipped in the render walk, so its tessellation delta shows in the profiler.
+    this._layerShow = [true, true, true];
     for (let r = 0; r < this._chRows; r++) {
       for (let c = 0; c < this._chCols; c++) {
         const bounds = { x: c * C, y: r * C, right: (c + 1) * C, bottom: (r + 1) * C };
@@ -3665,8 +3669,21 @@ reinforceUrgency: { cadenceGain: ${ru.cadenceGain}, recognition: ${ru.recognitio
     const r0 = Math.floor(v.y / C) - 1, r1 = Math.floor(v.bottom / C) + 1;
     for (const ch of this._chunks) {
       const vis = ch.c >= c0 && ch.c <= c1 && ch.r >= r0 && ch.r <= r1;
-      if (ch.vis !== vis) { ch.vis = vis; for (const g of ch.gfx) g.setVisible(vis); }
+      if (ch.vis !== vis) {
+        ch.vis = vis;
+        ch.gfx.forEach((g, i) => g.setVisible(vis && this._layerShow[i]));
+      }
     }
+  }
+
+  // Debug: toggle a whole world sublayer (markings / buildings / neon) across every chunk to
+  // measure its render-side cost. Re-applies immediately (the cull only fires on a vis CHANGE).
+  _toggleRenderLayer(i) {
+    this._layerShow[i] = !this._layerShow[i];
+    if (this._chunks)
+      for (const ch of this._chunks) ch.gfx[i].setVisible(ch.vis && this._layerShow[i]);
+    const names = ["markings+puddles", "buildings", "neon"];
+    console.log(`[render] ${names[i]} ${this._layerShow[i] ? "ON" : "OFF"}`);
   }
 
   // Bucket every wall rect into a uniform grid keyed by GRID_STEP-sized cells. A big wall spans
@@ -3813,6 +3830,10 @@ reinforceUrgency: { cadenceGain: ${ru.cadenceGain}, recognition: ${ru.recognitio
     this.input.keyboard.on("keydown-F", () => this._toggleProfiler());
     // Record profiler samples to a downloadable log (J to start, J again to save).
     this.input.keyboard.on("keydown-J", () => this._toggleRecording());
+    // Render-layer isolation (1/2/3) — hide markings / buildings / neon to price each in `render`.
+    this.input.keyboard.on("keydown-ONE", () => this._toggleRenderLayer(0));
+    this.input.keyboard.on("keydown-TWO", () => this._toggleRenderLayer(1));
+    this.input.keyboard.on("keydown-THREE", () => this._toggleRenderLayer(2));
     // Pause toggle
     this.input.keyboard.on("keydown-P", () => this._togglePause());
 
