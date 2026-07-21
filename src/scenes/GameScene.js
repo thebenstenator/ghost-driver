@@ -3639,6 +3639,10 @@ reinforceUrgency: { cadenceGain: ${ru.cadenceGain}, recognition: ${ru.recognitio
     this._chCols = Math.ceil(WORLD_WIDTH / C);
     this._chRows = Math.ceil(WORLD_HEIGHT / C);
     this._chunks = [];
+    // View-expansion margin (px) for the visibility cull. Must exceed the largest building's
+    // half-extent + halo + neon glow (~430px for a 3×3 industrial superblock) so geometry
+    // straddling a chunk edge never pops. Far tighter than the old ±1 WHOLE-chunk (2400px) margin.
+    this._chunkMargin = 640;
     // Per-sublayer master switches (index matches the gfx array below: 0=markings+puddles,
     // 1=buildings, 2=neon). Toggled with 1/2/3 to price each layer's RENDER cost — a hidden
     // Graphics is skipped in the render walk, so its tessellation delta shows in the profiler.
@@ -3664,11 +3668,14 @@ reinforceUrgency: { cadenceGain: ${ru.cadenceGain}, recognition: ${ru.recognitio
   // chunk edge never pop). Cheap: a visibility flag per chunk.
   _updateChunkVisibility() {
     if (!this._chunks) return;
-    const v = this.cameras.main.worldView, C = this._chSize;
-    const c0 = Math.floor(v.x / C) - 1, c1 = Math.floor(v.right / C) + 1;
-    const r0 = Math.floor(v.y / C) - 1, r1 = Math.floor(v.bottom / C) + 1;
+    const v = this.cameras.main.worldView, C = this._chSize, M = this._chunkMargin;
+    // Expand the view by a fixed px margin, then show any chunk whose bounds INTERSECT it. The old
+    // ±1-whole-chunk margin tessellated up to a 2400px off-screen border every frame; the profiler
+    // showed neon+markings over-draw was the dominant render cost, and most of it was that border.
+    const vx0 = v.x - M, vx1 = v.right + M, vy0 = v.y - M, vy1 = v.bottom + M;
     for (const ch of this._chunks) {
-      const vis = ch.c >= c0 && ch.c <= c1 && ch.r >= r0 && ch.r <= r1;
+      const bx0 = ch.c * C, by0 = ch.r * C;
+      const vis = bx0 + C > vx0 && bx0 < vx1 && by0 + C > vy0 && by0 < vy1;
       if (ch.vis !== vis) {
         ch.vis = vis;
         ch.gfx.forEach((g, i) => g.setVisible(vis && this._layerShow[i]));
