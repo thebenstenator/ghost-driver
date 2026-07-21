@@ -383,45 +383,6 @@ export class GameAudio {
     }
   }
 
-  // "Found again" alert — a modulated fire-engine AIR-HORN blast fired when a cop re-spots
-  // the player during the post-ditch cooldown (the oh-crap moment). Two saws a third apart
-  // give the brassy dual-tone "BLAAT"; a vibrato LFO adds the wobble/modulation. `pan` places
-  // it on the spotting cop so it sits IN the mix, not separate. One-shot; 1.2s self-cooldown.
-  playSpotted(pan = 0) {
-    if (!this.ctx || this.muted) return;
-    const ctx = this.ctx, now = ctx.currentTime;
-    if (now < (this._spottedUntil || 0)) return;
-    this._spottedUntil = now + 1.2;
-    const dur = 0.62;
-
-    // Dual-tone air horn: two saws ~a major third apart → the recognizable brassy chord.
-    const o1 = ctx.createOscillator(); o1.type = "sawtooth"; o1.frequency.value = 330;
-    const o2 = ctx.createOscillator(); o2.type = "sawtooth"; o2.frequency.value = 415;
-
-    // Vibrato modulation — a small fast wobble on both tones so the blast has life.
-    const vib = ctx.createOscillator(); vib.type = "sine"; vib.frequency.value = 5.5;
-    const vibGain = ctx.createGain(); vibGain.gain.value = 10; // Hz depth
-    vib.connect(vibGain); vibGain.connect(o1.frequency); vibGain.connect(o2.frequency);
-
-    // Lowpass for body (keeps it a horn, not a buzz).
-    const lp = ctx.createBiquadFilter(); lp.type = "lowpass"; lp.frequency.value = 2200; lp.Q.value = 0.7;
-    const g = ctx.createGain(); g.gain.value = 0.0001;
-    const pn = ctx.createStereoPanner ? ctx.createStereoPanner() : null;
-    o1.connect(lp); o2.connect(lp); lp.connect(g);
-    if (pn) { pn.pan.value = Math.max(-1, Math.min(1, pan)); g.connect(pn); pn.connect(this.master); }
-    else g.connect(this.master);
-
-    // Punch in, sustain the blast, quick release.
-    const peak = 0.32;
-    g.gain.setValueAtTime(0.0001, now);
-    g.gain.linearRampToValueAtTime(peak, now + 0.025);
-    g.gain.setValueAtTime(peak, now + dur - 0.1);
-    g.gain.exponentialRampToValueAtTime(0.0001, now + dur);
-
-    o1.start(now); o2.start(now); vib.start(now);
-    o1.stop(now + dur + 0.02); o2.stop(now + dur + 0.02); vib.stop(now + dur + 0.02);
-  }
-
   setMuted(m) {
     this.muted = m;
     if (this.ctx) this.master.gain.setTargetAtTime(m ? 0.0001 : this.masterVolume, this.ctx.currentTime, 0.05);

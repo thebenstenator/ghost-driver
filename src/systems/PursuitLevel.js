@@ -181,8 +181,9 @@ export class PursuitLevel {
     return this._level - prev;
   }
 
-  // [future] call when the player disables a cop: big heat spike, returns the (longer)
-  // replacement-reinforcement delay the scene should use for the next dispatch.
+  // Called when the player disables a cop (wired in GameScene._updateCopDamage): big heat
+  // spike, returns the (longer) replacement-reinforcement delay the scene uses for the next
+  // dispatch.
   onCopDisabled() {
     this.addHeat(this.disableHeat);
     return this.disableReinforce;

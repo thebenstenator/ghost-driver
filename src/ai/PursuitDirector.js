@@ -14,8 +14,6 @@ export const CopState = {
   // ease in front to brake-check the player. Transient + single-holder, like a box.
   OVERTAKE:  'OVERTAKE',
   BLOCK:     'BLOCK',
-  // Heavy parked BROADSIDE across the lane (mobile solo roadblock).
-  ROADBLOCK: 'ROADBLK',
   // Committed PIT attempt: one cop swipes the player's rear quarter to spin them out.
   PIT:       'PIT',
   // Spike-unit run: sprint AHEAD (SPIKE) then drop a strip + ease in front (DEPLOY).
@@ -61,8 +59,6 @@ export class PursuitDirector {
                                  // you against the front blocker instead of just trailing (bounded,
                                  // so it can't shove you across the map like the old rear-ram)
     this.boxFrontAhead   = 30;   // along-px a box cop must reach to count as "in front" (then it blocks)
-    this.boxAhead        = 110;  // vestigial (box v2 has no offset) — kept so the legacy cop panel binds
-    this.boxBehind       = 70;   // vestigial — as above
     this._boxTimer       = 0;    // > 0 while boxing (counts down when the trigger is absent)
     this._boxFrontCop    = null; // the cop committed to taking the FRONT of the box (sticky)
 
@@ -95,17 +91,6 @@ export class PursuitDirector {
     this.draftGap          = 15;   // px behind the player a drafting cop settles (right on the bumper)
     this.draftMargin       = 70;   // px/s over the player's speed it may use to close when farther back
     this._maneuverHolder   = null; // the single cop currently running a maneuver
-
-    // --- Heavy mobile solo roadblock (ability 'block'; see the heavy branch in update) ---
-    // When the heavy is ahead it LATCHES a fixed road point ahead of you, drives there, and
-    // parks BROADSIDE across the lane (a park override stops + turns it). Committed to that
-    // spot until you pass it / it times out, then it pursues and respawns ahead to retry.
-    this.blockSetupDist  = 230;  // px ahead of you the heavy latches its block point
-    this.blockParkDist   = 75;   // px from the block point at which it parks broadside
-    this.blockAheadMin    = 40;  // along-px ahead of you it must be to START a roadblock
-    this.blockMaxTime    = 6.0;  // s a parked block holds before giving up (you never came)
-    this.blockGiveUpDist = 1100; // px from the block point beyond which it gives up
-    this.blockCooldown   = 3.0;  // s after a block before it sets up another
 
     // --- PIT maneuver (Pursuit Intervention Technique; see _updatePit) ---
     // One cop at a time presses the player's REAR QUARTER co-directionally and PUSHES — applying a
@@ -247,7 +232,6 @@ export class PursuitDirector {
 
     for (const cop of cops) {
       let target, speedCap = Infinity, boost = 0;
-      cop.parkAngle = null;   // cleared unless the roadblock branch parks this cop
       cop._spikesOut = false; // set true below while actively working a deploy — the TELEGRAPH: a
                               // spike cop carries its strip visibly out the back during the overtake/
                               // approach (drawn by GameScene), then drops the instant it's in position.
