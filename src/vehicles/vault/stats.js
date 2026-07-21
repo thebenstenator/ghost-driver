@@ -26,9 +26,9 @@ export const VAULT = {
   stealth:  3,
 
   // --- Engine (Accel 1/5, Speed 2/5) ---
-  maxSpeed:        390,  // Speed 2/5 — decisively slower than prowler (600)
+  maxSpeed:        500,  // drag-limited to ~215 actual top speed
   maxReverseSpeed: 100,
-  acceleration:    175,  // Accel 1/5 — grinds up to speed
+  acceleration:    155,  // Accel 1/5 — grinds up to speed
   hardBrakeForce:  90,   // takes real distance to stop — ~4s from top speed
   brakeForce:      75,   // S-key equally sluggish; must pre-brake for every turn
   reverseAccel:    110,

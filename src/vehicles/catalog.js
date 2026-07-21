@@ -24,7 +24,7 @@ export const VEHICLES = [
     name:    'The Vault',
     flavor:  "They can't stop what they can't move.",
     stats:   VAULT,
-    speed: 2, accel: 1, handling: 2,
+    speed: 1, accel: 1, handling: 2,
   },
 ];
 
