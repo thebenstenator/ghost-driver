@@ -3811,6 +3811,8 @@ reinforceUrgency: { cadenceGain: ${ru.cadenceGain}, recognition: ${ru.recognitio
     this.input.keyboard.on("keydown-M", () => this._toggleMinimap());
     // Frame profiler overlay (F) — works in normal playtest, not just dev mode.
     this.input.keyboard.on("keydown-F", () => this._toggleProfiler());
+    // Record profiler samples to a downloadable log (J to start, J again to save).
+    this.input.keyboard.on("keydown-J", () => this._toggleRecording());
     // Pause toggle
     this.input.keyboard.on("keydown-P", () => this._togglePause());
 
@@ -5445,6 +5447,8 @@ searchBurst: { on: ${t.searchBurstEnabled}, delay: ${t.searchBurstDelay}, cooldo
       .setDepth(120)
       .setAlpha(0);
     this._profOn = false;
+    this._profRec = false;   // recording samples to a downloadable log (toggle J)
+    this._profSamples = [];
     this._resetProfWindow();
     // Render-step timing via game-level events (fire once per frame, around ALL scene renders).
     this._onPreRender = () => { if (this._profOn) this._renderT0 = performance.now(); };
@@ -5492,25 +5496,118 @@ searchBurst: { on: ${t.searchBurstEnabled}, delay: ${t.searchBurstDelay}, cooldo
 
   _renderProfiler() {
     const n = this._profFrames || 1;
-    const fps = this.game.loop.actualFps;
-    const upd = this._profUpdate / n;
-    const ren = this._profRender / n;
-    const lines = [
-      `PROFILER (F)  cops:${this.cops.length}`,
-      `fps     ${fps.toFixed(0).padStart(5)}`,
-      `frame   ${(1000 / Math.max(1, fps)).toFixed(1).padStart(5)} ms`,
-      `update  ${upd.toFixed(1).padStart(5)} ms`,
-      `render  ${ren.toFixed(1).padStart(5)} ms`,
-      `─ update phases (ms/frame) ─`,
-    ];
     const order = ["effects", "player", "perception", "director", "cops",
                    "capsules", "logic", "hud", "minimap", "screenfx", "misc"];
+    const phases = {};
+    for (const label of order) phases[label] = +((this._profAcc[label] || 0) / n).toFixed(2);
+    const sample = {
+      t: Math.round(this.time.now),
+      cops: this.cops.length,
+      fps: +this.game.loop.actualFps.toFixed(1),
+      update: +(this._profUpdate / n).toFixed(2),
+      render: +(this._profRender / n).toFixed(2),
+      phases,
+    };
+    if (this._profRec) this._profSamples.push(sample);
+
+    const lines = [
+      `PROFILER (F)${this._profRec ? "  ● REC" : ""}  cops:${sample.cops}`,
+      `fps     ${sample.fps.toFixed(0).padStart(5)}`,
+      `frame   ${(1000 / Math.max(1, sample.fps)).toFixed(1).padStart(5)} ms`,
+      `update  ${sample.update.toFixed(1).padStart(5)} ms`,
+      `render  ${sample.render.toFixed(1).padStart(5)} ms`,
+      `─ update phases (ms/frame) ─`,
+    ];
     for (const label of order) {
-      const v = (this._profAcc[label] || 0) / n;
-      if (v >= 0.05) lines.push(`${label.padEnd(11)}${v.toFixed(2).padStart(5)}`);
+      if (phases[label] >= 0.05) lines.push(`${label.padEnd(11)}${phases[label].toFixed(2).padStart(5)}`);
     }
+    if (this._profRec) lines.push(`─ REC ${this._profSamples.length} samples · J to stop+save ─`);
     this.profText.setText(lines.join("\n"));
     this._resetProfWindow();
+  }
+
+  // Best-effort GPU name (tells render-bound-on-iGPU apart from a CPU bottleneck).
+  _glRenderer() {
+    try {
+      const gl = this.game.renderer.gl;
+      if (!gl) return "canvas (no WebGL)";
+      const ext = gl.getExtension("WEBGL_debug_renderer_info");
+      return ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : "unknown GPU";
+    } catch (e) {
+      return "unknown GPU";
+    }
+  }
+
+  _loadBucket(cops) {
+    if (cops === 0) return "calm (0)";
+    if (cops <= 3) return "light (1-3)";
+    if (cops <= 7) return "medium (4-7)";
+    return "heavy (8+)";
+  }
+
+  // J: start/stop recording. Start clears the buffer + enables the overlay; stop writes a
+  // downloadable JSON (bucketed by cop-load so calm vs hot separate on their own) and prints a
+  // console summary. Play through a calm stretch AND a hot chase between the two presses.
+  _toggleRecording() {
+    this._profRec = !this._profRec;
+    if (this._profRec) {
+      this._profSamples = [];
+      if (!this._profOn) { this._profOn = true; this.profText.setAlpha(1); }
+      this._resetProfWindow();
+      console.log("[profiler] RECORDING — play calm + a hot chase, then press J again to save.");
+    } else {
+      this._dumpRecording();
+    }
+  }
+
+  _dumpRecording() {
+    const samples = this._profSamples || [];
+    if (!samples.length) { console.log("[profiler] no samples recorded"); return; }
+    const order = ["effects", "player", "perception", "director", "cops",
+                   "capsules", "logic", "hud", "minimap", "screenfx", "misc"];
+    const groups = {};
+    for (const s of samples) {
+      const k = this._loadBucket(s.cops);
+      (groups[k] = groups[k] || []).push(s);
+    }
+    const summary = Object.entries(groups).map(([load, arr]) => {
+      const avg = (f) => arr.reduce((a, s) => a + f(s), 0) / arr.length;
+      const ph = {};
+      for (const l of order) ph[l] = +avg((s) => s.phases[l] || 0).toFixed(2);
+      return {
+        load, samples: arr.length,
+        fpsAvg: +avg((s) => s.fps).toFixed(1),
+        fpsMin: +Math.min(...arr.map((s) => s.fps)).toFixed(1),
+        updateMs: +avg((s) => s.update).toFixed(2),
+        renderMs: +avg((s) => s.render).toFixed(2),
+        phases: ph,
+      };
+    });
+    const payload = {
+      generatedAt: new Date().toISOString(),
+      userAgent: navigator.userAgent,
+      cpuCores: navigator.hardwareConcurrency || "?",
+      gpu: this._glRenderer(),
+      totalSamples: samples.length,
+      summary,
+      samples,
+    };
+    console.log("── GHOST DRIVER PERF SUMMARY ─────────────────────────");
+    console.log(`GPU: ${payload.gpu} · cores: ${payload.cpuCores}`);
+    console.table(summary.map(({ phases, ...r }) => r));
+    for (const g of summary) console.log(`${g.load} phases:`, g.phases);
+    try {
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `ghost-driver-perf-${Date.now()}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+      console.log("[profiler] downloaded perf JSON — send me that file.");
+    } catch (e) {
+      console.log("[profiler] download blocked; copy the summary table above instead.", e);
+    }
   }
 
   update(_time, delta) {
