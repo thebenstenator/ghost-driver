@@ -5293,12 +5293,35 @@ searchBurst: { on: ${t.searchBurstEnabled}, delay: ${t.searchBurstDelay}, cooldo
     }
   }
 
+  // djb2 — a tiny stable fingerprint of the code defaults (a lil-gui save() blob). Same defaults
+  // → same string; any changed default value, or an added/removed slider, changes it.
+  _hashDefaults(obj) {
+    const s = JSON.stringify(obj);
+    let h = 5381;
+    for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0;
+    return (h >>> 0).toString(36);
+  }
+
   _persistPanel(gui, key) {
     this._applyTooltips(gui); // tooltips for every panel that persists (i.e. all the tuning panels)
     const defaults = gui.save(); // snapshot the code defaults BEFORE applying any save
+    // Auto-invalidation: fingerprint the code defaults and store it beside the save. If the
+    // defaults change (a value retuned, or sliders added/removed), the fingerprint won't match
+    // and we DISCARD the stale save so the new defaults actually take effect. This retires the
+    // old manual version-bump ritual — the trailing number in `key` no longer needs bumping when
+    // you change a default; stale saves self-invalidate. (lil-gui already tolerates added/removed
+    // keys on its own; the case only a bump used to fix — a changed default masked by an existing
+    // saved value — is now handled here.)
+    const stamp = this._hashDefaults(defaults);
+    const stampKey = key + "__def";
     try {
       const saved = localStorage.getItem(key);
-      if (saved) gui.load(JSON.parse(saved));
+      if (saved && localStorage.getItem(stampKey) === stamp) {
+        gui.load(JSON.parse(saved)); // defaults unchanged since this save → your overrides still apply
+      } else if (saved) {
+        localStorage.removeItem(key); // defaults changed → drop the stale save, keep the new defaults
+      }
+      localStorage.setItem(stampKey, stamp);
     } catch (e) {
       /* corrupt/unavailable storage — ignore, use defaults */
     }
