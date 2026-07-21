@@ -510,6 +510,10 @@ export class GameScene extends Phaser.Scene {
     // to box/block/overtake) — ordinary driving into a wall is free.
     this.ramThreshold = 150; // relative impact speed (px/s) below which a hit does NOTHING
     this.ramScale = 0.12; // cop damage per px/s of relative impact above the threshold
+    // Mass reference: the mass at which ramScale / ramSpeedKill / ramBogTime produce their
+    // tuned values. Prowler (1.5) is the baseline — lighter cars deal less damage and get
+    // bogged harder; heavier cars deal more and shrug off frontal hits.
+    this.massRef = 1.5;
     // Offensive PIT (YOU spin cops): when you press a cop's rear quarter co-directionally, apply the
     // same physical push (yaw + shove + grip break) to the COP and tick damage so a committed PIT
     // wrecks it. Push scales with playerMass/cop.mass (patrols spin easily, heavies barely); toughness
@@ -1867,7 +1871,7 @@ export class GameScene extends Phaser.Scene {
       cop._pitYaw     = d.pitYawRate  * intensity * dir;
       cop._pitLateral = d.pitLateral  * intensity * dir;
       cop._pitGrip    = d.pitGripBreak;
-      cop.health -= this.pitDamage * dt;
+      cop.health -= this.pitDamage * dt * (this.playerMass / this.massRef);
       if (cop.health <= 0) (toDisable ||= []).push(cop);
     }
     if (toDisable) for (const cop of toDisable) this._disableCop(cop);
@@ -1917,7 +1921,8 @@ export class GameScene extends Phaser.Scene {
     if (cop.disabled || (cop._dmgCd || 0) > 0) return;
     const rel = Math.hypot(copAgent.preVx - otherAgent.preVx, copAgent.preVy - otherAgent.preVy);
     if (rel <= threshold) return;
-    cop.health -= ((rel - threshold) * this.ramScale * mult) / (cop.mass || 1);
+    const hitMass = (otherAgent.m || 1) / this.massRef;
+    cop.health -= ((rel - threshold) * this.ramScale * mult * hitMass) / (cop.mass || 1);
     cop._dmgCd = this.ramDmgCooldown;
     if (cop.health <= 0) (this._capDisable ||= []).push(cop);
   }
@@ -1933,7 +1938,7 @@ export class GameScene extends Phaser.Scene {
     // NOT divided by the car's (high) shove mass — that's for resisting the PUSH, not the damage.
     // Toughness comes from health (heavy 220 vs car 100); rbDamageMult lets you ram through in a
     // few committed hits rather than a dozen.
-    c.health -= (rel - this.ramThreshold) * this.ramScale * this.rbDamageMult;
+    c.health -= (rel - this.ramThreshold) * this.ramScale * this.rbDamageMult * ((otherAgent.m || 1) / this.massRef);
     c._dmgCd = this.ramDmgCooldown;
     if (c.health <= 0) { c._dead = true; (this._capRbDead ||= []).push(c); }
   }
@@ -2885,10 +2890,13 @@ export class GameScene extends Phaser.Scene {
     const frontal = Phaser.Math.Clamp(fwd, 0, 1);
     const intensity = rs * frontal * Phaser.Math.Clamp(closing / this.ramRefSpeed, 0, 1);
     if (intensity <= 0) return;
-    const keep = Math.max(0, 1 - this.ramSpeedKill * intensity);
+    // Heavier player shrugs off the bog/speed-kill; lighter player gets punished harder.
+    // Clamped so extremes don't become degenerate (vault barely feels it; razorback hurts).
+    const massFactor = Phaser.Math.Clamp(this.massRef / this.playerMass, 0.3, 2.5);
+    const keep = Math.max(0, 1 - this.ramSpeedKill * intensity * massFactor);
     this.car.vx *= keep; this.car.vy *= keep;
     this.car.sprite.body.velocity.set(this.car.vx, this.car.vy);
-    this.car._ramBog = Math.max(this.car._ramBog || 0, this.ramBogTime * intensity);
+    this.car._ramBog = Math.max(this.car._ramBog || 0, this.ramBogTime * intensity * massFactor);
   }
 
   // A small health bar floating above every active cop, so you can watch it deplete as
@@ -2974,7 +2982,8 @@ export class GameScene extends Phaser.Scene {
     sw.add(this, "capSlop", 0, 3, 0.1).name("Penetration slop (px)");
     sw.add(this, "capRelax", 0.2, 1, 0.05).name("Position relax");
     sw.add(this, "capFriction", 0, 1, 0.05).name("Contact friction (grip)");
-    sw.add(this, "playerMass", 0.5, 4, 0.1).name("Player mass");
+    sw.add(this, "playerMass", 0.5, 5, 0.1).name("Player mass");
+    sw.add(this, "massRef", 0.5, 3, 0.1).name("Mass reference (prowler=1.5)");
     sw.add(this, "ramSpeedKill", 0, 1, 0.05).name("Ram speed-kill (max)");
     sw.add(this, "ramBogTime", 0, 1.5, 0.05).name("Ram engine-bog (s)");
     sw.add(this, "ramBogAccel", 0, 1, 0.05).name("Bog power mult");
