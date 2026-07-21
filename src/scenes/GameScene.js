@@ -709,6 +709,7 @@ export class GameScene extends Phaser.Scene {
     this.cameras.main.setZoom(1.0);
 
     this._setupInput();
+    this._setupProfiler(); // frame profiler (F) — available in playtest, not dev-gated
     if (this.devMode) {
       this._setupDebugOverlay();
       this._setupTunePanel();
@@ -750,6 +751,7 @@ export class GameScene extends Phaser.Scene {
       this.screenFx.gfx,
       this.minimapContentGfx,
       this.minimapGfx,
+      this.profText,
     ];
     if (this.debugText) hud.push(this.debugText);
     if (this.copCountText) hud.push(this.copCountText);
@@ -3807,6 +3809,8 @@ reinforceUrgency: { cadenceGain: ${ru.cadenceGain}, recognition: ${ru.recognitio
     this.input.keyboard.on("keydown-DOWN", () => this._movePauseSel(1));
     // Minimap toggle (M). Quitting to the menu now lives in the pause menu (P) behind a confirm.
     this.input.keyboard.on("keydown-M", () => this._toggleMinimap());
+    // Frame profiler overlay (F) — works in normal playtest, not just dev mode.
+    this.input.keyboard.on("keydown-F", () => this._toggleProfiler());
     // Pause toggle
     this.input.keyboard.on("keydown-P", () => this._togglePause());
 
@@ -5418,6 +5422,97 @@ searchBurst: { on: ${t.searchBurstEnabled}, delay: ${t.searchBurstDelay}, cooldo
     this.director.boxEngageRange = t.boxEngageRange;
   }
 
+  // ── Dev frame profiler (toggle F, works in deployed playtest) ─────────────────
+  // Splits each LIVE frame into UPDATE (our JS: AI, LOS/segmentClear, physics, and Graphics
+  // *command-building*) vs RENDER (Phaser's GPU submit + Graphics *tessellation* — where the
+  // per-frame fillPoints/strokes actually get paid), plus a CPU breakdown of the update phases.
+  // KEY CAVEAT: a Graphics draw's real cost lands in RENDER, not in its update-phase slice (the
+  // slice is only the cheap command-building). So read the update-vs-render split FIRST to tell
+  // CPU-bound (segmentClear/AI) from draw-bound (tessellation), then use the phase slices +
+  // the M/other toggles to localise. Averaged over ~0.5s so it's readable/reportable.
+  _setupProfiler() {
+    this.profText = this.add
+      .text(this.scale.width - 12, 46, "", {
+        fontFamily: "monospace",
+        fontSize: "13px",
+        color: "#7fdfff",
+        backgroundColor: "#000000cc",
+        padding: { x: 8, y: 6 },
+        align: "left",
+      })
+      .setOrigin(1, 0) // anchored top-right
+      .setScrollFactor(0)
+      .setDepth(120)
+      .setAlpha(0);
+    this._profOn = false;
+    this._resetProfWindow();
+    // Render-step timing via game-level events (fire once per frame, around ALL scene renders).
+    this._onPreRender = () => { if (this._profOn) this._renderT0 = performance.now(); };
+    this._onPostRender = () => { if (this._profOn) this._profRender += performance.now() - this._renderT0; };
+    this.game.events.on("prerender", this._onPreRender);
+    this.game.events.on("postrender", this._onPostRender);
+    // Game events outlive the scene — must detach on shutdown or they stack every restart.
+    this.events.once("shutdown", () => {
+      this.game.events.off("prerender", this._onPreRender);
+      this.game.events.off("postrender", this._onPostRender);
+    });
+  }
+
+  _toggleProfiler() {
+    this._profOn = !this._profOn;
+    this.profText.setAlpha(this._profOn ? 1 : 0);
+    if (!this._profOn) this.profText.setText("");
+    this._resetProfWindow();
+    console.log(`[profiler] ${this._profOn ? "ON" : "OFF"}`);
+  }
+
+  _resetProfWindow() {
+    this._profAcc = {};    // phase label -> accumulated ms across the window
+    this._profFrames = 0;  // frames counted this window
+    this._profUpdate = 0;  // accumulated update ms
+    this._profRender = 0;  // accumulated render ms
+    this._profWindowT = 0; // wall-clock ms in the window (refresh the readout ~2x/sec)
+  }
+
+  // Timeline marks — cheap and gated, so they cost ~a boolean check per call when off.
+  _pbegin() { if (this._profOn) { this._pLast = performance.now(); this._profT0 = this._pLast; } }
+  _pmark(label) {
+    if (!this._profOn) return;
+    const now = performance.now();
+    this._profAcc[label] = (this._profAcc[label] || 0) + (now - this._pLast);
+    this._pLast = now;
+  }
+  _pend(delta) {
+    if (!this._profOn) return;
+    this._profUpdate += performance.now() - this._profT0;
+    this._profFrames++;
+    this._profWindowT += delta;
+    if (this._profWindowT >= 500) this._renderProfiler();
+  }
+
+  _renderProfiler() {
+    const n = this._profFrames || 1;
+    const fps = this.game.loop.actualFps;
+    const upd = this._profUpdate / n;
+    const ren = this._profRender / n;
+    const lines = [
+      `PROFILER (F)  cops:${this.cops.length}`,
+      `fps     ${fps.toFixed(0).padStart(5)}`,
+      `frame   ${(1000 / Math.max(1, fps)).toFixed(1).padStart(5)} ms`,
+      `update  ${upd.toFixed(1).padStart(5)} ms`,
+      `render  ${ren.toFixed(1).padStart(5)} ms`,
+      `─ update phases (ms/frame) ─`,
+    ];
+    const order = ["effects", "player", "perception", "director", "cops",
+                   "capsules", "logic", "hud", "minimap", "screenfx", "misc"];
+    for (const label of order) {
+      const v = (this._profAcc[label] || 0) / n;
+      if (v >= 0.05) lines.push(`${label.padEnd(11)}${v.toFixed(2).padStart(5)}`);
+    }
+    this.profText.setText(lines.join("\n"));
+    this._resetProfWindow();
+  }
+
   update(_time, delta) {
     // Show only the city chunks near the camera (cheap; runs even while frozen so the view is right).
     this._updateChunkVisibility();
@@ -5432,6 +5527,7 @@ searchBurst: { on: ${t.searchBurstEnabled}, delay: ${t.searchBurstDelay}, cooldo
       }
       return;
     }
+    this._pbegin();
 
     // Cop ram-damage / disabling, and ageing out wrecks. Run FIRST, before anyone's
     // velocity is touched this frame, so a hit's onset reads the true approach speed.
@@ -5443,6 +5539,7 @@ searchBurst: { on: ${t.searchBurstEnabled}, delay: ${t.searchBurstDelay}, cooldo
     this._updateSmoke(delta / 1000);
     this._updateGrapple(delta / 1000);
     this._updateTireSmoke(delta / 1000);
+    this._pmark("effects");
 
     // While spectating a cop (camera not on the player), freeze the car so the
     // observer can't accidentally drive or re-trigger anything.
@@ -5621,6 +5718,7 @@ searchBurst: { on: ${t.searchBurstEnabled}, delay: ${t.searchBurstDelay}, cooldo
     const px = this.car.sprite.x,
       py = this.car.sprite.y;
     const dt = delta / 1000;
+    this._pmark("player");
     let anyAware = false,
       anyLOS = false;
     let nearestCopDist = Infinity;
@@ -5649,6 +5747,7 @@ searchBurst: { on: ${t.searchBurstEnabled}, delay: ${t.searchBurstDelay}, cooldo
       if (cop.aware) anyAware = true;
       if (sees) anyLOS = true;
     }
+    this._pmark("perception");
 
     // --- Parking-garage hide. The walls already block sight; this resolves the
     // seen-entering rule. On the frame you cross INTO a garage interior, snapshot whether a
@@ -5789,6 +5888,7 @@ searchBurst: { on: ${t.searchBurstEnabled}, delay: ${t.searchBurstDelay}, cooldo
     // You PIT cops: press a cop's rear quarter and spin it out (runs BEFORE the cop loop so the push
     // lands the same frame the cop integrates; it may disable a cop, so this.cops shrinks first).
     this._updatePlayerPit(delta / 1000);
+    this._pmark("director");
 
     for (const cop of this.cops) {
       let target = null;
@@ -5879,11 +5979,13 @@ searchBurst: { on: ${t.searchBurstEnabled}, delay: ${t.searchBurstDelay}, cooldo
       cop._lastVx = cop.vx;
       cop._lastVy = cop.vy; // pre-collision cache (see _updateCopDamage)
     }
+    this._pmark("cops");
 
     // Custom rotated-car capsule collision: now that the player AND every cop have
     // integrated this frame, push every agent's 3-circle spine out of walls and apart
     // from each other (Arcade's AABB can't cover a rotated car). ADDITIVE to Arcade.
     this._resolveCapsules();
+    this._pmark("capsules");
 
     // Car lights: pin every car's additive glow sprites to its final post-collision
     // position/facing (headlights, brake lamps, cop flashers). Wrecks keep their lights
@@ -5990,10 +6092,13 @@ searchBurst: { on: ${t.searchBurstEnabled}, delay: ${t.searchBurstDelay}, cooldo
       this.physics.pause();
       return;
     }
+    this._pmark("logic");
     this._drawBustBar();
     if (this.mission) this._updateMissionHud();
     this._drawHeatBar(state);
+    this._pmark("hud");
     this._drawMinimap();
+    this._pmark("minimap");
     // Screen-edge pursuit glow — mode mirrors the heat-bar phase. PURSUE flashes red on a NEW
     // chase / a re-spot AFTER a ditch (not on a brief HOLD re-acquire); HOLD is the blue lost-sight
     // hold; COOLDOWN flashes blue as the ditch lands; WITHDRAW flashes white then fades to nothing.
@@ -6009,6 +6114,7 @@ searchBurst: { on: ${t.searchBurstEnabled}, delay: ${t.searchBurstDelay}, cooldo
     else fxMode = ScreenEdgeFx.OFF;
     this.screenFx.setMode(fxMode);
     this.screenFx.update(delta / 1000);
+    this._pmark("screenfx");
     this._drawHealthBars();
     if (this.devMode) this._drawCopCounter();
 
@@ -6127,5 +6233,8 @@ searchBurst: { on: ${t.searchBurstEnabled}, delay: ${t.searchBurstDelay}, cooldo
         }
       });
     }
+
+    this._pmark("misc");
+    this._pend(delta);
   }
 }
