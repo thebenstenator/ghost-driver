@@ -8,10 +8,20 @@ export class OptionsScene extends Phaser.Scene {
     super({ key: "OptionsScene" });
   }
 
-  create() {
+  // `data.returnTo` = a scene key to resume when launched as an in-game overlay (from the
+  // pause menu). Absent → normal standalone screen reached from the title, back to MenuScene.
+  create(data) {
     const cx = GAME_WIDTH / 2;
     addNoirBackground(this, 0.55);
-    addBackLink(this, () => this.scene.start("MenuScene"));
+    const back = () => {
+      if (data && data.returnTo) {
+        this.scene.stop();
+        this.scene.resume(data.returnTo);
+      } else {
+        this.scene.start("MenuScene");
+      }
+    };
+    addBackLink(this, back);
 
     this.add
       .text(cx, 56, "OPTIONS", {
@@ -34,7 +44,8 @@ export class OptionsScene extends Phaser.Scene {
 
     const controls = [
       "Arrows — Drive      Space — Handbrake      Shift — Brake",
-      "Z / X / C — your gadgets      V — Repair      P — Pause",
+      "Z / X / C — your gadgets      V — Repair      L — Kill lights",
+      "M — Minimap      N — Mute      P — Pause",
     ].join("\n");
     this.add
       .text(cx, GAME_HEIGHT / 2 - 12, controls, {

@@ -740,7 +740,6 @@ export class GameScene extends Phaser.Scene {
       this.bustLabel,
       this.bustedText,
       this.pausedText,
-      this.quitText,
       this.heatGfx,
       this.heatLabel,
       this.reinforceText,
@@ -3793,21 +3792,21 @@ reinforceUrgency: { cadenceGain: ${ru.cadenceGain}, recognition: ${ru.recognitio
 
     // Restart any time (same cop count); new run drops straight into play. A mission run re-runs
     // the SAME mission (re-shows its briefing), so the mission id has to ride along.
-    this.input.keyboard.on("keydown-R", () =>
-      this.scene.restart({
-        copCount: this.copCount,
-        autostart: true,
-        pursuitMode: this.pursuitMode,
-        sandbox: this.sandbox,
-        mission: this.missionId,
-      }),
-    );
+    this.input.keyboard.on("keydown-R", () => this._restartRun());
     // Briefing dismiss (SPACE / ENTER) — no-op outside a mission briefing, so it can't clash with
     // SPACE-handbrake during play (that's polled separately, not a keydown).
     this.input.keyboard.on("keydown-SPACE", () => this._dismissBriefing());
-    this.input.keyboard.on("keydown-ENTER", () => this._dismissBriefing());
-    // Back to the menu — confirmed, not instant (see _quitToMenu)
-    this.input.keyboard.on("keydown-M", () => this._quitToMenu());
+    // ENTER dismisses a briefing AND chooses in the pause menu — each is a no-op unless its
+    // own state is active (can't be briefing and paused at once), so both can share the key.
+    this.input.keyboard.on("keydown-ENTER", () => {
+      this._dismissBriefing();
+      this._activatePauseSel();
+    });
+    // Pause menu navigation (only acts while paused; driving is frozen then, so the arrows are free).
+    this.input.keyboard.on("keydown-UP", () => this._movePauseSel(-1));
+    this.input.keyboard.on("keydown-DOWN", () => this._movePauseSel(1));
+    // Minimap toggle (M). Quitting to the menu now lives in the pause menu (P) behind a confirm.
+    this.input.keyboard.on("keydown-M", () => this._toggleMinimap());
     // Pause toggle
     this.input.keyboard.on("keydown-P", () => this._togglePause());
 
@@ -3833,7 +3832,7 @@ reinforceUrgency: { cadenceGain: ${ru.cadenceGain}, recognition: ${ru.recognitio
       this.cameras.main.startFollow(sprite, true, 0.1, 0.1);
     });
 
-    // Mute toggle (N) — M is already the menu key.
+    // Mute toggle (N).
     this.input.keyboard.on("keydown-N", () => {
       if (this.audio) this.audio.setMuted(!this.audio.muted);
     });
@@ -4047,28 +4046,18 @@ reinforceUrgency: { cadenceGain: ${ru.cadenceGain}, recognition: ${ru.recognitio
       .setDepth(101)
       .setAlpha(0);
 
-    // PAUSED overlay
+    // PAUSED overlay — a navigable menu (see _togglePause / _renderPauseMenu). Text is
+    // rebuilt each time the selection or view changes; the initial string is a placeholder.
     this.pausedText = this.add
-      .text(width / 2, this.scale.height / 2, "PAUSED\n\npress P to play", {
+      .text(width / 2, this.scale.height / 2, "PAUSED", {
         fontFamily: "monospace",
-        fontSize: "56px",
+        fontSize: "28px",
         fontStyle: "bold",
         color: "#ffffff",
         align: "center",
-      })
-      .setOrigin(0.5)
-      .setScrollFactor(0)
-      .setDepth(101)
-      .setAlpha(0);
-
-    // M-quit confirm hint — shown by _quitToMenu while its confirm window is armed.
-    this.quitText = this.add
-      .text(width / 2, this.scale.height / 2 + 90, "press M again to quit to menu", {
-        fontFamily: "monospace",
-        fontSize: "20px",
-        fontStyle: "bold",
-        color: "#ffd23f",
-        align: "center",
+        lineSpacing: 8,
+        backgroundColor: "#000000cc",
+        padding: { x: 40, y: 28 },
       })
       .setOrigin(0.5)
       .setScrollFactor(0)
@@ -4132,27 +4121,84 @@ reinforceUrgency: { cadenceGain: ${ru.cadenceGain}, recognition: ${ru.recognitio
     this.minimapContentGfx.setMask(mmMaskGfx.createGeometryMask());
     // Border + player blip drawn above the mask so they're never clipped.
     this.minimapGfx = this.add.graphics().setScrollFactor(0).setDepth(101);
+    this.minimapVisible = true; // toggled by M (see _toggleMinimap)
   }
 
-  // M = quit to menu. End screens (busted / mission over) quit instantly — their prompts
-  // literally advertise "M for menu". But mid-run, one stray keystroke must not vaporize
-  // a chase: the first press arms a short confirm window (with an on-screen hint), and
-  // only a second M inside it actually quits.
-  _quitToMenu() {
-    if (this.busted) {
-      this.scene.start("MenuScene");
-      return;
-    }
-    if (this._quitArmed && this.time.now < this._quitArmed) {
-      this.scene.start("MenuScene");
-      return;
-    }
-    this._quitArmed = this.time.now + 1500;
-    this.quitText.setAlpha(1);
-    this.time.delayedCall(1500, () => {
-      // Only clear if a fresh press hasn't re-armed a newer window meanwhile.
-      if (this.time.now >= this._quitArmed) this.quitText.setAlpha(0);
+  // M toggles the minimap. Hidden = skip the (per-frame, not-cheap) redraw entirely.
+  _toggleMinimap() {
+    this.minimapVisible = !this.minimapVisible;
+    this.minimapGfx.setVisible(this.minimapVisible);
+    this.minimapContentGfx.setVisible(this.minimapVisible);
+  }
+
+  // ── Pause menu ──────────────────────────────────────────────────────────────
+  // P opens/closes a proper pause menu (freezes the run). It's keyboard-driven:
+  // ↑/↓ move the selection, Enter chooses, P resumes. Quitting to the menu goes
+  // through a YES/NO confirm view so one keystroke can't vaporize a live chase
+  // (the reason M no longer instant-quits — M is now the minimap toggle).
+  _pauseMainItems() {
+    return [
+      { label: "RESUME",       act: () => this._togglePause() },
+      { label: "RESTART RUN",  act: () => this._restartRun() },
+      { label: "OPTIONS",      act: () => this._openPauseOptions() },
+      { label: "QUIT TO MENU", act: () => this._setPauseView("confirm") },
+    ];
+  }
+
+  _pauseConfirmItems() {
+    return [
+      { label: "NO — KEEP DRIVING",  act: () => this._setPauseView("main") },
+      { label: "YES — QUIT TO MENU", act: () => this.scene.start("MenuScene") },
+    ];
+  }
+
+  _renderPauseMenu() {
+    const items = this.pauseView === "confirm" ? this._pauseConfirmItems() : this._pauseMainItems();
+    this._pauseItems = items;
+    if (this.pauseIndex >= items.length) this.pauseIndex = 0;
+    const title = this.pauseView === "confirm" ? "QUIT TO MENU?" : "— PAUSED —";
+    const rows = items
+      .map((it, i) => (i === this.pauseIndex ? "▶  " : "    ") + it.label)
+      .join("\n");
+    const hint = "↑ ↓  select      Enter  choose      P  resume";
+    this.pausedText.setText(`${title}\n\n${rows}\n\n${hint}`);
+  }
+
+  _setPauseView(view) {
+    this.pauseView = view;
+    this.pauseIndex = 0;
+    this._renderPauseMenu();
+  }
+
+  _movePauseSel(delta) {
+    if (!this.paused) return;
+    const n = this._pauseItems.length;
+    this.pauseIndex = (this.pauseIndex + delta + n) % n;
+    this._renderPauseMenu();
+  }
+
+  _activatePauseSel() {
+    if (!this.paused) return;
+    const it = this._pauseItems[this.pauseIndex];
+    if (it) it.act();
+  }
+
+  // Restart the current run (same params). Also the R hotkey.
+  _restartRun() {
+    this.scene.restart({
+      copCount: this.copCount,
+      autostart: true,
+      pursuitMode: this.pursuitMode,
+      sandbox: this.sandbox,
+      mission: this.missionId,
     });
+  }
+
+  // Open Options as an overlay over the paused game; scene.pause() freezes GameScene input
+  // so its hotkeys can't fire underneath. OptionsScene resumes us on ← BACK / ESC.
+  _openPauseOptions() {
+    this.scene.pause();
+    this.scene.launch("OptionsScene", { returnTo: this.scene.key });
   }
 
   _togglePause() {
@@ -4160,6 +4206,7 @@ reinforceUrgency: { cadenceGain: ${ru.cadenceGain}, recognition: ${ru.recognitio
     this.paused = !this.paused;
     if (this.paused) {
       this.physics.pause();
+      this._setPauseView("main");
       this.pausedText.setAlpha(1);
     } else {
       this.physics.resume();
@@ -4274,6 +4321,7 @@ reinforceUrgency: { cadenceGain: ${ru.cadenceGain}, recognition: ${ru.recognitio
   // turns BLUE while heat is paused (pre-ditch cooldown / lost LOS) or bleeding down
   // during withdraw. Every cleared level stays filled as the base, so each new level's
   _drawMinimap() {
+    if (!this.minimapVisible) return; // hidden via M — skip the per-frame redraw
     const cx = this._mmCx, cy = this._mmCy, R = this._mmR;
     const RANGE = 2800, S = R / RANGE;
     const px = this.car.sprite.x, py = this.car.sprite.y;
@@ -4956,8 +5004,6 @@ this.withdrawColor = ${hex(f.withdrawColor)};`;
       searchMinDist: this.searchMinDist,
       boxTriggerSpeed: this.director.boxTriggerSpeed,
       boxEngageRange: this.director.boxEngageRange,
-      boxAhead: this.director.boxAhead,
-      boxBehind: this.director.boxBehind,
     };
 
     const gui = new GUI({ title: "Cop Tuning", width: 300 });
@@ -5043,14 +5089,6 @@ this.withdrawColor = ${hex(f.withdrawColor)};`;
     pack
       .add(this.copTuning, "boxEngageRange", 100, 1200, 20)
       .name("Box: engage range")
-      .onChange(apply);
-    pack
-      .add(this.copTuning, "boxAhead", 0, 300, 5)
-      .name("Box: front cut-ahead")
-      .onChange(apply);
-    pack
-      .add(this.copTuning, "boxBehind", 0, 300, 5)
-      .name("Box: rear gap")
       .onChange(apply);
     pack
       .add(this.copTuning, "sepRadius", 0, 250, 5)
@@ -5219,7 +5257,7 @@ turnSpeedLow: ${t.turnSpeedLow}, turnSpeed: ${t.turnSpeed}, minSteerFactor: ${t.
 maxApproachSpeed: ${t.maxApproachSpeed}, cornerMinSpeed: ${t.cornerMinSpeed}, brakeDecel: ${t.brakeDecel},
 arriveRadius: ${t.arriveRadius}, senseDist: ${t.senseDist}, directRange: ${t.directRange}, chaseRange: ${t.chaseRange}, reactionTime: ${t.reactionTime},
 // --- Formation (PursuitDirector) ---
-boxTriggerSpeed: ${t.boxTriggerSpeed}, boxEngageRange: ${t.boxEngageRange}, boxAhead: ${t.boxAhead}, boxBehind: ${t.boxBehind},
+boxTriggerSpeed: ${t.boxTriggerSpeed}, boxEngageRange: ${t.boxEngageRange},
 // --- Separation + rejoin band + search (GameScene) ---
 sepRadius: ${t.sepRadius}, sepStrength: ${t.sepStrength},
 rbStart: ${t.rbStart}, rbFull: ${t.rbFull}, rbGrip: ${t.rbGrip}, rbTurnMult: ${t.rbTurnMult}, rbSpeedBoost: ${t.rbSpeedBoost}, rbOvertake: ${t.rbOvertake},
@@ -5355,8 +5393,6 @@ searchBurst: { on: ${t.searchBurstEnabled}, delay: ${t.searchBurstDelay}, cooldo
     this.searchMinDist = t.searchMinDist ?? 650; // guard: absent from a pre-existing saved panel
     this.director.boxTriggerSpeed = t.boxTriggerSpeed;
     this.director.boxEngageRange = t.boxEngageRange;
-    this.director.boxAhead = t.boxAhead;
-    this.director.boxBehind = t.boxBehind;
   }
 
   update(_time, delta) {
@@ -5733,9 +5769,6 @@ searchBurst: { on: ${t.searchBurstEnabled}, delay: ${t.searchBurstDelay}, cooldo
 
     for (const cop of this.cops) {
       let target = null;
-      // Roadblock park state only applies while the chase is live; drop it otherwise so a
-      // heavy that loses the chase stops parking and searches/returns normally.
-      if (state !== PursuitState.ACTIVE) { cop.parkAngle = null; cop._blockPoint = null; }
       // ACTIVE: a cop that can SEE the player uses the Director's live, coordinated
       // target; a cop WITHOUT its own sight line heads for a drivable last-known goal
       // (never the live position, which may be inside a building) and lets CopAI route
