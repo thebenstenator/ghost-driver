@@ -522,6 +522,23 @@ export class GameScene extends Phaser.Scene {
     this.pitDamage = 120; // cop health/sec drained while you're PITting it (patrol 100hp → ~1s committed)
     this.ramContactDist = 40; // px centre-distance counted as a player↔cop hit
     this.ramDmgCooldown = 0.7; // s between damage ticks on one cop (so a single ram = one tick)
+
+    // --- PLAYER vehicle health (career mechanic; mode-scoped — see gameplay.md → Vehicle Damage) ---
+    // The reciprocal of cop ram damage: hard rams hurt YOU too (the two-way exchange). NO instant
+    // fail — as health falls, handling degrades; at 0 the car is crippled (slow, loose, no nitro) →
+    // easy to box → busted. Kept ON here behind a toggle so it can be dialed in; in pure Pursuit Mode
+    // it's meant to be OFF (the bust is the only fail). All levers live in Car Tuning → Health/Damage.
+    this.playerHealthEnabled = true;                       // master toggle (later: off in Pursuit Mode)
+    this.car.maxHealth = this._vehicleStats.health ?? 100; // per-vehicle baseline (from Durability)
+    this.car.health    = this.car.maxHealth;
+    this.playerRamThreshold = 150;   // closing speed (px/s) a hit needs to hurt you (mirrors ramThreshold)
+    this.playerRamScale     = 0.09;  // your damage per px/s over threshold × (hitter mass / your mass)
+    this.healthDegradeStart = 0.5;   // handling starts degrading once health drops below this fraction
+    this.healthSpeedMult    = 0.6;   // top-speed × at 0 health (eased in from healthDegradeStart)
+    this.healthAccelMult    = 0.6;   // acceleration × at 0 health
+    this.healthGripMult     = 0.7;   // grip × at 0 health
+    this.healthNitroLock    = 0.15;  // below this health fraction, nitro won't fire (engine too hurt)
+    this.repairHealthAmount = 60;    // health the Repair Kit restores per use
     this.selfImpactDrop = 200; // px/s sudden speed loss in a frame that reads as a CRASH (> braking)
     this.selfScale = 0.05; // cop self-damage per px/s of crash, while mid-aggressive-action
     // Cop↔cop (and cop↔roadblock) ram damage is SEPARATE from the player's ram, so cops crashing
@@ -752,6 +769,7 @@ export class GameScene extends Phaser.Scene {
       this.minimapContentGfx,
       this.minimapGfx,
       this.profText,
+      this.playerHpGfx,
     ];
     if (this.debugText) hud.push(this.debugText);
     if (this.copCountText) hud.push(this.copCountText);
@@ -1929,6 +1947,22 @@ export class GameScene extends Phaser.Scene {
     if (cop.health <= 0) (this._capDisable ||= []).push(cop);
   }
 
+  // RAM damage to the PLAYER — the reciprocal of _agentRamDamage (the two-way exchange). Called from
+  // the capsule contact when a cop or roadblock car hits the player; same pre-collision closing speed,
+  // scaled by (hitter mass / your mass) so a heavy hurts and a patrol chips. Gated by the master toggle
+  // + the shared per-contact cooldown. NEVER disables — health just drops; the handling cripple is
+  // applied in update() (0 health = sitting duck, not instant fail).
+  _playerRamDamage(playerAgent, otherAgent) {
+    if (!this.playerHealthEnabled) return;
+    const car = playerAgent.v;
+    if ((car._dmgCd || 0) > 0) return;
+    const rel = Math.hypot(playerAgent.preVx - otherAgent.preVx, playerAgent.preVy - otherAgent.preVy);
+    if (rel <= this.playerRamThreshold) return;
+    const hitMass = (otherAgent.m || 1) / this.massRef;
+    car.health = Math.max(0, car.health - ((rel - this.playerRamThreshold) * this.playerRamScale * hitMass) / (playerAgent.m || 1));
+    car._dmgCd = this.ramDmgCooldown;
+  }
+
   // RAM damage to a ROADBLOCK CAR (it has health tied to its unit type). Same closing-speed model
   // as a cop — so you (or another cop) can RAM THROUGH a block car, clearing the slot. `rbAgent`
   // is the block car's capsule agent; `otherAgent` is whatever hit it. Destruction is deferred.
@@ -2446,14 +2480,17 @@ export class GameScene extends Phaser.Scene {
   // Clear a blowout instantly — the hook the Repair Kit gadget calls.
   _repairTires() { this.spikeCrippleTime = 0; }
 
-  // Gadget: Repair Kit — spend a charge to instantly clear a spike blowout. No-op (no charge spent)
-  // if your tires aren't blown, so it can't be wasted.
+  // Gadget: Repair Kit — spend a charge to instantly clear a spike blowout AND restore vehicle
+  // health. No-op (no charge spent) if there's nothing to fix, so it can't be wasted.
   _useRepairKit() {
     if (this.busted || this.paused) return;
     if (this.repairCharges <= 0) return;
-    if (this.spikeCrippleTime <= 0) return; // nothing to repair — don't burn a charge
+    const tiresBlown = this.spikeCrippleTime > 0;
+    const hurt = this.playerHealthEnabled && this.car.maxHealth > 0 && this.car.health < this.car.maxHealth;
+    if (!tiresBlown && !hurt) return; // nothing to repair — don't burn a charge
     this.repairCharges--;
     this._repairTires();
+    if (hurt) this.car.health = Math.min(this.car.maxHealth, this.car.health + this.repairHealthAmount);
     this._repairFlashUntil = this.time.now + 900; // brief green pip flash
   }
 
@@ -2545,6 +2582,8 @@ export class GameScene extends Phaser.Scene {
     if (this.busted || this.paused) return;
     if (this.nitroCharges <= 0) return;
     if (this.nitroTimer > 0) return; // already boosting — don't waste a charge
+    if (this.playerHealthEnabled && this.car.maxHealth > 0 &&
+        this.car.health / this.car.maxHealth < this.healthNitroLock) return; // engine too damaged to boost
     this.nitroCharges--;
     this.nitroTimer = this.nitroDuration;
   }
@@ -2864,10 +2903,10 @@ export class GameScene extends Phaser.Scene {
     // PRE-collision closing speed (agent.preVx/preVy), gated by ramThreshold — so normal pack
     // jostling (low relative speed) is free, but a real high-speed crash hurts.
     const aCop = !!a.cop, bCop = !!b.cop;                       // live (damageable) cop agents
-    if (a.player && b.rbCar) { this._onRoadblockHit(b.rbCar.body); this._rbDamage(b, a); }
-    else if (b.player && a.rbCar) { this._onRoadblockHit(a.rbCar.body); this._rbDamage(a, b); }
-    else if (a.player && bCop) { this._applyRamImpact(b.v, cnx, cny); this._agentRamDamage(b, a); }
-    else if (b.player && aCop) { this._applyRamImpact(a.v, -cnx, -cny); this._agentRamDamage(a, b); }
+    if (a.player && b.rbCar) { this._onRoadblockHit(b.rbCar.body); this._rbDamage(b, a); this._playerRamDamage(a, b); }
+    else if (b.player && a.rbCar) { this._onRoadblockHit(a.rbCar.body); this._rbDamage(a, b); this._playerRamDamage(b, a); }
+    else if (a.player && bCop) { this._applyRamImpact(b.v, cnx, cny); this._agentRamDamage(b, a); this._playerRamDamage(a, b); }
+    else if (b.player && aCop) { this._applyRamImpact(a.v, -cnx, -cny); this._agentRamDamage(a, b); this._playerRamDamage(b, a); }
     else if (aCop && bCop) { // cop↔cop crash hurts both — own threshold/mult (decoupled from player ram)
       this._agentRamDamage(a, b, this.copCopRamThreshold, this.copCopRamMult);
       this._agentRamDamage(b, a, this.copCopRamThreshold, this.copCopRamMult);
@@ -4053,6 +4092,8 @@ reinforceUrgency: { cadenceGain: ${ru.cadenceGain}, recognition: ${ru.recognitio
 
     // Bust meter bar (bottom centre) + its label
     this.bustGfx = this.add.graphics().setScrollFactor(0).setDepth(100);
+    // Player vehicle health bar (bottom-left) — drawn by _drawPlayerHealth when the system is on.
+    this.playerHpGfx = this.add.graphics().setScrollFactor(0).setDepth(100);
     this.bustLabel = this.add
       .text(width / 2, this.scale.height - 52, "BUST", {
         fontFamily: "monospace",
@@ -4245,6 +4286,20 @@ reinforceUrgency: { cadenceGain: ${ru.cadenceGain}, recognition: ${ru.recognitio
       this.physics.resume();
       this.pausedText.setAlpha(0);
     }
+  }
+
+  // Player vehicle health bar — bottom-left. Green → amber → red as it drops; hidden when the
+  // health system is off (so pure Pursuit Mode shows nothing).
+  _drawPlayerHealth() {
+    const g = this.playerHpGfx;
+    g.clear();
+    if (!this.playerHealthEnabled || this.car.maxHealth <= 0) return;
+    const f = Phaser.Math.Clamp(this.car.health / this.car.maxHealth, 0, 1);
+    const w = 150, h = 12, x = 20, y = this.scale.height - 30;
+    const col = f > 0.5 ? 0x39ff14 : f > 0.25 ? 0xffd23f : 0xff3b3b;
+    g.fillStyle(0x000000, 0.5).fillRect(x - 2, y - 2, w + 4, h + 4);
+    g.fillStyle(0x222228, 1).fillRect(x, y, w, h);
+    g.fillStyle(col, 1).fillRect(x, y, w * f, h);
   }
 
   _drawBustBar() {
@@ -4660,8 +4715,8 @@ reinforceUrgency: { cadenceGain: ${ru.cadenceGain}, recognition: ${ru.recognitio
       "Arrows — Drive",
       "Space — Handbrake   Shift — Brake",
       "Z Smoke  X Nitro  C Oil  V Repair",
-      "L — Kill lights",
-      "P — Pause   R — Restart   M — Menu",
+      "Q — Kill lights   E — Minimap",
+      "Esc — Pause   R — Restart",
       "T — Cop log   G — Cycle camera   H — Stats",
     );
     this.debugText.setText(lines);
@@ -4719,6 +4774,23 @@ reinforceUrgency: { cadenceGain: ${ru.cadenceGain}, recognition: ${ru.recognitio
     grip
       .add(car, "entryKickCooldown", 0, 3.0, 0.05)
       .name("Entry Kick Cooldown (s)");
+
+    // Player health / battle damage. maxHealth is per-vehicle (persists per car); the rest are the
+    // shared damage/cripple curve. Hurt/Heal buttons let you dial the cripple feel without a cop ram.
+    const health = gui.addFolder("Health / Damage");
+    health.add(this, "playerHealthEnabled").name("Health enabled");
+    health.add(car, "maxHealth", 20, 400, 5).name("Max health (this car)")
+      .onChange((v) => { car.health = v; }); // changing the pool refills to full
+    health.add(this, "playerRamScale", 0, 0.4, 0.005).name("Ram damage scale");
+    health.add(this, "playerRamThreshold", 50, 400, 5).name("Ram damage threshold");
+    health.add(this, "healthDegradeStart", 0, 1, 0.05).name("Degrade below (frac)");
+    health.add(this, "healthSpeedMult", 0.2, 1, 0.05).name("Top-speed × at 0hp");
+    health.add(this, "healthAccelMult", 0.2, 1, 0.05).name("Accel × at 0hp");
+    health.add(this, "healthGripMult", 0.2, 1, 0.05).name("Grip × at 0hp");
+    health.add(this, "healthNitroLock", 0, 0.5, 0.01).name("Nitro lock below (frac)");
+    health.add(this, "repairHealthAmount", 0, 400, 5).name("Repair Kit restores");
+    health.add({ hurt: () => { car.health = Math.max(0, car.health - 25); } }, "hurt").name("– Take 25 damage");
+    health.add({ heal: () => { car.health = car.maxHealth; } }, "heal").name("↺ Full heal");
 
     gui
       .add(
@@ -5739,7 +5811,31 @@ searchBurst: { on: ${t.searchBurstEnabled}, delay: ${t.searchBurstDelay}, cooldo
       this.car._pitYaw = (this.car._pitYaw || 0) + this._spikePullSign * this.spikePull * sev;
     }
 
+    // Health cripple: as player health falls below healthDegradeStart, ease down accel / top-speed /
+    // grip (progressive battle damage → at 0 health it's a sitting duck that gets boxed and busted —
+    // never an instant fail). Stash & restore like the effects above (innermost: applied last here,
+    // restored first below).
+    let _hc = null;
+    if (this.playerHealthEnabled && this.car.maxHealth > 0) {
+      const f = Math.max(0, this.car.health) / this.car.maxHealth;
+      if (f < this.healthDegradeStart) {
+        const sev = Math.min(1, (this.healthDegradeStart - f) / this.healthDegradeStart);
+        const ease = (m) => 1 - (1 - m) * sev;
+        _hc = { a: this.car.acceleration, m: this.car.maxSpeed, gl: this.car.gripLow, gh: this.car.gripHigh };
+        this.car.acceleration *= ease(this.healthAccelMult);
+        this.car.maxSpeed     *= ease(this.healthSpeedMult);
+        this.car.gripLow      *= ease(this.healthGripMult);
+        this.car.gripHigh     *= ease(this.healthGripMult);
+      }
+    }
+
     this.car.update(delta, controls);
+    if (_hc != null) {
+      this.car.acceleration = _hc.a;
+      this.car.maxSpeed = _hc.m;
+      this.car.gripLow = _hc.gl;
+      this.car.gripHigh = _hc.gh;
+    }
     if (_spk != null) {
       this.car.acceleration = _spk.a;
       this.car.maxSpeed = _spk.m;
@@ -6252,6 +6348,7 @@ searchBurst: { on: ${t.searchBurstEnabled}, delay: ${t.searchBurstDelay}, cooldo
     this.screenFx.update(delta / 1000);
     this._pmark("screenfx");
     this._drawHealthBars();
+    this._drawPlayerHealth();
     if (this.devMode) this._drawCopCounter();
 
     // Dev overlay: LOS lines, steering targets, per-cop labels, search coverage.

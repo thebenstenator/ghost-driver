@@ -22,6 +22,11 @@ export const PROWLER = {
   heatRate: 0.6,
   stealth:  5,
 
+  // --- Health (Durability 3/5 — the balanced baseline) ---
+  // Career-mode vehicle health (see gameplay.md → Vehicle Damage). The middle of the roster:
+  // survives a few solid rams but can't trade paint indefinitely.
+  health: 120,
+
   // --- Engine ---
   maxSpeed:        600,
   maxReverseSpeed: 220,

@@ -33,6 +33,11 @@ export const RAZORBACK = {
   heatRate: 1.6,
   stealth:  2,
 
+  // --- Health (Durability 2/5 — fragile speed) ---
+  // Career-mode vehicle health (see gameplay.md → Vehicle Damage). Low + light: it wrecks fast in
+  // a ram-duel, so its answer is to not get hit — outrun, don't outlast.
+  health: 90,
+
   // --- Engine ---
   maxSpeed:        780,  // Speed 5/5 — clearly faster than prowler (600), room above for Spectre
   maxReverseSpeed: 180,  // light car, less reverse grunt

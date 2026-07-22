@@ -31,6 +31,11 @@ export const VAULT = {
   heatRate: 0.65,
   stealth:  1,
 
+  // --- Health (Durability 5/5 — the tank) ---
+  // Career-mode vehicle health baseline (see gameplay.md → Vehicle Damage). Highest in the roster;
+  // combined with its mass (takes less ram damage), the Vault is the "outlast it" pick.
+  health: 240,
+
   // --- Engine (Accel 1/5, Speed 2/5) ---
   maxSpeed:        500,  // drag-limited to ~215 actual top speed
   maxReverseSpeed: 100,
