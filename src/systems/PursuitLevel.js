@@ -7,7 +7,9 @@
 // take much longer to reach). Cumulative spans give the heat thresholds that derive
 // the level; the ceiling is the threshold to enter maxLevel.
 //
-//   • Heat RISES during active pursuit (+ a bump per cop contact), FREEZES during the
+//   • Heat RISES during active pursuit (+ a bump per HARD cop contact — a gentle bumper-ride
+//     below ramHeatThreshold adds nothing, and the bump is scaled by the car's heatRate like
+//     the active rate is, so a stealthy/tanky car isn't punished for absorbing hits), FREEZES during the
 //     pre-ditch cooldown (a brief LOS break can't bleed a level), and BLEEDS once
 //     ditched. Bleed is a FAST-THEN-SLOW profile: you shed the first fraction of a
 //     level quickly (escaping feels immediately rewarding), then it plateaus and
@@ -28,7 +30,9 @@ export class PursuitLevel {
     return {
       maxLevel:   5,
       activeRate: 1.0,   // heat/s while actively pursued (1 ⇒ heat == active-pursuit seconds)
-      ramHeat:    5,     // heat per player↔cop contact
+      ramHeat:    5,     // heat per HARD player↔cop contact (gated by ramHeatThreshold, ×heatRate)
+      ramHeatThreshold: 150, // closing speed (px/s) a contact needs to count as a "ram" for heat —
+                             // below it (a cop matching your speed on your bumper) adds no heat
       heatFloor:  0,     // global minimum (future: vehicle-retained heat)
       disableHeat:      15,  // [future] heat spike when the player disables a cop
       disableReinforce: 25,  // [future] longer replacement delay after a disable
@@ -70,6 +74,7 @@ export class PursuitLevel {
     this.maxLevel         = c.maxLevel;
     this.activeRate       = c.activeRate;
     this.ramHeat          = c.ramHeat;
+    this.ramHeatThreshold = c.ramHeatThreshold ?? 150;
     this.heatFloor        = c.heatFloor;
     this.disableHeat      = c.disableHeat;
     this.disableReinforce = c.disableReinforce;
@@ -121,6 +126,16 @@ export class PursuitLevel {
   setHeat(h)    { const e = this._enter(); this.heat = Math.max(this.heatFloor, Math.min(e[this.maxLevel], h)); this._level = this._levelFromHeat(e); }
   addHeat(n)    { const e = this._enter(); this.heat = Math.min(e[this.maxLevel], this.heat + n);                this._level = this._levelFromHeat(e); }
   atMax()       { return this.heat >= this.maxHeat - 0.5; }
+
+  // Heat from ONE cop contact, given the pre-collision closing speed. A gentle bumper-ride
+  // (below ramHeatThreshold) counts as nothing; a real ram lands the flat ramHeat bump, scaled
+  // by heatRate so the car's notoriety damps CONTACT heat the same way it damps active accrual
+  // (a slow tank that's meant to soak hits no longer heats fastest for playing to type). Returns
+  // the heat to add (0 = not a ram); the caller owns the anti-scrape throttle.
+  contactHeat(closingSpeed) {
+    if (closingSpeed <= this.ramHeatThreshold) return 0;
+    return this.ramHeat * this.heatRate;
+  }
 
   // ── Reinforcement cadence (vehicle notoriety + live heat) ───────────────────────
   // Urgency (0..1): a notorious car OR an already-hot situation makes cops call it in

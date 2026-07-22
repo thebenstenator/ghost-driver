@@ -74,7 +74,8 @@ export const TOOLTIPS = {
 
   // ── Pursuit levels (heat + per-level) ───────────────────────────────────────
   activeRate: "Heat gained per second while actively chased. Raise to escalate levels faster.",
-  ramHeat: "Heat added per player↔cop contact. Raise so ramming heats you up more.",
+  ramHeat: "Heat added per HARD player↔cop contact (scaled by the car's heatRate). Raise so ramming heats you up more.",
+  ramHeatThreshold: "Closing speed (px/s) a contact needs to count as a ram for heat. Raise so gentle bumper-riding at matched speed adds no heat; only real crashes do.",
   heatFloor: "Minimum heat — never bleeds below this. Raise to stay partly hot after escaping.",
   fastFrac: "Fraction of a level's span shed at the FAST bleed rate. Raise to drop heat quickly right after escaping.",
   fastRate: "Fast bleed rate (heat/s) right after escaping. Raise to cool down faster initially.",

@@ -534,6 +534,7 @@ export class GameScene extends Phaser.Scene {
     this.car.health    = this.car.maxHealth;
     this.playerRamThreshold = 150;   // closing speed (px/s) a hit needs to hurt you (mirrors ramThreshold)
     this.playerRamScale     = 0.09;  // your damage per px/s over threshold × (hitter mass / your mass)
+    this.ramHeatCooldown    = 600;   // ms between contact-heat bumps — anti-scrape throttle (see _ramHeat)
     this.healthDegradeStart = 0.5;   // handling starts degrading once health drops below this fraction
     this.healthSpeedMult    = 0.6;   // top-speed × at 0 health (eased in from healthDegradeStart)
     this.healthAccelMult    = 0.6;   // acceleration × at 0 health
@@ -929,14 +930,11 @@ export class GameScene extends Phaser.Scene {
     if (cop.modeLabel) this.worldLayer.add(cop.modeLabel);
     cop._colliders = [];
     cop._colliders.push(this.physics.add.collider(cop.sprite, this.walls));
-    // Player↔cop contact: bump heat in Pursuit Mode (the "minor collision" escalator),
-    // throttled so a sustained scrape doesn't spike it every frame.
-    cop._colliders.push(this.physics.add.collider(cop.sprite, this.car.sprite, () => {
-      if (this.pursuitLevel && this.time.now - (this._lastRamAt || 0) > 600) {
-        this._lastRamAt = this.time.now;
-        this.pursuitLevel.addHeat(this.pursuitLevel.ramHeat);
-      }
-    }));
+    // Player↔cop Arcade collider — physical separation backstop (the capsule solver does the real
+    // rotated-body collision). Contact HEAT is applied in the capsule resolver instead (_ramHeat),
+    // where the real pre-collision closing speed is available, so only a genuine ram heats you —
+    // a cop matching speed on your bumper no longer spikes heat every frame.
+    cop._colliders.push(this.physics.add.collider(cop.sprite, this.car.sprite));
     // Cops bump off each other rather than stacking
     for (const other of this.cops) {
       const cc = this.physics.add.collider(cop.sprite, other.sprite);
@@ -1964,6 +1962,22 @@ export class GameScene extends Phaser.Scene {
     car._dmgCd = this.ramDmgCooldown;
   }
 
+  // Pursuit HEAT from a player↔cop contact — the escalator for "they keep hitting you". Uses the
+  // same pre-collision closing speed as the ram-damage pass (the solver hasn't bled it yet), so
+  // only a genuine ram counts; a cop matching your speed on your bumper is below threshold and adds
+  // nothing. Independent of playerHealthEnabled (heat matters even with damage off in Pursuit Mode),
+  // and throttled so a real sustained grind can't spike every frame. Heat scaling (severity gate +
+  // ×heatRate) lives in PursuitLevel.contactHeat.
+  _ramHeat(playerAgent, otherAgent) {
+    if (!this.pursuitLevel) return;
+    if (this.time.now - (this._lastRamAt || 0) <= this.ramHeatCooldown) return;
+    const rel = Math.hypot(playerAgent.preVx - otherAgent.preVx, playerAgent.preVy - otherAgent.preVy);
+    const add = this.pursuitLevel.contactHeat(rel);
+    if (add <= 0) return;                 // gentle contact — don't heat, don't arm the throttle
+    this._lastRamAt = this.time.now;
+    this.pursuitLevel.addHeat(add);
+  }
+
   // RAM damage to a ROADBLOCK CAR (it has health tied to its unit type). Same closing-speed model
   // as a cop — so you (or another cop) can RAM THROUGH a block car, clearing the slot. `rbAgent`
   // is the block car's capsule agent; `otherAgent` is whatever hit it. Destruction is deferred.
@@ -2909,8 +2923,8 @@ export class GameScene extends Phaser.Scene {
     const aCop = !!a.cop, bCop = !!b.cop;                       // live (damageable) cop agents
     if (a.player && b.rbCar) { this._onRoadblockHit(b.rbCar.body); this._rbDamage(b, a); this._playerRamDamage(a, b); }
     else if (b.player && a.rbCar) { this._onRoadblockHit(a.rbCar.body); this._rbDamage(a, b); this._playerRamDamage(b, a); }
-    else if (a.player && bCop) { this._applyRamImpact(b.v, cnx, cny); this._agentRamDamage(b, a); this._playerRamDamage(a, b); }
-    else if (b.player && aCop) { this._applyRamImpact(a.v, -cnx, -cny); this._agentRamDamage(a, b); this._playerRamDamage(b, a); }
+    else if (a.player && bCop) { this._applyRamImpact(b.v, cnx, cny); this._agentRamDamage(b, a); this._playerRamDamage(a, b); this._ramHeat(a, b); }
+    else if (b.player && aCop) { this._applyRamImpact(a.v, -cnx, -cny); this._agentRamDamage(a, b); this._playerRamDamage(b, a); this._ramHeat(b, a); }
     else if (aCop && bCop) { // cop↔cop crash hurts both — own threshold/mult (decoupled from player ram)
       this._agentRamDamage(a, b, this.copCopRamThreshold, this.copCopRamMult);
       this._agentRamDamage(b, a, this.copCopRamThreshold, this.copCopRamMult);
@@ -3543,6 +3557,7 @@ this.spikeStripLen = ${this.spikeStripLen}; this.spikeLifetime = ${this.spikeLif
     const heat = gui.addFolder("Heat / Bleed");
     heat.add(P, "activeRate", 0, 5, 0.1).name("Heat/s (active)");
     heat.add(P, "ramHeat", 0, 30, 1).name("Heat per ram");
+    heat.add(P, "ramHeatThreshold", 0, 600, 10).name("Ram heat: min closing");
     heat.add(P, "heatFloor", 0, 200, 5).name("Heat floor");
     heat.add(P.bleed, "fastFrac", 0, 1, 0.05).name("Bleed fast: ½level frac");
     heat.add(P.bleed, "fastRate", 0, 20, 0.5).name("Bleed fast rate /s");
@@ -3593,7 +3608,7 @@ this.spikeStripLen = ${this.spikeStripLen}; this.spikeLifetime = ${this.spikeLif
   _copyPursuitLevels() {
     const P = this.pursuitLevel, b = P.bleed, ru = P.reinforceUrgencyCfg;
     let s = `// --- Pursuit levels (paste numbers into PursuitLevel.defaultConfig) ---
-activeRate: ${P.activeRate}, ramHeat: ${P.ramHeat}, heatFloor: ${P.heatFloor}, disableHeat: ${P.disableHeat},
+activeRate: ${P.activeRate}, ramHeat: ${P.ramHeat}, ramHeatThreshold: ${P.ramHeatThreshold}, heatFloor: ${P.heatFloor}, disableHeat: ${P.disableHeat},
 bleed: { fastFrac: ${b.fastFrac}, fastRate: ${b.fastRate}, slowRate: ${b.slowRate} },
 reinforceUrgency: { cadenceGain: ${ru.cadenceGain}, recognition: ${ru.recognition} },\n`;
     for (let lv = 1; lv <= P.maxLevel; lv++) {
@@ -3864,6 +3879,10 @@ reinforceUrgency: { cadenceGain: ${ru.cadenceGain}, recognition: ${ru.recognitio
     // Restart any time (same cop count); new run drops straight into play. A mission run re-runs
     // the SAME mission (re-shows its briefing), so the mission id has to ride along.
     this.input.keyboard.on("keydown-R", () => this._restartRun());
+    // Quit to the menu — ONLY from the frozen bust/result screen (the run is already over, so it's
+    // safe). Deliberately NOT bound during live play: quitting mid-run goes through the pause menu's
+    // YES/NO confirm, so a stray M can't vaporize a chase. This is what the "M for menu" prompt means.
+    this.input.keyboard.on("keydown-M", () => { if (this.busted) this.scene.start("MenuScene"); });
     // Briefing dismiss (SPACE / ENTER) — no-op outside a mission briefing, so it can't clash with
     // SPACE-handbrake during play (that's polled separately, not a keydown).
     this.input.keyboard.on("keydown-SPACE", () => this._dismissBriefing());
@@ -4113,7 +4132,7 @@ reinforceUrgency: { cadenceGain: ${ru.cadenceGain}, recognition: ${ru.recognitio
 
     // BUSTED overlay
     this.bustedText = this.add
-      .text(width / 2, this.scale.height / 2, "BUSTED\n\npress R to restart", {
+      .text(width / 2, this.scale.height / 2, "BUSTED\n\npress R to restart   ·   M for menu", {
         fontFamily: "monospace",
         fontSize: "56px",
         fontStyle: "bold",
@@ -4200,7 +4219,7 @@ reinforceUrgency: { cadenceGain: ${ru.cadenceGain}, recognition: ${ru.recognitio
     this.minimapContentGfx.setMask(mmMaskGfx.createGeometryMask());
     // Border + player blip drawn above the mask so they're never clipped.
     this.minimapGfx = this.add.graphics().setScrollFactor(0).setDepth(101);
-    this.minimapVisible = true; // toggled by M (see _toggleMinimap)
+    this.minimapVisible = true; // toggled by E (see _toggleMinimap)
   }
 
   // M toggles the minimap. Hidden = skip the (per-frame, not-cheap) redraw entirely.
@@ -4214,7 +4233,8 @@ reinforceUrgency: { cadenceGain: ${ru.cadenceGain}, recognition: ${ru.recognitio
   // P opens/closes a proper pause menu (freezes the run). It's keyboard-driven:
   // ↑/↓ move the selection, Enter chooses, P resumes. Quitting to the menu goes
   // through a YES/NO confirm view so one keystroke can't vaporize a live chase
-  // (the reason M no longer instant-quits — M is now the minimap toggle).
+  // (the reason M no longer instant-quits mid-run — M only quits from the frozen bust/result
+  // screen now; the minimap toggle moved to E).
   _pauseMainItems() {
     return [
       { label: "RESUME",       act: () => this._togglePause() },
