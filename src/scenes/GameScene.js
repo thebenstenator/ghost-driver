@@ -221,6 +221,7 @@ export class GameScene extends Phaser.Scene {
     // corners). The Arcade square above stays as a centre backstop. (Cars are the next step.)
     this.playerCapHalfLen = this._vehicleStats.capHalfLen; // capsule spine half-length
     this.playerCapR       = this._vehicleStats.capR;       // capsule radius (≈ half car width)
+    this.playerCapOffset  = this._vehicleStats.capOffset ?? 0; // fore/aft shift of the whole capsule (−ve = toward tail)
     this.playerMass       = this._vehicleStats.mass;       // capsule weight vs cops
     // Capsule SOLVER quality. Iterating a Gauss–Seidel position solve (with a small slop +
     // relaxation) does two things at once: it stops a packed cluster from jittering (single-
@@ -2734,7 +2735,7 @@ export class GameScene extends Phaser.Scene {
   _resolveCapsules() {
     const agents = (this._capAgents ||= []);
     agents.length = 0;
-    agents.push({ v: this.car, R: this.playerCapR, hl: this.playerCapHalfLen, m: this.playerMass, player: true, preVx: this.car.vx, preVy: this.car.vy });
+    agents.push({ v: this.car, R: this.playerCapR, hl: this.playerCapHalfLen, off: this.playerCapOffset, m: this.playerMass, player: true, preVx: this.car.vx, preVy: this.car.vy });
     for (const cop of this.cops) agents.push({ v: cop, R: cop.capR, hl: cop.capHalfLen, m: cop.mass || 1, cop, preVx: cop.vx, preVy: cop.vy });
     // Inert props (parked/thrown/wreck cars) are scattered across the whole ~18k city; only those
     // NEAR the player can possibly be in a collision this frame. Culling by distance keeps the
@@ -2783,9 +2784,12 @@ export class GameScene extends Phaser.Scene {
       });
     }
     for (const a of agents) {
-      const s = a.v.sprite, fx = Math.cos(a.v.facing), fy = Math.sin(a.v.facing), d = a.hl;
-      a.c = [s.x + fx * d, s.y + fy * d, s.x, s.y, s.x - fx * d, s.y - fy * d]; // front · centre · rear
-      a.reach = a.hl + a.R;
+      const s = a.v.sprite, fx = Math.cos(a.v.facing), fy = Math.sin(a.v.facing), d = a.hl, o = a.off || 0;
+      // Slide the whole capsule fore/aft along the spine by `o` (−ve = toward tail) before laying
+      // the three circles down, so a car whose body sits off its sprite centre collides truthfully.
+      const bx = s.x + fx * o, by = s.y + fy * o;
+      a.c = [bx + fx * d, by + fy * d, bx, by, bx - fx * d, by - fy * d]; // front · centre · rear
+      a.reach = Math.abs(o) + a.hl + a.R; // broad-phase/wall-bucket span, measured from sprite centre
     }
     // Gauss–Seidel: re-solve walls + car↔car several times so a packed stack settles instead
     // of jittering, and resistance propagates through it. Velocity-changing work (friction, ram,
@@ -4822,7 +4826,11 @@ this.entryKickDuration = ${s.entryKickDuration};
 this.entryKickCooldown = ${s.entryKickCooldown};
 // Light anchors (null = use sprite dims)
 this.lightHalfLen = ${s.lightHalfLen ?? null};
-this.lightHalfWid = ${s.lightHalfWid ?? null};`);
+this.lightHalfWid = ${s.lightHalfWid ?? null};
+// Capsule collider (paste into the vehicle stats file)
+capR:       ${this.playerCapR},
+capHalfLen: ${this.playerCapHalfLen},
+capOffset:  ${this.playerCapOffset},`);
           },
         },
         "copyStats",
@@ -4833,6 +4841,7 @@ this.lightHalfWid = ${s.lightHalfWid ?? null};`);
     const cap = gui.addFolder("Capsule collider");
     cap.add(this, "playerCapR", 1, 40, 1).name("Radius (width)");
     cap.add(this, "playerCapHalfLen", 0, 40, 1).name("Spine half-length");
+    cap.add(this, "playerCapOffset", -30, 30, 1).name("Fore/aft offset");
 
     // Light anchors — override the sprite-dimension fallback so cars with canvas padding
     // get taillights/headlights that sit on the actual bodywork. Updated live each frame.

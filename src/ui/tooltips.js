@@ -29,6 +29,7 @@ export const TOOLTIPS = {
   entryKickCooldown: "Seconds before another entry kick can fire. Raise to space out drift starts.",
   playerCapR: "Player capsule radius (≈ half the car width) for the rotated-car collider. Raise to make the player wider in collisions.",
   playerCapHalfLen: "Player capsule half-length — front/rear collision circle offset. Raise to make the player longer in collisions.",
+  playerCapOffset: "Slides the WHOLE capsule fore/aft along the car's spine. Negative = toward the tail; use it to centre the collider on a body that sits off the sprite's centre (e.g. the truck's cab).",
 
   // ── Capsule solver + ram-impact (swarm feel) ────────────────────────────────
   capIters: "Collision-solver iterations per frame. Raise to kill jitter and make a swarm contain you harder (costs a little perf).",

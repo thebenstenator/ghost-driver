@@ -11,18 +11,22 @@
 export const VAULT = {
   // --- Sprite / display ---
   texture:       'vault',
-  displayWidth:  56,   // wider than the razorback (48); 2:3 source ratio → 56×84
+  // Deliberately stretched WIDER than the source 2:3 ratio (74 vs the natural 56) so the truck
+  // reads chunky/SUV-like instead of long-and-skinny. Aspect distortion is intentional; capR and
+  // lightHalfWid below are widened to match so the collider/lights track the fatter silhouette.
+  displayWidth:  74,
   displayHeight: 84,
   bodySize:      42,   // big AABB backstop; truck footprint
 
   // --- Capsule collider ---
-  capR:       14,   // near half-width — wide, planted stance
-  capHalfLen: 18,   // long spine (armored truck is long)
+  capR:       14,   // collision radius (≈ half the chassis width)
+  capHalfLen: 19,   // long spine (armored truck is long)
+  capOffset:  -6,   // fore/aft shift of the WHOLE capsule along the spine (−ve = toward the tail)
   mass:       4.0,  // Mass 5/5 — heaviest in the roster; shoves cops like parked cars
 
-  // --- Light anchors (placeholder — tune live via Car panel) ---
-  lightHalfLen: 36,
-  lightHalfWid: 18,
+  // --- Light anchors (tuned live via Car panel) ---
+  lightHalfLen: 40,
+  lightHalfWid: 23,
 
   // --- Notoriety / stealth (Stealth 1/5 — a running armored truck is unmistakable) ---
   // stealth (1-5) → cop reinforcement urgency via notoriety = (5-stealth)/4: LOW stealth =
