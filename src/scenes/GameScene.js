@@ -3731,7 +3731,7 @@ reinforceUrgency: { cadenceGain: ${ru.cadenceGain}, recognition: ${ru.recognitio
   // Show only chunks overlapping the camera view (+1 chunk of margin so buildings straddling a
   // chunk edge never pop). Cheap: a visibility flag per chunk.
   _updateChunkVisibility() {
-    if (!this._chunks) return;
+    if (!this._chunks || !this.cameras || !this.cameras.main) return; // guard scene-transition frames
     const v = this.cameras.main.worldView, C = this._chSize, M = this._chunkMargin;
     // Expand the view by a fixed px margin, then show any chunk whose bounds INTERSECT it. The old
     // ±1-whole-chunk margin tessellated up to a 2400px off-screen border every frame; the profiler
@@ -5764,11 +5764,11 @@ searchBurst: { on: ${t.searchBurstEnabled}, delay: ${t.searchBurstDelay}, cooldo
   }
 
   update(_time, delta) {
-    // Show only the city chunks near the camera (cheap; runs even while frozen so the view is right).
-    this._updateChunkVisibility();
-
-    // Frozen after a bust (R restarts) or while paused (P resumes) — both keys
-    // are handled by their keydown listeners, so just hold here.
+    // Frozen after a bust (R restarts) or while paused (Esc resumes) — both keys are handled by
+    // their keydown listeners, so just hold here. Chunk-visibility is updated only when LIVE (below):
+    // the camera doesn't move while frozen so the view is already right, AND this avoids reading
+    // this.cameras.main on the transition frame when resuming from the Options overlay (it can be
+    // momentarily absent then → the "Cannot read worldView of undefined" crash).
     if (this.busted || this.paused || this._inBriefing) {
       // Idle the engine + cut sirens so audio doesn't drone on a frozen scene.
       if (this.audio) {
@@ -5777,6 +5777,8 @@ searchBurst: { on: ${t.searchBurstEnabled}, delay: ${t.searchBurstDelay}, cooldo
       }
       return;
     }
+    // Show only the city chunks near the camera (cheap; camera-driven → live-only).
+    this._updateChunkVisibility();
     this._pbegin();
 
     // Cop ram-damage / disabling, and ageing out wrecks. Run FIRST, before anyone's
