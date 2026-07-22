@@ -602,6 +602,9 @@ export class GameScene extends Phaser.Scene {
     this.searchMinDist       = 650; // px — a searcher spawn spot must be at least this far from you AND
                                     // off-camera; near the map edge (no road far enough ahead) it falls
                                     // back to an off-screen relocate instead of popping in close.
+    this.searchAheadDist     = 1250; // px down your escape vector the searcher spawn-walk STARTS —
+                                    // farther than the interceptor's (850) so the net closes from a
+                                    // distance and you get room to slip through before it tightens.
     this._searchLostClock    = 0;   // s LOS has been lost this search episode (drives the burst)
     this._searchBurstDone    = false; // one burst per lost-chase episode
     this._searchBurstCdUntil = 0;   // time.now gate for the re-burst cooldown
@@ -1584,13 +1587,16 @@ export class GameScene extends Phaser.Scene {
       // First node ahead + laterally offset that's genuinely OFF-CAMERA and past searchMinDist —
       // no on-screen/close fallback (that was the map-edge pop-in). nearestNodeAhead keeps it in front.
       let spot = null;
-      for (let d = this.interceptAheadDist; d <= this.interceptAheadDist + 900; d += 150) {
+      for (let d = this.searchAheadDist; d <= this.searchAheadDist + 900; d += 150) {
         const tx = px + Math.cos(dir) * d + perpx * lat;
         const ty = py + Math.sin(dir) * d + perpy * lat;
         const p = this.navGrid.pos(this.navGrid.nearestNodeAhead(tx, ty, px, py, dir));
         if (
           Phaser.Math.Distance.Between(p.x, p.y, px, py) >= this.searchMinDist &&
-          this._offCamera(p.x, p.y, this.respawnMargin)
+          this._offCamera(p.x, p.y, this.respawnMargin) &&
+          // Must be OCCLUDED from you — a spot with clear LOS would spot you the instant it spawns
+          // (the "one always crossing the road in front of me" case). Forces it behind a building.
+          !segmentClear(p.x, p.y, px, py, this.losRects)
         ) { spot = p; break; }
       }
       if (spot) {
@@ -3595,7 +3601,7 @@ this.spikeStripLen = ${this.spikeStripLen}; this.spikeLifetime = ${this.spikeLif
       .add({ copy: () => this._copyPursuitLevels() }, "copy")
       .name("Copy Levels → Console");
 
-    this._persistPanel(gui, "gd_pursuitLevel6"); // bumped: per-level search-burst count
+    this._persistPanel(gui, "gd_pursuitLevel7"); // bumped: culled search-burst counts (−1/level)
 
     gui.domElement.style.position = "fixed";
     gui.domElement.style.top = "8px";
@@ -5137,6 +5143,7 @@ this.withdrawColor = ${hex(f.withdrawColor)};`;
       searchReengageTrim: this.searchReengageTrim,
       searchLateral: this.searchLateral,
       searchMinDist: this.searchMinDist,
+      searchAheadDist: this.searchAheadDist,
       boxTriggerSpeed: this.director.boxTriggerSpeed,
       boxEngageRange: this.director.boxEngageRange,
     };
@@ -5297,6 +5304,10 @@ this.withdrawColor = ${hex(f.withdrawColor)};`;
       .add(this.copTuning, "searchMinDist", 200, 1400, 20)
       .name("Burst: min spawn dist (px)")
       .onChange(apply);
+    pack
+      .add(this.copTuning, "searchAheadDist", 400, 2500, 50)
+      .name("Burst: spawn-ahead dist (px)")
+      .onChange(apply);
 
     const rejoin = gui.addFolder("Rejoin (far cops)");
     rejoin
@@ -5399,7 +5410,7 @@ rbStart: ${t.rbStart}, rbFull: ${t.rbFull}, rbGrip: ${t.rbGrip}, rbTurnMult: ${t
 patrolBandGap: ${t.patrolBandGap}, patrolBandStart: ${t.patrolBandStart}, patrolBandFull: ${t.patrolBandFull},
 respawnEnabled: ${t.respawnEnabled}, respawnDist: ${t.respawnDist}, respawnTime: ${t.respawnTime},
 searchSpeed: ${t.searchSpeed}, searchSpeedGain: ${t.searchSpeedGain}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${t.searchMaxDepth}, coverageTTL: ${t.coverageTTL}, searchDirBias: ${t.searchDirBias}, searchDwell: ${t.searchDwell}, searchStall: ${t.searchStall},
-searchBurst: { on: ${t.searchBurstEnabled}, delay: ${t.searchBurstDelay}, cooldown: ${t.searchBurstCooldown}, trim: ${t.searchReengageTrim}, lateral: ${t.searchLateral}, minDist: ${t.searchMinDist} }`);
+searchBurst: { on: ${t.searchBurstEnabled}, delay: ${t.searchBurstDelay}, cooldown: ${t.searchBurstCooldown}, trim: ${t.searchReengageTrim}, lateral: ${t.searchLateral}, minDist: ${t.searchMinDist}, aheadDist: ${t.searchAheadDist} }`);
           },
         },
         "copyStats",
@@ -5549,6 +5560,7 @@ searchBurst: { on: ${t.searchBurstEnabled}, delay: ${t.searchBurstDelay}, cooldo
     this.searchReengageTrim = t.searchReengageTrim;
     this.searchLateral = t.searchLateral;
     this.searchMinDist = t.searchMinDist ?? 650; // guard: absent from a pre-existing saved panel
+    this.searchAheadDist = t.searchAheadDist ?? 1250; // guard: absent from a pre-existing saved panel
     this.director.boxTriggerSpeed = t.boxTriggerSpeed;
     this.director.boxEngageRange = t.boxEngageRange;
   }
