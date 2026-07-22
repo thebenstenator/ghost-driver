@@ -12,6 +12,8 @@
 //
 // Everything runs through a master gain + compressor (glue / clip safety). The context
 // starts suspended until a user gesture, so we resume on the first input.
+import { Settings } from "../settings.js";
+
 const SIREN_VOICES = 4;        // max simultaneous audible sirens (nearest cops win)
 const SIREN_FALLOFF = 1100;    // px at which a siren fades to silent
 const SIREN_PAN_RANGE = 900;   // px lateral offset that maps to full L/R pan
@@ -36,12 +38,13 @@ function sirenMode(t) {
 }
 
 export class GameAudio {
-  constructor(scene, { masterVolume = 0.55 } = {}) {
+  constructor(scene, opts = {}) {
     this.scene = scene;
-    this.muted = false;
+    // Persisted player prefs (Options screen). masterVolume/mute default from saved settings.
+    this.muted = Settings.getMuted();
     // Live-tunable mix (bound by the car panel). Set BEFORE the no-audio bail so the
     // panel can bind to these fields even when WebAudio is unavailable (setters no-op).
-    this.masterVolume = masterVolume;
+    this.masterVolume = opts.masterVolume ?? Settings.getVolume();
     this.engineVol = 0.3; // multiplier on engine gain (baked from playtest)
     this.sirenVol = 1;    // multiplier on siren gain
     this.screechVol = 0.15; // multiplier on tire-screech gain (baked from playtest)
@@ -53,9 +56,9 @@ export class GameAudio {
     }
     this.ctx = ctx;
 
-    // Master bus: gain → compressor → speakers.
+    // Master bus: gain → compressor → speakers. Start at the saved volume (or silent if muted).
     this.master = ctx.createGain();
-    this.master.gain.value = this.masterVolume;
+    this.master.gain.value = this.muted ? 0.0001 : this.masterVolume;
     const comp = ctx.createDynamicsCompressor();
     this.master.connect(comp);
     comp.connect(ctx.destination);
