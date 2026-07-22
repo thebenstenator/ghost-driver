@@ -14,6 +14,7 @@ import { PursuitLevel } from "../systems/PursuitLevel.js";
 import { BustMeter } from "../systems/BustMeter.js";
 import { CarLights } from "../fx/CarLights.js";
 import { ScreenEdgeFx } from "../fx/ScreenEdgeFx.js";
+import { RainFx } from "../fx/RainFx.js";
 import { GameAudio } from "../audio/GameAudio.js";
 import {
   GADGETS,
@@ -782,6 +783,11 @@ export class GameScene extends Phaser.Scene {
       hud.push(this.objectiveText, this.beaconGfx, this.briefingText, this.resultText);
     this.cameras.main.ignore(hud); // world cam skips HUD
     this.uiCamera.ignore(this.worldLayer); // UI cam skips the world (and its future children)
+
+    // Rain — screen-space noir weather on the HUD (uiCamera) layer, under the readouts. Ignored by
+    // the zooming world camera so it stays a clean full-screen overlay. Toggle with K to A/B it.
+    this.rain = new RainFx(this);
+    this.cameras.main.ignore(this.rain.objects());
     // (No camera Bloom post-FX: it fogged the whole scene AND cost a full-screen multi-pass every
     // frame. The neon's own ADD-blend glow carries the emissive look without either downside.)
 
@@ -3907,6 +3913,8 @@ reinforceUrgency: { cadenceGain: ${ru.cadenceGain}, recognition: ${ru.recognitio
     this.input.keyboard.on("keydown-F", () => this._toggleProfiler());
     // Record profiler samples to a downloadable log (J to start, J again to save).
     this.input.keyboard.on("keydown-J", () => this._toggleRecording());
+    // Rain on/off (K) — A/B the weather overlay.
+    this.input.keyboard.on("keydown-K", () => { if (this.rain) this.rain.toggle(); });
     // Render-layer isolation (1/2/3) — hide markings / buildings / neon to price each in `render`.
     this.input.keyboard.on("keydown-ONE", () => this._toggleRenderLayer(0));
     this.input.keyboard.on("keydown-TWO", () => this._toggleRenderLayer(1));
@@ -5764,6 +5772,10 @@ searchBurst: { on: ${t.searchBurstEnabled}, delay: ${t.searchBurstDelay}, cooldo
   }
 
   update(_time, delta) {
+    // Rain keeps falling regardless of freeze state (ambience during briefing/pause too). Cheap,
+    // camera-space, no world/camera reads — safe to run before the frozen guard below.
+    if (this.rain) this.rain.update(delta / 1000);
+
     // Frozen after a bust (R restarts) or while paused (Esc resumes) — both keys are handled by
     // their keydown listeners, so just hold here. Chunk-visibility is updated only when LIVE (below):
     // the camera doesn't move while frozen so the view is already right, AND this avoids reading
