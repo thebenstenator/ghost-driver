@@ -4006,10 +4006,11 @@ reinforceUrgency: { cadenceGain: ${ru.cadenceGain}, recognition: ${ru.recognitio
       .setAlpha(0);
 
     // Gadget charge pips (bottom-left), one row per ACTIVE gadget (loadout/dev — see _resolveGadgets),
-    // stacked upward. Each row "KEY NAME ◉◉" is refreshed each frame in update().
+    // stacked upward. Each row "KEY NAME ◉◉" is refreshed each frame in update(). The bottom row starts
+    // above the vehicle health bar (drawn at ~height-30) so they never overlap.
     this.gadgetTexts = this._activeGadgets.map((slot, i) =>
       this.add
-        .text(16, this.scale.height - 16 - i * 20, "", {
+        .text(16, this.scale.height - 38 - i * 20, "", {
           fontFamily: "monospace",
           fontSize: "15px",
           fontStyle: "bold",
