@@ -3808,9 +3808,11 @@ reinforceUrgency: { cadenceGain: ${ru.cadenceGain}, recognition: ${ru.recognitio
   }
 
   _setupInput() {
-    // Control scheme: RIGHT hand steers (arrows: ↑ accel, ↓ reverse, ←→ steer); LEFT hand brakes +
-    // gadgets (Shift brake, Space handbrake, Z/X/C/V gadget cluster). WASD steering is intentionally
-    // gone so the left hand is free for the gadget cluster.
+    // Control scheme: RIGHT hand steers (arrows: ↑ accel, ↓ reverse, ←→ steer); the LEFT hand is a
+    // self-contained, mostly-planted cluster for EVERYTHING else — no cross-keyboard reaches:
+    //   Space handbrake · Shift brake · Z/X/C gadgets · V repair · Q kill-lights · E minimap · Esc pause.
+    // (Mute is not a gameplay key — it lives in Options. WASD steering is intentionally free for a
+    // future left-hand-drive layout that mirrors this cluster onto the right hand.)
     this.cursors = this.input.keyboard.createCursorKeys(); // arrows + .space
     this.shiftKey = this.input.keyboard.addKey(
       Phaser.Input.Keyboard.KeyCodes.SHIFT,
@@ -3831,8 +3833,8 @@ reinforceUrgency: { cadenceGain: ${ru.cadenceGain}, recognition: ${ru.recognitio
     // Pause menu navigation (only acts while paused; driving is frozen then, so the arrows are free).
     this.input.keyboard.on("keydown-UP", () => this._movePauseSel(-1));
     this.input.keyboard.on("keydown-DOWN", () => this._movePauseSel(1));
-    // Minimap toggle (M). Quitting to the menu now lives in the pause menu (P) behind a confirm.
-    this.input.keyboard.on("keydown-M", () => this._toggleMinimap());
+    // Minimap toggle (E) — left-hand reach. (Quitting to the menu lives in the pause menu behind a confirm.)
+    this.input.keyboard.on("keydown-E", () => this._toggleMinimap());
     // Frame profiler overlay (F) — works in normal playtest, not just dev mode.
     this.input.keyboard.on("keydown-F", () => this._toggleProfiler());
     // Record profiler samples to a downloadable log (J to start, J again to save).
@@ -3841,8 +3843,8 @@ reinforceUrgency: { cadenceGain: ${ru.cadenceGain}, recognition: ${ru.recognitio
     this.input.keyboard.on("keydown-ONE", () => this._toggleRenderLayer(0));
     this.input.keyboard.on("keydown-TWO", () => this._toggleRenderLayer(1));
     this.input.keyboard.on("keydown-THREE", () => this._toggleRenderLayer(2));
-    // Pause toggle
-    this.input.keyboard.on("keydown-P", () => this._togglePause());
+    // Pause toggle (Esc — left-hand reach, standard pause key)
+    this.input.keyboard.on("keydown-ESC", () => this._togglePause());
 
     // Cop telemetry: press T to toggle throttled console logging of cop state. Works in
     // playtest mode too (console-only, no on-screen clutter) so traces can be captured
@@ -3866,13 +3868,10 @@ reinforceUrgency: { cadenceGain: ${ru.cadenceGain}, recognition: ${ru.recognitio
       this.cameras.main.startFollow(sprite, true, 0.1, 0.1);
     });
 
-    // Mute toggle (N).
-    this.input.keyboard.on("keydown-N", () => {
-      if (this.audio) this.audio.setMuted(!this.audio.muted);
-    });
+    // (Mute is not a gameplay key — it belongs in Options. GameAudio.setMuted still exists for it.)
 
-    // Kill Lights (L) — toggle the player's lights off for stealth (shrinks cop detection).
-    this.input.keyboard.on("keydown-L", () => {
+    // Kill Lights (Q) — left-hand reach; toggle the player's lights off for stealth (shrinks cop detection).
+    this.input.keyboard.on("keydown-Q", () => {
       this.car.lightsOff = !this.car.lightsOff;
     });
 
@@ -4194,7 +4193,7 @@ reinforceUrgency: { cadenceGain: ${ru.cadenceGain}, recognition: ${ru.recognitio
     const rows = items
       .map((it, i) => (i === this.pauseIndex ? "▶  " : "    ") + it.label)
       .join("\n");
-    const hint = "↑ ↓  select      Enter  choose      P  resume";
+    const hint = "↑ ↓  select      Enter  choose      Esc  resume";
     this.pausedText.setText(`${title}\n\n${rows}\n\n${hint}`);
   }
 
