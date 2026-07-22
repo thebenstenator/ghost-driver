@@ -372,6 +372,22 @@ export class GameScene extends Phaser.Scene {
     this.parkedMinStreet = 110; // don't park on an edge facing a street narrower than this — a car in a
                                 // 60px alley (+ one across from it) seals the passage. Keeps alleys clear.
 
+    // --- Civilian traffic — a small pool of cars that drive the road lattice NEAR the player, spawned
+    // off-camera and culled when far, so the city feels alive without simulating the whole map. They're
+    // car-obstacles (like parked cars) that MOVE: each steers node→node along the NavGrid, and the
+    // capsule resolver lets you + cops shove through them. A hard hit briefly stalls one (it "panics").
+    this.traffic = [];
+    this.trafficEnabled = true;
+    this.trafficCount   = 8;      // target # of civilians kept alive near the player
+    this.trafficSpeed   = 150;    // px/s cruise (slower than the player, so you weave past)
+    this.trafficSpawnMin = 1250;  // spawn ring inner radius (just off-camera)
+    this.trafficSpawnMax = 1700;  // spawn ring outer radius
+    this.trafficDespawnR = 2300;  // cull a civilian beyond this from the player
+    this.trafficNodeReach = 36;   // px to a node counted as "arrived" (advance to the next)
+    this.trafficHitStall = 1.1;   // s a civilian coasts (no steering) after a hard hit — reads as panic
+    this.trafficHitThreshold = 160; // closing speed (px/s) a contact needs to stall a civilian
+    this._trafficPalette = [0x8a8f9c, 0x6b7280, 0x7a6f63, 0x556070, 0x9c8a6a, 0x445a6a]; // muted civilian tints
+
     // --- Gadget: Grappling Hook (player) — fire at the nearest parked car and YANK it into the road
     // behind you, where it lands broadside as a shovable blocker for the cops on your tail. The
     // grabbed car moves from parkedCars → thrownCars (a car being _pull'd, then a landed blocker with
@@ -2256,6 +2272,94 @@ export class GameScene extends Phaser.Scene {
     this.parkedCars = [];
   }
 
+  // ── Civilian traffic ─────────────────────────────────────────────────────────
+  // Keep ~trafficCount civilians alive near the player: cull far ones, spawn off-camera ones to
+  // refill, and steer each along the NavGrid road lattice. Runs every live frame before the capsule
+  // resolver (which then lets you/cops shove through them).
+  _updateTraffic(dt) {
+    if (!this.trafficEnabled) { if (this.traffic.length) this._clearTraffic(); return; }
+    const px = this.car.sprite.x, py = this.car.sprite.y;
+    const cull2 = this.trafficDespawnR * this.trafficDespawnR;
+
+    // Cull far civilians.
+    for (let i = this.traffic.length - 1; i >= 0; i--) {
+      const c = this.traffic[i], b = c.body;
+      if ((b.x - px) ** 2 + (b.y - py) ** 2 > cull2) {
+        b.destroy(); c.img.destroy();
+        this.traffic.splice(i, 1);
+      }
+    }
+    // Refill toward the target count (spawn off-camera).
+    let guard = 0;
+    while (this.traffic.length < this.trafficCount && guard++ < this.trafficCount) {
+      if (!this._spawnCivilian()) break; // couldn't place one this frame — try again next
+    }
+    // Drive each civilian node→node.
+    for (const c of this.traffic) {
+      const b = c.body;
+      if (c._hitCd > 0) { c._hitCd -= dt; b.body.velocity.scale(0.9); continue; } // panicked/stalled — coast
+      const tp = this.navGrid.pos(c.target);
+      const dx = tp.x - b.x, dy = tp.y - b.y;
+      if (dx * dx + dy * dy < this.trafficNodeReach * this.trafficNodeReach) {
+        // Arrived — advance to a neighbour of the target, preferring not to immediately reverse.
+        const nbrs = this.navGrid.nbr[c.target] || [];
+        const fwd = nbrs.filter((n) => n !== c.node);
+        const pool = fwd.length ? fwd : nbrs;
+        c.node = c.target;
+        c.target = pool.length ? pool[(Math.random() * pool.length) | 0] : c.node;
+        continue;
+      }
+      const h = Math.atan2(dy, dx);
+      b.body.velocity.set(Math.cos(h) * this.trafficSpeed, Math.sin(h) * this.trafficSpeed);
+      c.baseRot = h + Math.PI / 2;                 // capsule facing (baseRot − π/2) = travel heading
+      c.img.setRotation(c.baseRot).setPosition(b.x, b.y);
+    }
+  }
+
+  // Try to place one civilian on a road node off-camera in the spawn ring. Returns true on success.
+  _spawnCivilian() {
+    const px = this.car.sprite.x, py = this.car.sprite.y;
+    const v = this.cameras.main.worldView;
+    const spec = { tex: 'player_car', visW: 26, visL: 52, body: 24, capR: 11, capHalfLen: 15,
+                   mass: 2.2, health: 1e9 };
+    for (let tries = 0; tries < 14; tries++) {
+      const ang = Math.random() * Math.PI * 2;
+      const r = this.trafficSpawnMin + Math.random() * (this.trafficSpawnMax - this.trafficSpawnMin);
+      const node = this.navGrid.nearestNode(px + Math.cos(ang) * r, py + Math.sin(ang) * r);
+      const p = this.navGrid.pos(node);
+      // Off-camera (no pop-in) and must have somewhere to drive.
+      if (p.x > v.x - 60 && p.x < v.right + 60 && p.y > v.y - 60 && p.y < v.bottom + 60) continue;
+      const nbrs = this.navGrid.nbr[node];
+      if (!nbrs || !nbrs.length) continue;
+      const target = nbrs[(Math.random() * nbrs.length) | 0];
+      const tp = this.navGrid.pos(target);
+      const h = Math.atan2(tp.y - p.y, tp.x - p.x);
+      const car = this._makeCarObstacle(p.x, p.y, h + Math.PI / 2, spec, 0x3fa0ff);
+      car.img.setTint(this._trafficPalette[(Math.random() * this._trafficPalette.length) | 0]);
+      car.civ = true; car.node = node; car.target = target; car._hitCd = 0;
+      this.traffic.push(car);
+      return true;
+    }
+    return false;
+  }
+
+  // A hard player/cop hit stalls a civilian for a beat (reads as panic + keeps it from plowing back
+  // onto its route through you). Called from the capsule contact resolution.
+  _civHit(civAgent, otherAgent) {
+    const rel = Math.hypot(civAgent.preVx - otherAgent.preVx, civAgent.preVy - otherAgent.preVy);
+    if (rel > this.trafficHitThreshold) civAgent.civ._hitCd = this.trafficHitStall;
+  }
+
+  _clearTraffic() {
+    for (const c of this.traffic || []) { c.body.destroy(); c.img.destroy(); }
+    this.traffic = [];
+  }
+
+  setTrafficEnabled(on) {
+    this.trafficEnabled = on;
+    if (!on) this._clearTraffic();
+  }
+
   // Gadget: Grappling Hook — grab the nearest parked car within range and yank it into the road
   // behind you. Moves the car parkedCars → thrownCars with a _pull target; _updateGrapple drives it.
   _fireGrapple() {
@@ -2787,6 +2891,17 @@ export class GameScene extends Phaser.Scene {
         R: c.capR, hl: c.capHalfLen, m: c.mass, rbCar: c, preVx: b.body.velocity.x, preVy: b.body.velocity.y,
       });
     }
+    // Civilian traffic — MOVING car-obstacles. Same capsule shim, but tagged `civ` (not `rbCar`) so it
+    // gets separation/shove without the roadblock damage path. Their velocity is set by _updateTraffic;
+    // the resolver reads/writes it, so a shove carries and _updateTraffic's stall lets it read.
+    for (const c of this.traffic) {
+      const b = c.body;
+      if (!nearPlayer(b.x, b.y)) continue;
+      agents.push({
+        v: { sprite: b, facing: c.baseRot - Math.PI / 2, vx: b.body.velocity.x, vy: b.body.velocity.y },
+        R: c.capR, hl: c.capHalfLen, m: c.mass, civ: c, preVx: b.body.velocity.x, preVy: b.body.velocity.y,
+      });
+    }
     // Grappled cars that have LANDED are solid blockers. In-flight ones (_pull) are scripted visuals
     // with their physics body disabled, so they're skipped here (no collision until they land).
     for (const c of this.thrownCars) {
@@ -2834,7 +2949,7 @@ export class GameScene extends Phaser.Scene {
       }
     }
     // Roadblock car visuals follow their (just-pushed) body — keep the art on the collider.
-    for (const a of agents) if (a.rbCar) a.rbCar.img.setPosition(a.v.sprite.x, a.v.sprite.y);
+    for (const a of agents) { const p = a.rbCar || a.civ; if (p) p.img.setPosition(a.v.sprite.x, a.v.sprite.y); }
     // Cops killed by ram damage this frame are disabled now (deferred so this.cops wasn't
     // mutated mid-resolve). Their stale agents finish this frame harmlessly as zeroed wrecks.
     if (this._capDisable) { for (const cop of this._capDisable) this._disableCop(cop); this._capDisable = null; }
@@ -2943,6 +3058,9 @@ export class GameScene extends Phaser.Scene {
     }
     else if (aCop && b.rbCar) { this._agentRamDamage(a, b, this.copCopRamThreshold, this.copCopRamMult); this._rbDamage(b, a); }
     else if (bCop && a.rbCar) { this._agentRamDamage(b, a, this.copCopRamThreshold, this.copCopRamMult); this._rbDamage(a, b); }
+    // Civilian shoved by the player or a cop → separation already applied above; just stall it (panic).
+    else if (a.civ && (b.player || bCop)) this._civHit(a, b);
+    else if (b.civ && (a.player || aCop)) this._civHit(b, a);
   }
 
   // A FRONTAL high-closing-speed cop hit dumps extra player speed and bogs the engine briefly,
@@ -3915,6 +4033,8 @@ reinforceUrgency: { cadenceGain: ${ru.cadenceGain}, recognition: ${ru.recognitio
     this.input.keyboard.on("keydown-J", () => this._toggleRecording());
     // Rain on/off (K) — A/B the weather overlay.
     this.input.keyboard.on("keydown-K", () => { if (this.rain) this.rain.toggle(); });
+    // Civilian traffic on/off (B) — A/B the traffic.
+    this.input.keyboard.on("keydown-B", () => this.setTrafficEnabled(!this.trafficEnabled));
     // Render-layer isolation (1/2/3) — hide markings / buildings / neon to price each in `render`.
     this.input.keyboard.on("keydown-ONE", () => this._toggleRenderLayer(0));
     this.input.keyboard.on("keydown-TWO", () => this._toggleRenderLayer(1));
@@ -5803,6 +5923,7 @@ searchBurst: { on: ${t.searchBurstEnabled}, delay: ${t.searchBurstDelay}, cooldo
     this._updateSmoke(delta / 1000);
     this._updateGrapple(delta / 1000);
     this._updateTireSmoke(delta / 1000);
+    this._updateTraffic(delta / 1000);
     this._pmark("effects");
 
     // While spectating a cop (camera not on the player), freeze the car so the
