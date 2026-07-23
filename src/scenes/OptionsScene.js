@@ -81,7 +81,7 @@ export class OptionsScene extends Phaser.Scene {
     const controls = [
       "Arrows — Drive      Space — Handbrake      Shift — Brake",
       "Z / X / C — gadgets      V — Repair      Q — Kill lights      E — Minimap",
-      "Esc — Pause      R — Restart",
+      "P — Pause      R — Restart",
     ].join("\n");
     this.add
       .text(cx, GAME_HEIGHT - 100, controls, {

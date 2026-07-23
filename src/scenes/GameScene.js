@@ -386,6 +386,8 @@ export class GameScene extends Phaser.Scene {
     this.trafficNodeReach = 36;   // px to a node counted as "arrived" (advance to the next)
     this.trafficHitStall = 1.1;   // s a civilian coasts (no steering) after a hard hit — reads as panic
     this.trafficHitThreshold = 160; // closing speed (px/s) a contact needs to stall a civilian
+    this.trafficCivMass  = 2.2;   // civilian capsule mass (shovable but with some inertia)
+    this.grappleCivRecover = 0.7; // s a GRAPPLED civilian is stunned after it lands, then it drives away
     this._trafficPalette = [0x8a8f9c, 0x6b7280, 0x7a6f63, 0x556070, 0x9c8a6a, 0x445a6a]; // muted civilian tints
 
     // --- Gadget: Grappling Hook (player) — fire at the nearest parked car and YANK it into the road
@@ -2327,7 +2329,7 @@ export class GameScene extends Phaser.Scene {
     const px = this.car.sprite.x, py = this.car.sprite.y;
     const v = this.cameras.main.worldView;
     const spec = { tex: 'player_car', visW: 26, visL: 52, body: 24, capR: 11, capHalfLen: 15,
-                   mass: 2.2, health: 1e9 };
+                   mass: this.trafficCivMass, health: 1e9 };
     for (let tries = 0; tries < 14; tries++) {
       const ang = Math.random() * Math.PI * 2;
       const r = this.trafficSpawnMin + Math.random() * (this.trafficSpawnMax - this.trafficSpawnMin);
@@ -2366,27 +2368,31 @@ export class GameScene extends Phaser.Scene {
     if (!on) this._clearTraffic();
   }
 
-  // Gadget: Grappling Hook — grab the nearest parked car within range and yank it into the road
-  // behind you. Moves the car parkedCars → thrownCars with a _pull target; _updateGrapple drives it.
+  // Gadget: Grappling Hook — grab the nearest parked OR moving-traffic car within range and yank it
+  // into the road behind you. Moves the car → thrownCars with a _pull target; _updateGrapple drives it.
+  // A parked car lands as a lasting blocker; a traffic car recovers and drives away (see _updateGrapple).
   _fireGrapple() {
     if (this.busted || this.paused) return;
     if (this.grappleCdRemaining > 0) return; // still cooling down
     const px = this.car.sprite.x, py = this.car.sprite.y;
     const f = this.car.getSpeed() > 40 ? Math.atan2(this.car.vy, this.car.vx) : this.car.facing;
     const cf = Math.cos(f), sf = Math.sin(f);
-    // Nearest parked car within range that is NOT in front of you — only to the side or behind (its
-    // forward distance along your travel must be ≤ grappleFrontMax). You can't hook a car you're
-    // driving straight at. (Sparse placement → simple nearest among the eligible is enough.)
+    // Nearest car within range that is NOT in front of you — only to the side or behind (its forward
+    // distance along your travel must be ≤ grappleFrontMax). You can't hook a car you're driving
+    // straight at. Both parked cars and live traffic are eligible.
     let target = null, best = this.grappleRange * this.grappleRange;
-    for (const c of this.parkedCars) {
+    const consider = (c) => {
       const dx = c.body.x - px, dy = c.body.y - py;
-      if (dx * cf + dy * sf > this.grappleFrontMax) continue; // in front → not grabbable
+      if (dx * cf + dy * sf > this.grappleFrontMax) return; // in front → not grabbable
       const d = dx * dx + dy * dy;
       if (d < best) { best = d; target = c; }
-    }
+    };
+    for (const c of this.parkedCars) consider(c);
+    for (const c of this.traffic) consider(c);
     if (!target) return; // nothing eligible in reach — don't start the cooldown
     this.grappleCdRemaining = this.grappleCooldown;
     this.parkedCars = this.parkedCars.filter((c) => c !== target);
+    this.traffic = this.traffic.filter((c) => c !== target); // pull it out of traffic if it was a civ
 
     // Anim: the hook grabs the car's BACK corner and REELS that point toward a LIVE anchor in your
     // wake (your rear, recomputed every frame in _updateGrapple) — so the motion is driven by your
@@ -2463,7 +2469,18 @@ export class GameScene extends Phaser.Scene {
           c.body.setPosition(cxc, cyc);
           c.body.body.reset(cxc, cyc);
           c._pull = null;
-          c._life = 0;
+          if (c.civ) {
+            // A grappled TRAFFIC car recovers and drives away — a momentary block, not a lasting one.
+            // Restore its cruising mass, re-home it on the nearest road node, hand it back to the pool,
+            // and stun it briefly so it visibly gathers itself before re-routing and fleeing.
+            c.mass = this.trafficCivMass; c.body.body.mass = this.trafficCivMass;
+            const node = this.navGrid.nearestNode(cxc, cyc);
+            c.node = node; c.target = node; c._hitCd = this.grappleCivRecover;
+            this.traffic.push(c);
+            this.thrownCars.splice(i, 1);
+          } else {
+            c._life = 0; // parked car → lasting blocker that ages out
+          }
         }
       } else {
         c._life += dt;
@@ -4045,8 +4062,8 @@ reinforceUrgency: { cadenceGain: ${ru.cadenceGain}, recognition: ${ru.recognitio
     this.input.keyboard.on("keydown-ONE", () => this._toggleRenderLayer(0));
     this.input.keyboard.on("keydown-TWO", () => this._toggleRenderLayer(1));
     this.input.keyboard.on("keydown-THREE", () => this._toggleRenderLayer(2));
-    // Pause toggle (Esc — left-hand reach, standard pause key)
-    this.input.keyboard.on("keydown-ESC", () => this._togglePause());
+    // Pause toggle (P)
+    this.input.keyboard.on("keydown-P", () => this._togglePause());
 
     // Cop telemetry: press T to toggle throttled console logging of cop state. Works in
     // playtest mode too (console-only, no on-screen clutter) so traces can be captured
@@ -4399,7 +4416,7 @@ reinforceUrgency: { cadenceGain: ${ru.cadenceGain}, recognition: ${ru.recognitio
     const rows = items
       .map((it, i) => (i === this.pauseIndex ? "▶  " : "    ") + it.label)
       .join("\n");
-    const hint = "↑ ↓  select      Enter  choose      Esc  resume";
+    const hint = "↑ ↓  select      Enter  choose      P  resume";
     this.pausedText.setText(`${title}\n\n${rows}\n\n${hint}`);
   }
 
@@ -4881,7 +4898,7 @@ reinforceUrgency: { cadenceGain: ${ru.cadenceGain}, recognition: ${ru.recognitio
       "Space — Handbrake   Shift — Brake",
       "Z Smoke  X Nitro  C Oil  V Repair",
       "Q — Kill lights   E — Minimap",
-      "Esc — Pause   R — Restart",
+      "P — Pause   R — Restart",
       "T — Cop log   G — Cycle camera   H — Stats",
     );
     this.debugText.setText(lines);
@@ -5902,7 +5919,7 @@ searchBurst: { on: ${t.searchBurstEnabled}, delay: ${t.searchBurstDelay}, cooldo
     // camera-space, no world/camera reads — safe to run before the frozen guard below.
     if (this.rain) this.rain.update(delta / 1000);
 
-    // Frozen after a bust (R restarts) or while paused (Esc resumes) — both keys are handled by
+    // Frozen after a bust (R restarts) or while paused (P resumes) — both keys are handled by
     // their keydown listeners, so just hold here. Chunk-visibility is updated only when LIVE (below):
     // the camera doesn't move while frozen so the view is already right, AND this avoids reading
     // this.cameras.main on the transition frame when resuming from the Options overlay (it can be
