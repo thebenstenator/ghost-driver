@@ -241,6 +241,8 @@ export class GameScene extends Phaser.Scene {
     this.ramBogAccel   = 0.35; // engine power multiplier while bogged (lower = harder to recover)
     this.ramRefSpeed   = 380;  // closing speed (px/s) that counts as a "full" ram
     this.ramMinClosing = 120;  // below this closing speed it's a nudge, not a ram
+    this.ramHeadOnBase = 0.4;  // head-on crunch strength ALL cops carry (added to the unit's ramStrength)
+                               // — so even a patrol head-on is a real slam, not a bounce. See _applyRamImpact.
     this.capDebug = this.devMode ? this.add.graphics().setDepth(60) : null;
     if (this.capDebug) this.worldLayer.add(this.capDebug);
 
@@ -3086,29 +3088,38 @@ export class GameScene extends Phaser.Scene {
     else if (b.civ && (a.player || aCop)) this._civHit(b, a);
   }
 
-  // A FRONTAL high-closing-speed cop hit dumps extra player speed and bogs the engine briefly,
-  // so a head-on actually costs you momentum you have to rebuild (interceptor = strong, heavy =
-  // near-stop). (nx,ny) points from the player toward the cop. Uses PRE-collision velocities so
-  // the magnitude reflects the real impact, not the already-resolved speeds.
+  // HEAD-ON crunch. A frontal, opposed-facing, high-closing player↔cop contact arrests BOTH cars
+  // (mass-weighted) and bogs the player's engine — so a head-on reads as a mutual slam-and-stop (you
+  // lose your momentum AND the cop stops dead in front of you) instead of the two of you squeezing
+  // past each other sideways. Every cop crunches via a base strength; ram units (interceptor/heavy)
+  // add their ramStrength on top. Gated to true head-ons (opposed facings) so rear-ends / boxing —
+  // where the resolver's inelastic solve already handles it — are untouched. Uses PRE-collision
+  // velocities for the impact size, then scales the (post-solve) velocities down, which ALSO kills the
+  // residual lateral slide → no "bounce to the side". (nx,ny) points from the player toward the cop.
   _applyRamImpact(cop, nx, ny) {
-    const rs = cop.ramStrength || 0;
-    if (rs <= 0) return;
     const pvx = this._carLastVx ?? this.car.vx, pvy = this._carLastVy ?? this.car.vy;
     const cvx = cop._lastVx ?? cop.vx, cvy = cop._lastVy ?? cop.vy;
     const closing = (pvx - cvx) * nx + (pvy - cvy) * ny;     // approach speed along the normal
-    if (closing < this.ramMinClosing) return;                // a nudge, not a ram
-    // How head-on is it? 1 = the cop is dead ahead of where the player is driving, 0 = side-swipe.
-    const fwd = Math.cos(this.car.facing) * nx + Math.sin(this.car.facing) * ny;
-    const frontal = Phaser.Math.Clamp(fwd, 0, 1);
-    const intensity = rs * frontal * Phaser.Math.Clamp(closing / this.ramRefSpeed, 0, 1);
+    if (closing < this.ramMinClosing) return;                // a nudge, not a crunch
+    // Frontal: 1 = cop dead ahead of your travel. Opposed: 1 = facings dead-on opposed (a head-on),
+    // 0 = co-directional (rear-end/box → skip). Both must be present for a real head-on.
+    const frontal = Phaser.Math.Clamp(Math.cos(this.car.facing) * nx + Math.sin(this.car.facing) * ny, 0, 1);
+    const coDir = Math.cos(this.car.facing) * Math.cos(cop.facing) + Math.sin(this.car.facing) * Math.sin(cop.facing);
+    const opposed = Phaser.Math.Clamp(-coDir, 0, 1);
+    const strength = this.ramHeadOnBase + (cop.ramStrength || 0);
+    const intensity = strength * frontal * opposed * Phaser.Math.Clamp(closing / this.ramRefSpeed, 0, 1);
     if (intensity <= 0) return;
-    // Heavier player shrugs off the bog/speed-kill; lighter player gets punished harder.
-    // Clamped so extremes don't become degenerate (vault barely feels it; razorback hurts).
-    const massFactor = Phaser.Math.Clamp(this.massRef / this.playerMass, 0.3, 2.5);
-    const keep = Math.max(0, 1 - this.ramSpeedKill * intensity * massFactor);
-    this.car.vx *= keep; this.car.vy *= keep;
+    // Arrest the PLAYER (a heavier player shrugs it off, a lighter one is stopped harder) + bog it.
+    const pMass = Phaser.Math.Clamp(this.massRef / this.playerMass, 0.3, 2.5);
+    const pKill = Phaser.Math.Clamp(this.ramSpeedKill * intensity * pMass, 0, 0.95);
+    this.car.vx *= 1 - pKill; this.car.vy *= 1 - pKill;
     this.car.sprite.body.velocity.set(this.car.vx, this.car.vy);
-    this.car._ramBog = Math.max(this.car._ramBog || 0, this.ramBogTime * intensity * massFactor);
+    this.car._ramBog = Math.max(this.car._ramBog || 0, this.ramBogTime * intensity * pMass);
+    // Arrest the COP too (a heavier PLAYER stops it harder) → the mutual crunch, no slide-past.
+    const cMass = Phaser.Math.Clamp(this.playerMass / (cop.mass || 1), 0.3, 2.5);
+    const cKill = Phaser.Math.Clamp(this.ramSpeedKill * intensity * cMass, 0, 0.95);
+    cop.vx *= 1 - cKill; cop.vy *= 1 - cKill;
+    cop.sprite.body.velocity.set(cop.vx, cop.vy);
   }
 
   // A small health bar floating above every active cop, so you can watch it deplete as
