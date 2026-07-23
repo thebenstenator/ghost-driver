@@ -613,12 +613,18 @@ export class GameScene extends Phaser.Scene {
     // retiring the farthest. Count is per-level (PursuitLevel.searchers). See _dispatchSearchers.
     this.searchBurstEnabled  = true;
     this.searchBurstDelay    = 4;   // s of continuous LOS-loss (pre-ditch) before searchers are called
-    this.searchBurstCooldown = 8;   // s after a burst before a NEW loss can burst again (anti-swarm on juking)
+    this.searchBurstCooldown = 20;  // s after a burst before a NEW loss can burst again — long enough that
+                                    // a SECOND quick ditch doesn't immediately re-spawn a fresh wave (the
+                                    // first ditch bursts and bites; ditch again fast and you get a clean break)
     this.searchReengageTrim  = 5;   // s of sustained ACTIVE re-engagement before over-cap searchers are trimmed
     this.searchLateral       = 380; // px the ahead-spawn is offset onto a PARALLEL street (not your lane)
-    this.searchMinDist       = 650; // px — a searcher spawn spot must be at least this far from you AND
-                                    // off-camera; near the map edge (no road far enough ahead) it falls
-                                    // back to an off-screen relocate instead of popping in close.
+    this.searchMinDist       = 950; // px — a searcher spawn spot must be at least this far from you AND
+                                    // off-camera. This is the hard floor: nearestNodeAhead can snap to a
+                                    // node closer than searchAheadDist in bent corridors, and at 650 an
+                                    // occluded-but-one-node-from-LOS spot slipped through (re-acquired
+                                    // instantly → too OP). 950 forces the spawn genuinely farther back.
+                                    // Near the map edge (no road far enough ahead) it falls back to an
+                                    // off-screen relocate instead of popping in close.
     this.searchAheadDist     = 1250; // px down your escape vector the searcher spawn-walk STARTS —
                                     // farther than the interceptor's (850) so the net closes from a
                                     // distance and you get room to slip through before it tightens.
