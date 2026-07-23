@@ -846,7 +846,7 @@ export class GameScene extends Phaser.Scene {
     this.briefingText
       .setText(
         `${this.mission.def.name}\n\n${this.mission.def.briefing}\n\n` +
-          `TIP: cut your lights (L) while you sit on the drop — a blacked-out car is only spotted up close\n\n` +
+          `TIP: cut your lights (Q) while you sit on the drop — a blacked-out car is only spotted up close\n\n` +
           `[ SPACE to roll out ]`,
       )
       .setAlpha(1);
@@ -4157,7 +4157,7 @@ reinforceUrgency: { cadenceGain: ${ru.cadenceGain}, recognition: ${ru.recognitio
       .setScrollFactor(0)
       .setDepth(100);
 
-    // Kill Lights (L) stealth indicator — bottom-centre, only shown while lights are off.
+    // Kill Lights (Q) stealth indicator — bottom-centre, only shown while lights are off.
     this.killLightsText = this.add
       .text(width / 2, this.scale.height - 28, "◐ LIGHTS OFF", {
         fontFamily: "monospace",
@@ -5058,7 +5058,7 @@ capOffset:  ${this.playerCapOffset},`);
     ls.add(this, "tireSmokeOpacity", 0, 0.5, 0.01).name("Tire smoke opacity");
     ls.add(this, "tireSmokeR", 4, 30, 1).name("Tire smoke size (px)");
 
-    // Stealth — Kill Lights (L) detection tuning.
+    // Stealth — Kill Lights (Q) detection tuning.
     const st = gui.addFolder("Stealth (Kill Lights)");
     st.add(this, "killLightsRange", 100, 900, 10).name("Lights-off range (px)");
     st.add(this, "illumSpeedRef", 100, 600, 10).name("Re-lit at speed (px/s)");
