@@ -193,6 +193,16 @@ export const TOOLTIPS = {
   grappleLandMass: "The landed blocker's weight. Raise so cops shove through it slower (it blocks longer); lower so they clear it faster.",
   grappleLifetime: "Seconds the landed blocker persists before it despawns. Raise to leave the blockade up longer.",
 
+  // ── Gadget: Spike Strip (player) ────────────────────────────────────────────
+  pspikeMaxCharges: "How many spike strips you carry per run. (Changing this refills you.) Each drops a strip behind you that pops COP tyres.",
+  pspikeWidth: "How wide (px) your dropped strip is. Wider = harder for a chasing cop to steer around (the cop drop is ~28px = dodgeable). Raise to catch more of the lane.",
+  pspikeLifetime: "Seconds your strip stays on the road before it clears. Raise to leave the hazard down longer.",
+  pspikeDropOffset: "How far behind your car (px) the strip lands. Raise to drop it further back.",
+  pspikeSlowDuration: "Seconds a cop is slowed after popping its tyres on your strip. Raise to cripple pursuers for longer.",
+  pspikeCopSpeed: "Top speed (px/s) a slowed cop is capped to (normal ~450–560). Lower for a harder crawl.",
+  pspikeCopGrip: "Grip multiplier on a slowed cop (looser = blown-tyre wobble). Lower for more slither.",
+  pspikeCopScrub: "Fraction of a cop's speed scrubbed the instant it hits the strip. Raise for a bigger jolt on contact.",
+
   // ── Parked cars (grapple targets) ───────────────────────────────────────────
   parkedDensity: "Chance a building gets a curbside parked car (re-scatters on change). Raise for more grapple targets around the map; lower for sparser streets.",
   parkedCarMass: "How heavy a parked car is in collisions. Raise so bumping one barely moves it (reads as truly parked); lower to shove them around more easily.",

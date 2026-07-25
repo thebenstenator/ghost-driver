@@ -112,10 +112,33 @@ export const GADGETS = [
       g.fillRect(x - t, y + s * 0.1, 2 * t, s * 0.2); // centre prong
     },
   },
+  {
+    id: "pspike",
+    name: "Spike Strip",
+    short: "SPIKE",
+    price: 2000,
+    deploy: "_deployPlayerSpike",
+    hudColor: "#c0c0c8",
+    color: 0xc0c0c8,
+    desc: "Drops a spike strip behind you — cops that drive over it blow their tyres and slow to a crawl.",
+    charges: (s) => s.pspikeCharges,
+    max: (s) => s.pspikeMaxCharges,
+    active: () => false,
+    icon: (g, x, y, s) => {
+      g.fillStyle(0x8a8f98, 1);
+      g.fillRect(x - s * 0.34, y + s * 0.06, s * 0.68, s * 0.12); // the strip bar
+      g.fillStyle(0xd0d0d8, 1);
+      const n = 5, w = s * 0.64;
+      for (let i = 0; i < n; i++) {
+        const tx = x - w / 2 + ((i + 0.5) / n) * w; // a row of teeth
+        g.fillTriangle(tx, y - s * 0.2, tx - s * 0.07, y + s * 0.06, tx + s * 0.07, y + s * 0.06);
+      }
+    },
+  },
 ];
 
 export const PLAYER_SLOT_KEYS = ["Z", "X", "C"]; // the 3 player loadout slots, in order
-export const DEV_GADGET_KEYS = ["Z", "X", "C", "V", "F"]; // dev: every gadget on its own key (registry order)
+export const DEV_GADGET_KEYS = ["Z", "X", "C", "V", "F", "S"]; // dev: every gadget on its own key (registry order)
 export const MAX_LOADOUT = 3;
 // Gadgets you OWN at the start (price 0). The rest are bought in the garage with mission cash. The
 // default loadout is just the starters, since a fresh player can only equip what they own.

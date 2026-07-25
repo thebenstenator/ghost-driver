@@ -408,6 +408,19 @@ export class GameScene extends Phaser.Scene {
     this.grappleLandMass = 3;      // landed-blocker mass — cops SHOVE through (slowed), not a wall
     this.grappleLifetime = 20;     // s the landed blocker persists before it despawns
     this.grappleTug = 0.65;        // fraction of YOUR speed shed per second while pulling (feel the weight)
+
+    // --- Gadget: Spike Strip (player) — drop a strip BEHIND you; a cop that drives over it blows its
+    // tyres and is slowed hard for a while (the reverse of the cop spike unit). Reuses _dropSpike/
+    // _updateSpikes: the strip is flagged target:'cops' so it hits cops, not you. ---
+    this.pspikeMaxCharges = 2;   // charges at the start of a run (spec: 2 per mission)
+    this.pspikeCharges = this.pspikeMaxCharges;
+    this.pspikeWidth = 92;       // px across — wider than the cop drop (28) so pursuers on your line hit it
+    this.pspikeLifetime = 12;    // s the strip stays on the road
+    this.pspikeDropOffset = 40;  // px behind the car centre the strip lands
+    this.pspikeSlowDuration = 4; // s a cop is slowed after popping its tyres
+    this.pspikeCopSpeed = 200;   // px/s cap on a slowed cop's top speed (normal ~450–560 → a crawl)
+    this.pspikeCopGrip = 0.6;    // grip × on a slowed cop (looser, blown tyres)
+    this.pspikeCopScrub = 0.35;  // fraction of a cop's speed scrubbed the instant it hits the strip
     this.sightRange = 900; // px — cop spotting range in clear line
     this.proximityRange = 70; // px — sensed THROUGH walls only at point-blank (can't
     // lose someone on your bumper). Kept small on purpose:
@@ -2577,15 +2590,22 @@ export class GameScene extends Phaser.Scene {
     // bumper. Drawn before the no-strips bail because there may be no strip on the ground yet.
     this._drawSpikeTelegraphs(g);
     if (!this.spikes.length) { this._onSpikes = false; return; }
-    let onAny = false;
+    for (const cop of this.cops) cop._onSpikeNow = false; // per-cop contact accumulator (player strips)
+    let playerOn = false;
     for (const s of [...this.spikes]) {
       s.t += dt;
       const life = s.life ?? this.spikeLifetime;
       if (s.t > life) { this.spikes = this.spikes.filter((o) => o !== s); continue; }
-      // Contact: distance from the player to the strip's line segment (length len, across travel).
       const cos = Math.cos(s.angle), sin = Math.sin(s.angle), hl = s.len / 2, hd = s.depth / 2;
-      const d = this._pointSegDist(px, py, s.x - hl * cos, s.y - hl * sin, s.x + hl * cos, s.y + hl * sin);
-      if (d < hd + this.spikeContactPad) onAny = true;
+      const ax = s.x - hl * cos, ay = s.y - hl * sin, bx = s.x + hl * cos, by = s.y + hl * sin;
+      const reach = hd + this.spikeContactPad;
+      // Contact: cop-deployed strips (default) hit YOU; player-deployed (target 'cops') hit cops.
+      if (s.target === 'cops') {
+        for (const cop of this.cops)
+          if (this._pointSegDist(cop.sprite.x, cop.sprite.y, ax, ay, bx, by) < reach) cop._onSpikeNow = true;
+      } else if (this._pointSegDist(px, py, ax, ay, bx, by) < reach) {
+        playerOn = true;
+      }
       // Fade out over the last 3s of life.
       const fade = Phaser.Math.Clamp((life - s.t) / 3, 0, 1);
       // strip body (drawn as an absolute-point polygon — no transform needed)
@@ -2594,21 +2614,46 @@ export class GameScene extends Phaser.Scene {
         [-hl, -hd], [hl, -hd], [hl, hd], [-hl, hd],
       ].map(([lx, ld]) => ({ x: s.x + lx * cos - ld * sin, y: s.y + lx * sin + ld * cos }));
       g.fillPoints(corners.map((c) => new Phaser.Geom.Point(c.x, c.y)), true);
-      // spike teeth (a row of little triangles along the strip) for readability
-      g.fillStyle(0xc0c0c0, 0.9 * fade);
+      // spike teeth — warm amber for YOUR strips, cool grey for the cops' (tells them apart)
+      g.fillStyle(s.target === 'cops' ? 0xffb14a : 0xc0c0c0, 0.9 * fade);
       const teeth = 9;
       for (let i = 0; i < teeth; i++) {
         const f = (i + 0.5) / teeth - 0.5;
-        const bx = s.x + f * s.len * cos, by = s.y + f * s.len * sin;
-        const tip = { x: bx - (hd + 4) * sin, y: by + (hd + 4) * cos };
-        const b1 = { x: bx - 3 * cos - hd * sin, y: by - 3 * sin + hd * cos };
-        const b2 = { x: bx + 3 * cos - hd * sin, y: by + 3 * sin + hd * cos };
+        const tbx = s.x + f * s.len * cos, tby = s.y + f * s.len * sin;
+        const tip = { x: tbx - (hd + 4) * sin, y: tby + (hd + 4) * cos };
+        const b1 = { x: tbx - 3 * cos - hd * sin, y: tby - 3 * sin + hd * cos };
+        const b2 = { x: tbx + 3 * cos - hd * sin, y: tby + 3 * sin + hd * cos };
         g.fillPoints([new Phaser.Geom.Point(tip.x, tip.y), new Phaser.Geom.Point(b1.x, b1.y), new Phaser.Geom.Point(b2.x, b2.y)], true);
       }
     }
-    // Rising edge: blow the tires the frame the player first touches a strip (not every frame on it).
-    if (onAny && !this._onSpikes) this._blowTires();
-    this._onSpikes = onAny;
+    // Rising edges: blow tyres the frame the player / a cop FIRST touches a strip (not every frame).
+    if (playerOn && !this._onSpikes) this._blowTires();
+    this._onSpikes = playerOn;
+    for (const cop of this.cops) {
+      if (cop._onSpikeNow && !cop._onSpike) this._copHitSpike(cop);
+      cop._onSpike = cop._onSpikeNow;
+    }
+  }
+
+  // Gadget: Spike Strip — drop a strip behind you that pops COP tyres (target:'cops').
+  _deployPlayerSpike() {
+    if (this.busted || this.paused) return;
+    if (this.pspikeCharges <= 0) return;
+    this.pspikeCharges--;
+    const f = this.car.facing;
+    const x = this.car.sprite.x - Math.cos(f) * this.pspikeDropOffset;
+    const y = this.car.sprite.y - Math.sin(f) * this.pspikeDropOffset;
+    const strip = this._dropSpike({ x, y, heading: f }, this.pspikeWidth, this.pspikeLifetime);
+    strip.target = 'cops';
+    if (this.audio) this.audio.playScreech("brake", { gain: 0.4 }); // a chik as it deploys
+  }
+
+  // A cop popped its tyres on your strip: scrub its speed now + set the slow timer the cop loop reads.
+  _copHitSpike(cop) {
+    cop._spikeSlowT = this.pspikeSlowDuration;
+    const keep = 1 - this.pspikeCopScrub;
+    cop.vx *= keep; cop.vy *= keep;
+    if (cop.sprite.body) cop.sprite.body.setVelocity(cop.vx, cop.vy);
   }
 
   // Shortest distance from point (px,py) to the segment (ax,ay)-(bx,by).
@@ -5135,6 +5180,19 @@ capOffset:  ${this.playerCapOffset},`);
     grapple.add(this, "grappleLandMass", 1, 12, 0.5).name("Blocker mass (shove)");
     grapple.add(this, "grappleLifetime", 2, 40, 1).name("Blocker lifetime (s)");
 
+    const pspike = gui.addFolder("Spike Strip (S)");
+    pspike
+      .add(this, "pspikeMaxCharges", 1, 6, 1)
+      .name("Charges")
+      .onChange((v) => (this.pspikeCharges = v)); // refill on tune (and on panel load)
+    pspike.add(this, "pspikeWidth", 28, 160, 4).name("Strip width (px)");
+    pspike.add(this, "pspikeLifetime", 2, 30, 1).name("Strip lifetime (s)");
+    pspike.add(this, "pspikeDropOffset", 0, 120, 2).name("Drop offset behind (px)");
+    pspike.add(this, "pspikeSlowDuration", 0.5, 12, 0.5).name("Cop slow duration (s)");
+    pspike.add(this, "pspikeCopSpeed", 60, 500, 10).name("Cop capped speed (px/s)");
+    pspike.add(this, "pspikeCopGrip", 0.2, 1, 0.05).name("Cop grip × (blown)");
+    pspike.add(this, "pspikeCopScrub", 0, 0.8, 0.05).name("Contact speed scrub");
+
     // Cop spike HAZARD effect (not a player gadget — the cripple you take from driving over a
     // strip). Lives here so it's tunable in normal pursuit playtest. A "Test blowout" button
     // triggers it without needing a spike unit on the road.
@@ -5162,7 +5220,7 @@ capOffset:  ${this.playerCapOffset},`);
       .onChange(() => this._spawnParkedCars()); // re-scatter (skips narrower streets)
     pk.add({ respawn: () => this._spawnParkedCars() }, "respawn").name("Respawn");
 
-    this._persistPanel(gui, "gd_gadgetTune_v24"); // bumped: parkedMinStreet (keep alleys clear)
+    this._persistPanel(gui, "gd_gadgetTune_v25"); // bumped: added Spike Strip (player) levers
 
     // Anchored to the BOTTOM-RIGHT so the panel grows UPWARD when folders expand and stays
     // clear of the bottom-left spawn panel. CRITICAL: clear top/left to "auto" — lil-gui's
@@ -6402,6 +6460,17 @@ searchBurst: { on: ${t.searchBurstEnabled}, delay: ${t.searchBurstDelay}, cooldo
           cop.maxSpeed = Math.min(cop.maxSpeed, cap);
           cop.ai.maxApproachSpeed = Math.min(cop.ai.maxApproachSpeed, cap);
         }
+      }
+
+      // Player spike strip — blown tyres: cap the cop's top speed to a crawl + loosen its grip while
+      // the slow timer runs (maxSpeed/grip are rewritten from base each frame, so capping needs no
+      // restore). Reads as a cop limping after popping its tyres, then recovering.
+      if ((cop._spikeSlowT || 0) > 0) {
+        cop._spikeSlowT = Math.max(0, cop._spikeSlowT - delta / 1000);
+        cop.maxSpeed = Math.min(cop.maxSpeed, this.pspikeCopSpeed);
+        cop.ai.maxApproachSpeed = Math.min(cop.ai.maxApproachSpeed, this.pspikeCopSpeed);
+        cop.gripLow *= this.pspikeCopGrip;
+        cop.gripHigh *= this.pspikeCopGrip;
       }
 
       // Oil slick — ICE via the grip model. While oiled, drop the cop's grip so the Vehicle
