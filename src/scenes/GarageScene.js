@@ -20,7 +20,7 @@ export class GarageScene extends Phaser.Scene {
 
   create() {
     const cx = GAME_WIDTH / 2;
-    addNoirBackground(this, 0.55);
+    addNoirBackground(this, 0.35, "garage_bg");
     addBackLink(this, () => this.scene.start("MenuScene"));
 
     // --- Header ---

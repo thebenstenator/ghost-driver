@@ -13,9 +13,10 @@ export class BootScene extends Phaser.Scene {
     this.load.image('cop_patrol',      'sprites/vehicles/cop_patrol.png');
     this.load.image('cop_interceptor', 'sprites/vehicles/cop_interceptor.png');
     this.load.image('cop_heavy',       'sprites/vehicles/cop_heavy.png');
-    // Neutral carless backdrop — used by Garage/Options and as the title-screen fallback for any
-    // car whose baked scene doesn't exist yet.
+    // Neutral carless backdrop — used by Options and as the title-screen fallback for any car
+    // whose baked scene doesn't exist yet.
     this.load.image('title_bg',        'ui/title-screen-clean.png');
+    this.load.image('garage_bg',       'ui/garage-empty.png'); // dark warehouse interior behind the Garage
 
     // Per-vehicle title backdrops, keyed `title_bg_<id>` from `title-screen-<id>.png` — the whole
     // noir scene with that car (and its wet-road reflection) baked in, so the menu just swaps the

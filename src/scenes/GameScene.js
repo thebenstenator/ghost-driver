@@ -417,7 +417,7 @@ export class GameScene extends Phaser.Scene {
     this.pspikeWidth = 92;       // px across — wider than the cop drop (28) so pursuers on your line hit it
     this.pspikeLifetime = 12;    // s the strip stays on the road
     this.pspikeDropOffset = 40;  // px behind the car centre the strip lands
-    this.pspikeSlowDuration = 4; // s a cop is slowed after popping its tyres
+    this.pspikeSlowDuration = 12; // s a cop is slowed after popping its tyres
     this.pspikeCopSpeed = 200;   // px/s cap on a slowed cop's top speed (normal ~450–560 → a crawl)
     this.pspikeCopGrip = 0.6;    // grip × on a slowed cop (looser, blown tyres)
     this.pspikeCopScrub = 0.35;  // fraction of a cop's speed scrubbed the instant it hits the strip
@@ -5220,7 +5220,7 @@ capOffset:  ${this.playerCapOffset},`);
       .onChange(() => this._spawnParkedCars()); // re-scatter (skips narrower streets)
     pk.add({ respawn: () => this._spawnParkedCars() }, "respawn").name("Respawn");
 
-    this._persistPanel(gui, "gd_gadgetTune_v25"); // bumped: added Spike Strip (player) levers
+    this._persistPanel(gui, "gd_gadgetTune_v26"); // bumped: spike cop-slow 4 → 12s
 
     // Anchored to the BOTTOM-RIGHT so the panel grows UPWARD when folders expand and stays
     // clear of the bottom-left spawn panel. CRITICAL: clear top/left to "auto" — lil-gui's
