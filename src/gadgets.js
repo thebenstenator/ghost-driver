@@ -118,9 +118,10 @@ export const GADGETS = [
     short: "SPIKE",
     price: 2000,
     deploy: "_deployPlayerSpike",
+    release: "_releasePlayerSpike", // hold to arm (telegraph shows), release to drop
     hudColor: "#c0c0c8",
     color: 0xc0c0c8,
-    desc: "Drops a spike strip behind you — cops that drive over it blow their tyres and slow to a crawl.",
+    desc: "Hold to ready a spike strip, release to drop it behind you — cops that drive over it blow their tyres and slow to a crawl.",
     charges: (s) => s.pspikeCharges,
     max: (s) => s.pspikeMaxCharges,
     active: () => false,

@@ -421,6 +421,7 @@ export class GameScene extends Phaser.Scene {
     this.pspikeCopSpeed = 200;   // px/s cap on a slowed cop's top speed (normal ~450–560 → a crawl)
     this.pspikeCopGrip = 0.6;    // grip × on a slowed cop (looser, blown tyres)
     this.pspikeCopScrub = 0.35;  // fraction of a cop's speed scrubbed the instant it hits the strip
+    this._pspikeReadying = false; // true while the deploy key is HELD (broadcasting) — drops on release
 
     // --- Gadget: EMP Blast (player) — a short-range pulse that STALLS every cop in radius: their
     // electronics die (CarLights darkens them) and they're handed a null target so CopCar coasts +
@@ -2638,6 +2639,7 @@ export class GameScene extends Phaser.Scene {
     // Telegraph: a spike cop working a deploy (cop._spikesOut) carries warning teeth behind its
     // bumper. Drawn before the no-strips bail because there may be no strip on the ground yet.
     this._drawSpikeTelegraphs(g);
+    this._drawPlayerSpikeTelegraph(g); // your own broadcast while the deploy key is held
     if (!this.spikes.length) { this._onSpikes = false; return; }
     for (const cop of this.cops) cop._onSpikeNow = false; // per-cop contact accumulator (player strips)
     let playerOn = false;
@@ -2685,9 +2687,22 @@ export class GameScene extends Phaser.Scene {
   }
 
   // Gadget: Spike Strip — drop a strip behind you that pops COP tyres (target:'cops').
+  // Hold-to-deploy (like the cop's spike broadcast): pressing the key ARMS the strip and shows a
+  // telegraph of teeth behind your bumper (_drawPlayerSpikeTelegraph). Nothing drops until you let
+  // go — _releasePlayerSpike lays the strip at wherever you are at that instant. Fires on keydown;
+  // key repeat is idempotent (readying just stays true). No charge is spent until the release.
   _deployPlayerSpike() {
     if (this.busted || this.paused) return;
     if (this.pspikeCharges <= 0) return;
+    this._pspikeReadying = true;
+  }
+
+  // Key released: lay the armed strip behind the car and spend a charge. Guard readying so a stray
+  // keyup (e.g. after a pause) can't drop a strip that was never armed.
+  _releasePlayerSpike() {
+    if (!this._pspikeReadying) return;
+    this._pspikeReadying = false;
+    if (this.busted || this.paused || this.pspikeCharges <= 0) return;
     this.pspikeCharges--;
     const f = this.car.facing;
     const x = this.car.sprite.x - Math.cos(f) * this.pspikeDropOffset;
@@ -2695,6 +2710,38 @@ export class GameScene extends Phaser.Scene {
     const strip = this._dropSpike({ x, y, heading: f }, this.pspikeWidth, this.pspikeLifetime);
     strip.target = 'cops';
     if (this.audio) this.audio.playScreech("brake", { gain: 0.4 }); // a chik as it deploys
+  }
+
+  // The player's own spike broadcast — teeth behind the rear bumper while the key is HELD, warning
+  // (amber) so you can line up the drop. Mirrors the cop telegraph; laid on the spike graphics.
+  _drawPlayerSpikeTelegraph(g) {
+    if (!this._pspikeReadying || !this.car || !this.car.sprite) return;
+    const f = this.car.facing;
+    const back = this.car.sprite.displayHeight * 0.5 + 4; // clear the body, sit just behind the bumper
+    const cx = this.car.sprite.x - Math.cos(f) * back;
+    const cy = this.car.sprite.y - Math.sin(f) * back;
+    const a = f + Math.PI / 2; // teeth lie ACROSS travel, as the strip will
+    const cos = Math.cos(a), sin = Math.sin(a);
+    const blink = 0.5 + 0.5 * Math.abs(Math.sin(this.time.now / 140));
+    const col = 0xffb14a; // warm amber — matches your deployed strips
+    const teeth = 9, len = this.pspikeWidth, hd = 8;
+    g.fillStyle(0x100805, 0.5 * blink);
+    const bw = 3;
+    g.fillPoints([
+      { x: cx - len / 2 * cos + bw * sin, y: cy - len / 2 * sin - bw * cos },
+      { x: cx + len / 2 * cos + bw * sin, y: cy + len / 2 * sin - bw * cos },
+      { x: cx + len / 2 * cos - bw * sin, y: cy + len / 2 * sin + bw * cos },
+      { x: cx - len / 2 * cos - bw * sin, y: cy - len / 2 * sin + bw * cos },
+    ].map((p) => new Phaser.Geom.Point(p.x, p.y)), true);
+    g.fillStyle(col, 0.95 * blink);
+    for (let i = 0; i < teeth; i++) {
+      const fr = (i + 0.5) / teeth - 0.5;
+      const tx = cx + fr * len * cos, ty = cy + fr * len * sin;
+      const tip = { x: tx - (hd + 5) * sin, y: ty + (hd + 5) * cos };
+      const b1 = { x: tx - 3 * cos - hd * sin, y: ty - 3 * sin + hd * cos };
+      const b2 = { x: tx + 3 * cos - hd * sin, y: ty + 3 * sin + hd * cos };
+      g.fillPoints([new Phaser.Geom.Point(tip.x, tip.y), new Phaser.Geom.Point(b1.x, b1.y), new Phaser.Geom.Point(b2.x, b2.y)], true);
+    }
   }
 
   // A cop popped its tyres on your strip: scrub its speed now + set the slow timer the cop loop reads.
@@ -4203,6 +4250,8 @@ reinforceUrgency: { cadenceGain: ${ru.cadenceGain}, recognition: ${ru.recognitio
     // Z/X/C/V; PLAYER binds only its chosen ≤3 on Z/X/C. See _resolveGadgets.
     for (const { def, key } of this._activeGadgets) {
       this.input.keyboard.on(`keydown-${key}`, () => this[def.deploy]());
+      // Hold-to-deploy gadgets (spike strip) arm on keydown and fire on release.
+      if (def.release) this.input.keyboard.on(`keyup-${key}`, () => this[def.release]());
     }
   }
 
