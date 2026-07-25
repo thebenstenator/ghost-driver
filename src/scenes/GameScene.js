@@ -414,7 +414,7 @@ export class GameScene extends Phaser.Scene {
     // _updateSpikes: the strip is flagged target:'cops' so it hits cops, not you. ---
     this.pspikeMaxCharges = 2;   // charges at the start of a run (spec: 2 per mission)
     this.pspikeCharges = this.pspikeMaxCharges;
-    this.pspikeWidth = 92;       // px across — wider than the cop drop (28) so pursuers on your line hit it
+    this.pspikeWidth = 64;       // px across — wider than the cop drop (28) so pursuers on your line hit it
     this.pspikeLifetime = 12;    // s the strip stays on the road
     this.pspikeDropOffset = 40;  // px behind the car centre the strip lands
     this.pspikeSlowDuration = 12; // s a cop is slowed after popping its tyres
@@ -5276,7 +5276,7 @@ capOffset:  ${this.playerCapOffset},`);
       .onChange(() => this._spawnParkedCars()); // re-scatter (skips narrower streets)
     pk.add({ respawn: () => this._spawnParkedCars() }, "respawn").name("Respawn");
 
-    this._persistPanel(gui, "gd_gadgetTune_v27"); // bumped: added EMP Blast levers
+    this._persistPanel(gui, "gd_gadgetTune_v28"); // bumped: spike strip width 92 → 64
 
     // Anchored to the BOTTOM-RIGHT so the panel grows UPWARD when folders expand and stays
     // clear of the bottom-left spawn panel. CRITICAL: clear top/left to "auto" — lil-gui's
