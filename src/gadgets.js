@@ -135,10 +135,31 @@ export const GADGETS = [
       }
     },
   },
+  {
+    id: "emp",
+    name: "EMP Blast",
+    short: "EMP",
+    price: 4000,
+    deploy: "_fireEmp",
+    hudColor: "#4aa0ff",
+    color: 0x4aa0ff,
+    desc: "A short-range pulse that fries nearby cop electronics — engines cut and they roll dead for a few seconds. Long cooldown.",
+    active: (s) => (s._empRipple ? s._empRipple.t < s.empRippleTime : false),
+    cooldown: (s) => s.empCdRemaining,
+    icon: (g, x, y, s) => {
+      // concentric arcs (a pulse) + a lightning bolt
+      g.lineStyle(Math.max(2, s * 0.06), 0x4aa0ff, 1);
+      g.strokeCircle(x, y, s * 0.34);
+      g.strokeCircle(x, y, s * 0.2);
+      g.fillStyle(0xaad4ff, 1);
+      g.fillTriangle(x - s * 0.05, y - s * 0.16, x + s * 0.09, y - s * 0.16, x - s * 0.02, y + s * 0.02);
+      g.fillTriangle(x + s * 0.05, y + s * 0.16, x - s * 0.09, y + s * 0.16, x + s * 0.02, y - s * 0.02);
+    },
+  },
 ];
 
 export const PLAYER_SLOT_KEYS = ["Z", "X", "C"]; // the 3 player loadout slots, in order
-export const DEV_GADGET_KEYS = ["Z", "X", "C", "V", "F", "S"]; // dev: every gadget on its own key (registry order)
+export const DEV_GADGET_KEYS = ["Z", "X", "C", "V", "F", "S", "D"]; // dev: every gadget on its own key (registry order)
 export const MAX_LOADOUT = 3;
 // Gadgets you OWN at the start (price 0). The rest are bought in the garage with mission cash. The
 // default loadout is just the starters, since a fresh player can only equip what they own.

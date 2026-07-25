@@ -203,6 +203,12 @@ export const TOOLTIPS = {
   pspikeCopGrip: "Grip multiplier on a slowed cop (looser = blown-tyre wobble). Lower for more slither.",
   pspikeCopScrub: "Fraction of a cop's speed scrubbed the instant it hits the strip. Raise for a bigger jolt on contact.",
 
+  // ── Gadget: EMP Blast (player) ──────────────────────────────────────────────
+  empCooldown: "Seconds between EMP blasts. It's powerful (stops every nearby cop dead), so keep it long.",
+  empRadius: "How far (px) the pulse reaches — cops within this at the moment you fire are stalled. Snapshot at press, not a lingering field. Raise to catch more cops.",
+  empStall: "Seconds a hit cop is dead-stopped (engine cut, dark) before it recovers. Raise to freeze the pursuit longer.",
+  empRippleTime: "Seconds the blue shockwave ring takes to expand to the blast radius (visual only).",
+
   // ── Parked cars (grapple targets) ───────────────────────────────────────────
   parkedDensity: "Chance a building gets a curbside parked car (re-scatters on change). Raise for more grapple targets around the map; lower for sparser streets.",
   parkedCarMass: "How heavy a parked car is in collisions. Raise so bumping one barely moves it (reads as truly parked); lower to shove them around more easily.",

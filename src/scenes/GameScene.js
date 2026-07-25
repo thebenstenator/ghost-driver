@@ -421,6 +421,17 @@ export class GameScene extends Phaser.Scene {
     this.pspikeCopSpeed = 200;   // px/s cap on a slowed cop's top speed (normal ~450–560 → a crawl)
     this.pspikeCopGrip = 0.6;    // grip × on a slowed cop (looser, blown tyres)
     this.pspikeCopScrub = 0.35;  // fraction of a cop's speed scrubbed the instant it hits the strip
+
+    // --- Gadget: EMP Blast (player) — a short-range pulse that STALLS every cop in radius: their
+    // electronics die (CarLights darkens them) and they're handed a null target so CopCar coasts +
+    // brakes to a dead stop for empStall seconds, then recovers. Snapshot at press (one pulse, not a
+    // field). Cooldown-based, long. A blue ripple radiates from the car to show the range. ---
+    this.empCooldown = 30;       // s between EMP blasts (long — it's powerful)
+    this.empCdRemaining = 0;     // s left on the cooldown (0 = ready)
+    this.empRadius = 260;        // px — cops within this at the moment of the pulse are stalled
+    this.empStall = 10;          // s a hit cop is dead-stopped before it recovers
+    this.empRippleTime = 0.5;    // s the blue shockwave ring takes to expand to the radius
+    this._empRipple = null;      // active ripple { x, y, t } while animating
     this.sightRange = 900; // px — cop spotting range in clear line
     this.proximityRange = 70; // px — sensed THROUGH walls only at point-blank (can't
     // lose someone on your bumper). Kept small on purpose:
@@ -741,6 +752,10 @@ export class GameScene extends Phaser.Scene {
     // Grapple rope — drawn over the cars while a car is being yanked (see _updateGrapple).
     this.grappleGfx = this.add.graphics().setDepth(10.5);
     this.worldLayer.add(this.grappleGfx);
+
+    // EMP shockwave ring — drawn over everything while the pulse expands (see _updateEmp).
+    this.empGfx = this.add.graphics().setDepth(11);
+    this.worldLayer.add(this.empGfx);
 
     // Mission (Phase 3): instantiate the loop + its on-road objective marker (world space, under
     // cars). Screen-space mission UI (briefing card, objective tracker, beacon, result) is built in
@@ -2535,6 +2550,40 @@ export class GameScene extends Phaser.Scene {
   _clearThrownCars() {
     for (const c of this.thrownCars || []) { c.body.destroy(); c.img.destroy(); }
     this.thrownCars = [];
+  }
+
+  // Gadget: EMP Blast — a one-shot pulse. Stall every cop within empRadius (sets cop._empT, which the
+  // cop loop reads to stand it down + CarLights to darken it) and kick off the blue shockwave ring.
+  _fireEmp() {
+    if (this.busted || this.paused) return;
+    if (this.empCdRemaining > 0) return; // still cooling down
+    this.empCdRemaining = this.empCooldown;
+    const px = this.car.sprite.x, py = this.car.sprite.y;
+    const r2 = this.empRadius * this.empRadius;
+    for (const cop of this.cops) {
+      const dx = cop.sprite.x - px, dy = cop.sprite.y - py;
+      if (dx * dx + dy * dy <= r2) cop._empT = this.empStall;
+    }
+    this._empRipple = { x: px, y: py, t: 0 };
+    if (this.audio) this.audio.playScreech("brake", { gain: 0.3, cooldown: 0.5 }); // a short electrical "chirp"
+  }
+
+  // Tick the EMP cooldown + animate the expanding blue shockwave ring.
+  _updateEmp(dt) {
+    if (this.empCdRemaining > 0) this.empCdRemaining = Math.max(0, this.empCdRemaining - dt);
+    const g = this.empGfx;
+    g.clear();
+    const r = this._empRipple;
+    if (!r) return;
+    r.t += dt;
+    if (r.t >= this.empRippleTime) { this._empRipple = null; return; }
+    const k = r.t / this.empRippleTime;         // 0 → 1
+    const rad = this.empRadius * (0.05 + 0.98 * k);
+    const a = 1 - k;                             // fade as it grows
+    g.lineStyle(3, 0x4aa0ff, 0.85 * a);
+    g.strokeCircle(r.x, r.y, rad);
+    g.lineStyle(2, 0xbfe0ff, 0.55 * a);
+    g.strokeCircle(r.x, r.y, rad * 0.68);        // a second inner ring for depth
   }
 
   // An OFF-CENTRE ram torques a block car so it spins out of the way (Arcade has no angular
@@ -5193,6 +5242,13 @@ capOffset:  ${this.playerCapOffset},`);
     pspike.add(this, "pspikeCopGrip", 0.2, 1, 0.05).name("Cop grip × (blown)");
     pspike.add(this, "pspikeCopScrub", 0, 0.8, 0.05).name("Contact speed scrub");
 
+    const emp = gui.addFolder("EMP Blast (D)");
+    emp.add(this, "empCooldown", 5, 90, 1).name("Cooldown (s)");
+    emp.add(this, "empRadius", 100, 600, 10).name("Blast radius (px)");
+    emp.add(this, "empStall", 1, 20, 0.5).name("Stall duration (s)");
+    emp.add(this, "empRippleTime", 0.2, 1.5, 0.05).name("Ripple time (s)");
+    emp.add({ fire: () => this._fireEmp() }, "fire").name("Test blast");
+
     // Cop spike HAZARD effect (not a player gadget — the cripple you take from driving over a
     // strip). Lives here so it's tunable in normal pursuit playtest. A "Test blowout" button
     // triggers it without needing a spike unit on the road.
@@ -5220,7 +5276,7 @@ capOffset:  ${this.playerCapOffset},`);
       .onChange(() => this._spawnParkedCars()); // re-scatter (skips narrower streets)
     pk.add({ respawn: () => this._spawnParkedCars() }, "respawn").name("Respawn");
 
-    this._persistPanel(gui, "gd_gadgetTune_v26"); // bumped: spike cop-slow 4 → 12s
+    this._persistPanel(gui, "gd_gadgetTune_v27"); // bumped: added EMP Blast levers
 
     // Anchored to the BOTTOM-RIGHT so the panel grows UPWARD when folders expand and stays
     // clear of the bottom-left spawn panel. CRITICAL: clear top/left to "auto" — lil-gui's
@@ -6014,6 +6070,7 @@ searchBurst: { on: ${t.searchBurstEnabled}, delay: ${t.searchBurstDelay}, cooldo
     this._updateOilSlicks(delta / 1000);
     this._updateSmoke(delta / 1000);
     this._updateGrapple(delta / 1000);
+    this._updateEmp(delta / 1000);
     this._updateTireSmoke(delta / 1000);
     this._updateTraffic(delta / 1000);
     this._pmark("effects");
@@ -6484,6 +6541,12 @@ searchBurst: { on: ${t.searchBurstEnabled}, delay: ${t.searchBurstDelay}, cooldo
         cop._oilAccel = cop.acceleration;
         cop.acceleration *= this.oilAccelMult;
         cop.iceDrag = this.oilDrag; // less drag → keeps momentum, slides far (cleared right after)
+      }
+      // EMP: fried electronics — force a STAND-DOWN (null target → CopCar coasts + brakes to a stop)
+      // until the pulse wears off. CarLights darkens the cop while _empT > 0.
+      if ((cop._empT || 0) > 0) {
+        cop._empT = Math.max(0, cop._empT - delta / 1000);
+        target = null;
       }
       cop.update(delta, target);
       if (cop._oilAccel != null) { cop.acceleration = cop._oilAccel; cop._oilAccel = null; }

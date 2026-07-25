@@ -129,7 +129,7 @@ export class CarLights {
     const b = v.sprite.body;
     const cx = b ? b.center.x : v.sprite.x;
     const cy = b ? b.center.y : v.sprite.y;
-    const dead = !!v.disabled;
+    const dead = !!v.disabled || (v._empT || 0) > 0; // EMP'd cop goes fully dark (fried electronics)
     // Kill-lights is a hard on/off: head/tail lamps are fully on, or fully dark while v.lightsOff.
     // (GameScene snaps lightsOff back to false at speed, so there's no fade to do here.)
     const lit = v.lightsOff ? 0 : 1;
