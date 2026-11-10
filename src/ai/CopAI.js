@@ -76,6 +76,9 @@ export class CopAI {
                                 // pinning) AND the "escaped" distance (moved this far from the jam = free)
     this._unstuck    = null;    // active recovery: { startX, startY, age }
     this._stuckTime  = 0;       // how long we've been wedged (far from target, not moving)
+    this.stuckWantSpeed = 60;   // px/s — only a cop whose speed limit last frame was above this counts
+                                // as "wants to move" for wedge detection
+    this._wantSpeed  = undefined; // last frame's final speed limit (undefined = no frame yet → assume moving)
   }
 
   getControls(cop, target, dt) {
@@ -131,7 +134,10 @@ export class CopAI {
     // on a corner near the player — but that's exactly a BOX pin, and K-turning out of it
     // abandoned the pin (and read as the "unstick steals the box" psychosis). Now a cop
     // within unstickProx of its target is treated as arrived: it presses, it never reverses.
-    if (speed < 30 && dist > this.unstuckProx) this._stuckTime += dt; else this._stuckTime = 0;
+    // It must also have been TRYING to move: a cop held slow on purpose (the cop-cop yield cap, any
+    // near-zero speed cap) is not wedged, and recovering would drive it straight through that cap.
+    const wantedToMove = (this._wantSpeed ?? Infinity) > this.stuckWantSpeed;
+    if (speed < 30 && dist > this.unstuckProx && wantedToMove) this._stuckTime += dt; else this._stuckTime = 0;
     if (this._stuckTime > 0.35) {
       this._unstuck = { startX: cx, startY: cy, age: 0 }; // record the jam point; recovery senses its way out
       this._stuckTime = 0;
@@ -245,6 +251,8 @@ export class CopAI {
     // so it can corner at this speed cleanly — the braking that drops a physics cop to ~110 at each
     // intersection just makes the sweep look sluggish and uneven, which is what this removes.
     if (this.cornerFloor > 0) limit = Math.max(limit, Math.min(this.cornerFloor, this.speedCap));
+
+    this._wantSpeed = limit; // read by next frame's wedge detection
 
     // --- Throttle toward desiredSpeed ---
     let mode;

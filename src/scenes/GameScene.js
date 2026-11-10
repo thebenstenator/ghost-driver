@@ -957,10 +957,26 @@ export class GameScene extends Phaser.Scene {
       { x: cx - 504, y: cy }, // west
       { x: cx + 504, y: cy }, // east
     ];
+    // Snap each start to a real road node near the player: the nominal points can fall inside a
+    // superblock (the map isn't a uniform grid). Candidates are the nodes a few hops out from the
+    // player's node, at least 400px away; each start takes the unused one nearest its nominal point.
+    const px0 = this.car.sprite.x, py0 = this.car.sprite.y;
+    const cands = this.navGrid
+      .nodesInRange(this.navGrid.nearestNode(px0, py0), 3)
+      .map((n) => this.navGrid.pos(n))
+      .filter((p) => Math.hypot(p.x - px0, p.y - py0) >= 400);
+    for (const s of spawnPts) {
+      let best = -1, bestD = Infinity;
+      cands.forEach((p, k) => {
+        const d = Math.hypot(p.x - s.x, p.y - s.y);
+        if (d < bestD) { bestD = d; best = k; }
+      });
+      if (best >= 0) { s.x = cands[best].x; s.y = cands[best].y; cands.splice(best, 1); }
+    }
     const startCops = this.sandbox ? 0 : this.pursuitMode ? 1 : this.copCount;
     for (let i = 0; i < startCops && i < spawnPts.length; i++) {
       const cop = this._spawnCop(spawnPts[i].x, spawnPts[i].y);
-      cop.facing = Math.atan2(cy - spawnPts[i].y, cx - spawnPts[i].x); // face the player's start
+      cop.facing = Math.atan2(py0 - spawnPts[i].y, px0 - spawnPts[i].x); // face the player's start
       cop.sprite.setRotation(cop.facing + Math.PI / 2);
       this._giveSpawnSpeed(cop); // roll in, not from a dead stop
     }
@@ -6551,7 +6567,9 @@ searchBurst: { on: ${t.searchBurstEnabled}, delay: ${t.searchBurstDelay}, cooldo
       // and raises the AI's approach cap to match so maxApproachSpeed isn't the bottleneck.
       const boost = state === PursuitState.ACTIVE ? cop.maneuverBoost || 0 : 0;
       cop.maxSpeed += boost;
-      cop.ai.maxApproachSpeed = cop.ai.baseApproach + boost;
+      // ...and never BELOW the cop's own live top speed: the rejoin band can lift maxSpeed past
+      // baseApproach (a far cop vs a fast car), and the AI would otherwise brake back to ~baseApproach.
+      cop.ai.maxApproachSpeed = Math.max(cop.ai.baseApproach + boost, cop.maxSpeed);
       // Patrol sight-edge rubber band (raises the cap toward player top so straight-lining can't
       // shed a patrol). MAX'd over the boosts above, so it only ever helps. See _applyPatrolBand.
       this._applyPatrolBand(
