@@ -36,7 +36,8 @@ import {
   GRID_STEP,
 } from "../config.js";
 import { BUILDINGS, GARAGES, streetWidthV, streetWidthH } from "../world/city.js";
-import { GROUND_COLOR, drawPuddles, drawBuildings, drawNeonInto } from "../world/cityRender.js";
+import { GROUND_COLOR, drawPuddles } from "../world/cityRender.js";
+import { CityBake } from "../world/cityBake.js";
 import { Mission, missionById } from "../systems/Mission.js";
 
 export class GameScene extends Phaser.Scene {
@@ -379,6 +380,7 @@ export class GameScene extends Phaser.Scene {
     // car-obstacles (like parked cars) that MOVE: each steers node→node along the NavGrid, and the
     // capsule resolver lets you + cops shove through them. A hard hit briefly stalls one (it "panics").
     this.traffic = [];
+    this._civLit = new Set();     // civilian cars that own a CarLights (see _updateCivLights)
     this.trafficEnabled = true;
     this.trafficCount   = 8;      // target # of civilians kept alive near the player
     this.trafficSpeed   = 150;    // px/s cruise (slower than the player, so you weave past)
@@ -2273,6 +2275,7 @@ export class GameScene extends Phaser.Scene {
       const col = Math.floor((b.x - MARGIN) / GRID_STEP);
       const row = Math.floor((b.y - MARGIN) / GRID_STEP);
       const seed = row * GRID_COLS + col;
+      if (b.kind === "water") continue;            // open sea: its "edges" between bands aren't streets
       if (H(seed) > this.parkedDensity) continue; // sparse
       // Eligible edges = interior road-facing AND the road there is wide enough (streets vary now:
       // 60px alleys up to 640px avenues). A car offsets a fixed curbOff into the road, so in a narrow
@@ -2316,7 +2319,8 @@ export class GameScene extends Phaser.Scene {
   // refill, and steer each along the NavGrid road lattice. Runs every live frame before the capsule
   // resolver (which then lets you/cops shove through them).
   _updateTraffic(dt) {
-    if (!this.trafficEnabled) { if (this.traffic.length) this._clearTraffic(); return; }
+    if (!this.trafficEnabled) { if (this.traffic.length) this._clearTraffic(); this._updateCivLights(); return; }
+    this._updateCivLights();
     const px = this.car.sprite.x, py = this.car.sprite.y;
     const cull2 = this.trafficDespawnR * this.trafficDespawnR;
 
@@ -2355,6 +2359,15 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
+  // Civilian lights follow their car wherever it ends up (traffic, grappled, shoved). One sweep
+  // owns the lifecycle: a car whose body was destroyed — by ANY path — takes its lights with it.
+  _updateCivLights() {
+    for (const c of this._civLit) {
+      if (!c.body.active) { c.lights.destroy(); this._civLit.delete(c); }
+      else c.lights.update();
+    }
+  }
+
   // Try to place one civilian on a road node off-camera in the spawn ring. Returns true on success.
   _spawnCivilian() {
     const px = this.car.sprite.x, py = this.car.sprite.y;
@@ -2376,6 +2389,12 @@ export class GameScene extends Phaser.Scene {
       const car = this._makeCarObstacle(p.x, p.y, h + Math.PI / 2, spec, 0x3fa0ff);
       car.img.setTint(this._trafficPalette[(Math.random() * this._trafficPalette.length) | 0]);
       car.civ = true; car.node = node; car.target = target; car._hitCd = 0;
+      // Head + tail lights. CarLights wants a vehicle; this adapter exposes the obstacle's physics
+      // body and reads `facing` off the visible sprite, so the lights follow shoves/spins too.
+      const lightV = { sprite: car.body, lightHalfLen: spec.visL / 2, lightHalfWid: spec.visW / 2,
+                       get facing() { return car.img.rotation - Math.PI / 2; } };
+      car.lights = new CarLights(this, lightV, "civ", this.worldLayer, this.lightTuning);
+      this._civLit.add(car);
       this.traffic.push(car);
       return true;
     }
@@ -3962,23 +3981,14 @@ reinforceUrgency: { cadenceGain: ${ru.cadenceGain}, recognition: ${ru.recognitio
     // building); a distinct floor tint + door threshold mark them. The hide logic (seen-
     // entering rule) runs in the awareness loop against each garage's interior zone.
     this.garages = GARAGES.map((g) => {
-      this.worldLayer.add(
-        this.add.rectangle(g.x + g.w / 2, g.y + g.h / 2, g.w, g.h, 0x24303f).setDepth(1.6),
-      );
+      // (Visuals — floor, walls, door, safe-light — are baked with the city: buildingArt.garageArt.)
       for (const r of g.walls) {
         const cx = r.x + r.w / 2, cy = r.y + r.h / 2;
-        this.worldLayer.add(
-          this.add.rectangle(cx, cy, r.w, r.h, 0x4a5e74).setStrokeStyle(1, 0x6a82a0).setDepth(2),
-        );
         const body = this.walls.create(cx, cy, "_px");
         body.setDisplaySize(r.w, r.h).refreshBody();
         body.setVisible(false);
         this.losRects.push(new Phaser.Geom.Rectangle(r.x, r.y, r.w, r.h));
       }
-      // Yellow door threshold for readability.
-      this.worldLayer.add(
-        this.add.rectangle(g.door.x + g.door.w / 2, g.door.y + g.door.h / 2, g.door.w, 4, 0xffd23f).setDepth(1.7),
-      );
       return { interior: new Phaser.Geom.Rectangle(g.interior.x, g.interior.y, g.interior.w, g.interior.h), blown: false };
     });
     this._inGarage = null;
@@ -4014,16 +4024,15 @@ reinforceUrgency: { cadenceGain: ${ru.cadenceGain}, recognition: ${ru.recognitio
       for (let c = 0; c < this._chCols; c++) {
         const bounds = { x: c * C, y: r * C, right: (c + 1) * C, bottom: (r + 1) * C };
         const under = this.add.graphics().setDepth(1); // puddles + road markings (under buildings)
-        const bld   = this.add.graphics().setDepth(2); // buildings
-        const neon  = this.add.graphics().setDepth(5).setBlendMode(Phaser.BlendModes.ADD);
-        this.worldLayer.add(under); this.worldLayer.add(bld); this.worldLayer.add(neon);
+        this.worldLayer.add(under);
         drawPuddles(under, bounds);
         this._drawMarkings(under, bounds);
-        drawBuildings(bld, BUILDINGS, bounds);
-        drawNeonInto(neon, BUILDINGS, bounds);
-        this._chunks.push({ c, r, gfx: [under, bld, neon] });
+        this._chunks.push({ c, r, gfx: [under] });
       }
     }
+    // Buildings + their emissive layers are BAKED to textures (see world/cityBake.js) — far too
+    // detailed for live Graphics. It runs its own (smaller) chunk grid, updated with the cull below.
+    this._cityBake = new CityBake(this, this.worldLayer, BUILDINGS, GARAGES, WORLD_WIDTH, WORLD_HEIGHT);
     this._updateChunkVisibility();
   }
 
@@ -4032,6 +4041,7 @@ reinforceUrgency: { cadenceGain: ${ru.cadenceGain}, recognition: ${ru.recognitio
   _updateChunkVisibility() {
     if (!this._chunks || !this.cameras || !this.cameras.main) return; // guard scene-transition frames
     const v = this.cameras.main.worldView, C = this._chSize, M = this._chunkMargin;
+    if (this._cityBake && v.width > 0) this._cityBake.update(v);
     // Expand the view by a fixed px margin, then show any chunk whose bounds INTERSECT it. The old
     // ±1-whole-chunk margin tessellated up to a 2400px off-screen border every frame; the profiler
     // showed neon+markings over-draw was the dominant render cost, and most of it was that border.
@@ -4050,8 +4060,9 @@ reinforceUrgency: { cadenceGain: ${ru.cadenceGain}, recognition: ${ru.recognitio
   // measure its render-side cost. Re-applies immediately (the cull only fires on a vis CHANGE).
   _toggleRenderLayer(i) {
     this._layerShow[i] = !this._layerShow[i];
-    if (this._chunks)
-      for (const ch of this._chunks) ch.gfx[i].setVisible(ch.vis && this._layerShow[i]);
+    if (i === 0) {
+      if (this._chunks) for (const ch of this._chunks) ch.gfx[0].setVisible(ch.vis && this._layerShow[0]);
+    } else if (this._cityBake) this._cityBake.setShow(i - 1, this._layerShow[i]);
     const names = ["markings+puddles", "buildings", "neon"];
     console.log(`[render] ${names[i]} ${this._layerShow[i] ? "ON" : "OFF"}`);
   }
@@ -4767,6 +4778,7 @@ reinforceUrgency: { cadenceGain: ${ru.cadenceGain}, recognition: ${ru.recognitio
       const [rcx, rcy] = proj(bdx, bdy);
       if (rcx * rcx + rcy * rcy > (R + 20) * (R + 20)) continue;
       const hw = b.w / 2, hh = b.h / 2;
+      cg.fillStyle(b.kind === "water" ? 0x153246 : b.kind === "park" ? 0x1f3a28 : 0x2c2c38, 1);
       const pts = [
         proj(bdx - hw, bdy - hh), proj(bdx + hw, bdy - hh),
         proj(bdx + hw, bdy + hh), proj(bdx - hw, bdy + hh),

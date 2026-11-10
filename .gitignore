@@ -11,3 +11,6 @@ CLAUDE.md
 # Generated preview snapshots (regenerate: node sim/map-svg.mjs / sim/art-preview.mjs)
 sim/map.svg
 sim/art-preview.svg
+
+# Generated building-art previews (regenerate: node sim/buildings-preview.mjs)
+sim/buildings-preview/

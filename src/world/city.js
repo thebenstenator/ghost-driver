@@ -33,7 +33,8 @@ const AVENUE_W    = Math.round(ROAD * 3.2); // grand boulevard (widest)
 const ALLEY_W     = 60;   // alleys / service lanes (narrowest)
 const FIN_STREET  = 168;  // Financial: 3 lanes (one each way + centre turn)
 const BACK_STREET = ROAD; // Backstreets: tight
-const NEON_STREET = 132;  // Neon Mile: medium
+const NEON_STREET = 176;  // Neon Mile: broad, showy streets (the strip itself is wider still)
+const NEON_MILE_W = 300;  // the Mile: Neon's central boulevard
 const IND_STREET  = 200;  // Industrial: very wide service roads
 const DOCK_STREET = 150;  // Docks: loading lanes
 
@@ -45,7 +46,7 @@ const HB = ROWS >> 1; // horizontal band split (row)
 const CB1 = Math.round(COLS / 3), CB2 = COLS - CB1; // vertical band splits (cols)
 const DISTRICTS = [
   { id: 'industrial',  c0: 0,   c1: CB1,  r0: 0,  r1: HB,   street: IND_STREET,  gen: genIndustrial,  alleyP: 0    },
-  { id: 'neon',        c0: 0,   c1: CB1,  r0: HB, r1: ROWS, street: NEON_STREET, gen: genNeon,        alleyP: 0.20 },
+  { id: 'neon',        c0: 0,   c1: CB1,  r0: HB, r1: ROWS, street: NEON_STREET, gen: genNeon,        alleyP: 0    },
   { id: 'financial',   c0: CB1, c1: CB2,  r0: 0,  r1: ROWS, street: FIN_STREET,  gen: genFinancial,   alleyP: 0    },
   { id: 'docks',       c0: CB2, c1: COLS, r0: 0,  r1: HB,   street: DOCK_STREET, gen: genDocks,       alleyP: 0.10 },
   { id: 'backstreets', c0: CB2, c1: COLS, r0: HB, r1: ROWS, street: BACK_STREET, gen: genBackstreets, alleyP: 0.45 },
@@ -71,6 +72,8 @@ for (const d of DISTRICTS) {
 }
 financial.avenue = CB1 + (((CB2 - CB1) >> 1) | 1); // an odd-ish central Financial line = a through-road
 financial.vAlleys.add(financial.avenue + 4);       // one narrow Financial service lane
+const neonD = DISTRICTS.find((d) => d.id === 'neon');
+neonD.avenue = neonD.c0 + 10; neonD.avenueW = NEON_MILE_W; // "the Mile" (an even line = a Neon block boundary)
 
 // One garage per district (a hide spot + a mission safehouse). Each replaces a plot with a hollow
 // enclosure; in the big-block districts the generator skips the whole containing superblock, so the
@@ -121,22 +124,39 @@ for (const d of DISTRICTS) d.gen(d);
 for (const gp of GARAGE_PLOTS) buildGarage(gp.c, gp.r); // after generation (which left the plots clear)
 
 // ── District generators (each stays within its region [c0,c1) × [r0,r1)) ───────────────────
+// A building rect may carry a `kind` ('park' | 'water'). It is still a SOLID block for physics /
+// LOS / nav — `kind` only tells the renderer (buildingArt.js) and the minimap what to draw.
+// Financial: grand 3×3 superblocks (several towers each); roughly one in five is a fenced PARK.
+// PARK SPACING RULE: no park within PARK_MIN_GAP blocks of another (block-grid distance on either
+// axis), so parks are landmarks spread through the district, never across the street from each other.
 function genFinancial(d) {
-  for (let r = d.r0; r < d.r1; r += 2)
-    for (let c = d.c0; c < d.c1; c += 2) {
-      const cs = Math.min(2, d.c1 - c), rs = Math.min(2, d.r1 - r);
+  const PARK_MIN_GAP = 5;
+  const blocks = [];
+  for (let r = d.r0, bj = 0; r < d.r1; r += 3, bj++)
+    for (let c = d.c0, bi = 0; c < d.c1; c += 3, bi++) {
+      const cs = Math.min(3, d.c1 - c), rs = Math.min(3, d.r1 - r);
       if (spanHasGarage(c, r, cs, rs)) continue; // leave a forecourt for the garage
-      BUILDINGS.push(faceRect(c, r, cs, rs));
+      blocks.push({ c, r, cs, rs, bi, bj, h: hash(pidx(c, r) * 5 + 3) });
     }
+  // Greedy in a fixed (hash) order: take every full-size block that keeps its distance.
+  const parks = [];
+  for (const b of blocks.filter((q) => q.cs === 3 && q.rs === 3).sort((a, q) => a.h - q.h))
+    if (parks.every((p) => Math.max(Math.abs(p.bi - b.bi), Math.abs(p.bj - b.bj)) >= PARK_MIN_GAP)) parks.push(b);
+  for (const b of blocks) {
+    const rect = faceRect(b.c, b.r, b.cs, b.rs);
+    BUILDINGS.push(parks.includes(b) ? { ...rect, kind: 'park' } : rect);
+  }
 }
+// Neon Mile: wide streets, so blocks are merged 2 plots wide (and often 2 deep) to stay building-sized.
 function genNeon(d) {
   for (let r = d.r0; r < d.r1; r++)
-    for (let c = d.c0; c < d.c1; c++) {
-      const i = pidx(c, r);
-      if (consumed.has(i) || isGaragePlot(c, r)) continue;
-      if (hash(i * 3 + 2) < 0.25 && c + 1 < d.c1 && !consumed.has(pidx(c + 1, r)) && !isGaragePlot(c + 1, r)) {
-        BUILDINGS.push(faceRect(c, r, 2, 1)); consumed.add(pidx(c + 1, r));
-      } else BUILDINGS.push(faceRect(c, r, 1, 1));
+    for (let c = d.c0; c < d.c1; c += 2) {
+      if (consumed.has(pidx(c, r))) continue;
+      const cs = Math.min(2, d.c1 - c);
+      let rs = hash(pidx(c, r) * 3 + 2) < 0.6 && r + 1 < d.r1 && !consumed.has(pidx(c, r + 1)) ? 2 : 1;
+      if (spanHasGarage(c, r, cs, rs)) { rs = 1; if (spanHasGarage(c, r, cs, 1)) continue; }
+      BUILDINGS.push(faceRect(c, r, cs, rs));
+      if (rs === 2) consumed.add(pidx(c, r + 1));
     }
 }
 function genBackstreets(d) {
@@ -152,23 +172,38 @@ function genBackstreets(d) {
       else BUILDINGS.push(faceRect(c, r, 1, 1));
     }
 }
+// Industrial: regular 2×2 factory blocks on very wide service roads.
 function genIndustrial(d) {
-  for (let r = d.r0; r < d.r1; r += 3)
-    for (let c = d.c0; c < d.c1; c += 3) {
-      const cs = Math.min(3, d.c1 - c), rs = Math.min(3, d.r1 - r);
+  for (let r = d.r0; r < d.r1; r += 2)
+    for (let c = d.c0; c < d.c1; c += 2) {
+      const cs = Math.min(2, d.c1 - c), rs = Math.min(2, d.r1 - r);
       if (spanHasGarage(c, r, cs, rs)) continue;
-      if (hash(pidx(c, r) * 5 + 3) < 0.15) continue; // open factory yard
+      if (hash(pidx(c, r) * 5 + 3) < 0.1) continue; // open factory yard
       BUILDINGS.push(faceRect(c, r, cs, rs));
     }
 }
+// Docks: compounds inland; the outermost DOCK_WATER_COLS plot columns are OPEN SEA. The sea is
+// one continuous solid region out to the world edge (no roads through it, no margin lane round
+// it) and wider than the camera can see, so from the quay the water runs off-screen. It is pushed
+// as contiguous bands (one per block row) only so each rect stays a sane size for culling.
+// Anything drivable over the water later (the drawbridge) must be a BRIDGE cut out of these bands.
 function genDocks(d) {
-  for (let r = d.r0; r < d.r1; r += 3)
-    for (let c = d.c0; c < d.c1; c += 2) {
-      const cs = Math.min(2, d.c1 - c), rs = Math.min(3, d.r1 - r);
+  const DOCK_WATER_COLS = 5;
+  const wc = d.c1 - DOCK_WATER_COLS;
+  let seaTop = 0;
+  for (let r = d.r0; r < d.r1; r += 3) {
+    const rs = Math.min(3, d.r1 - r);
+    for (let c = d.c0; c < wc; c += 2) {
+      const cs = Math.min(2, wc - c);
       if (spanHasGarage(c, r, cs, rs)) continue;
-      if (hash(pidx(c, r) * 7 + 4) < 0.35) continue; // open loading yard
+      if (hash(pidx(c, r) * 7 + 4) < 0.3) continue; // open loading yard
       BUILDINGS.push(faceRect(c, r, cs, rs));
     }
+    const f = faceRect(wc, r, DOCK_WATER_COLS, rs), last = r + 3 >= d.r1;
+    const bottom = last ? f.y + f.h : lineCoord(r + rs) + streetWidthH(r + rs, wc) / 2; // swallow the cross street
+    BUILDINGS.push({ x: f.x, y: seaTop, w: WORLD_WIDTH - f.x, h: bottom - seaTop, kind: 'water', southQuay: last });
+    seaTop = bottom;
+  }
 }
 
 // --- Parking garage builder --- (see previous notes: hollow enclosure, door faces south).

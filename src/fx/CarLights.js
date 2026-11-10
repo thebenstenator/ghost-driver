@@ -84,6 +84,18 @@ function componentsFor(kind) {
       { type: 'tail', fxFrac: -0.9, sxFrac:  0.55, sxFixed: 0, len: 10.5, wid: 10.5, color: 0xff2a2a },
     ];
   }
+  if (kind === 'civ') {
+    // Civilian traffic: ordinary warm headlights (shorter + dimmer than the player's) and tail
+    // lamps, so a car is readable in the dark from either end.
+    return [
+      { type: 'head', fxFrac:  0.6, sxFrac: 0, sxFixed: -6, len: 120, wid: 84, color: 0xffe6bc, alpha: 0.5, beam: true },
+      { type: 'head', fxFrac:  0.6, sxFrac: 0, sxFixed:  6, len: 120, wid: 84, color: 0xffe6bc, alpha: 0.5, beam: true },
+      { type: 'head', fxFrac:  0.92, sxFrac: -0.55, sxFixed: 0, len: 9, wid: 9, color: 0xfff0d0, alpha: 0.85 },
+      { type: 'head', fxFrac:  0.92, sxFrac:  0.55, sxFixed: 0, len: 9, wid: 9, color: 0xfff0d0, alpha: 0.85 },
+      { type: 'tail', fxFrac: -0.9, sxFrac: -0.55, sxFixed: 0, len: 11, wid: 11, color: 0xff2a2a, idle: 0.6 },
+      { type: 'tail', fxFrac: -0.9, sxFrac:  0.55, sxFixed: 0, len: 11, wid: 11, color: 0xff2a2a, idle: 0.6 },
+    ];
+  }
   // player (baked: bright 1.75, len 1.5, spread 1.25)
   return [
     { type: 'head', fxFrac:  0.6, sxFrac: 0, sxFixed: -7, len: 172, wid: 119, color: 0xcfe0ff, alpha: 0.74, beam: true },
@@ -162,7 +174,7 @@ export class CarLights {
         alpha = (L.alpha ?? 0.9) * T.head * lit;
         sx2 = L.len * T.headLen; sy2 = L.wid * T.headWid;
       } else if (L.type === 'tail') {
-        alpha = (braking ? 1.0 : 0.32) * T.brake * lit;
+        alpha = (braking ? 1.0 : (L.idle ?? 0.32)) * T.brake * lit;
         const sc = braking ? 1.35 : 1.0;
         sx2 = L.len * sc; sy2 = L.wid * sc;
       } else if (L.type === 'flashRed') {
