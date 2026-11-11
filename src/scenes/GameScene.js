@@ -390,7 +390,24 @@ export class GameScene extends Phaser.Scene {
     this.trafficNodeReach = 36;   // px to a node counted as "arrived" (advance to the next)
     this.trafficHitStall = 1.1;   // s a civilian coasts (no steering) after a hard hit — reads as panic
     this.trafficHitThreshold = 160; // closing speed (px/s) a contact needs to stall a civilian
-    this.trafficCivMass  = 2.2;   // civilian capsule mass (shovable but with some inertia)
+    this.trafficCivMass  = 0.9;   // civilian capsule mass — LIGHTER than the player/cops, so hitting one
+                                  // costs you some speed and knocks it aside (2.2 felt like a wall)
+    this.trafficLane     = 16;    // px right of the road centreline each civilian drives (keep-right)
+    this.trafficLaneHalf = 20;    // px lateral — a car within this of my line ahead is "in my lane"
+    this.trafficLook     = 190;   // px ahead a civilian watches; followers settle this far apart
+    this.trafficStopGap  = 75;    // px centre-to-centre at which it has come to a full stop
+    this.trafficBumperLook = 88;  // px ahead a civilian notices the PLAYER or a COP (≈ touching distance
+                                  // plus a little) — a last-moment stop, not avoidance
+    this.trafficBumperStop = 62;  // px centre-to-centre at which it has stopped behind them
+    this.trafficBumperHalf = 14;  // px lateral — only a car squarely in front counts
+    this.trafficAccel    = 240;   // px/s² pulling back up to cruise (after a hit / a wait)
+    this.trafficTurnRate = 3.6;   // rad/s a civilian's heading swings toward its aim — it drives an ARC through
+                                  // a junction (radius ≈ speed / rate ≈ 40px) instead of snapping to the new road
+    this.trafficBrake    = 420;   // px/s² slowing for a car ahead
+    this.trafficWaitMax  = 3;     // s two civilians may block each other before one noses through
+    this.trafficSpawnGap = 450;   // px — no civilian spawns this close to another
+    this.civRamMult      = 0.5;   // cop damage from hitting a civilian, × the base ram damage (also
+                                  // scaled down by the civilian's low mass) — a chip, not a wreck
     this.grappleCivRecover = 0.7; // s a GRAPPLED civilian is stunned after it lands, then it drives away
     this._trafficPalette = [0x8a8f9c, 0x6b7280, 0x7a6f63, 0x556070, 0x9c8a6a, 0x445a6a]; // muted civilian tints
 
@@ -481,6 +498,15 @@ export class GameScene extends Phaser.Scene {
     // future fast car (Spectre/Phantom) with no per-car hand-tuning.
     this.playerMaxSpeed = this._vehicleStats.maxSpeed; // live anchor for all the bands below
     this.rbOvertake = 15; // px/s a far (rejoin) cop may exceed YOUR top by, so it can actually close
+    // FAR band (stage 2 of the rejoin band): +15 px/s can't close a real gap (1000px = over a minute
+    // of straight road, and every blind corner at activeBlindFloor loses more than that). Past rbFull,
+    // an OFF-CAMERA cop's overtake margin keeps growing with distance, and its blind corner floor
+    // rises with the same blend. Off-camera only, and it has faded to the plain rejoin band by rbFull,
+    // so the extra pace is never seen — a lost cop just reappears behind you. See _applyRejoinBand.
+    this.rbFarFull = 1500; // px from player where the far band is maxed (it starts at rbFull)
+    this.rbFarOvertake = 200; // px/s over YOUR top at full far blend
+    this.rbFarCornerFloor = 450; // px/s blind corner floor at full far blend (from activeBlindFloor)
+    this.rbFarMargin = 60; // px a cop must be clear of the camera view for the far band to apply
     // Patrol rubber band: softens how fast a chasing PATROL (slow, ~495 base) gets straight-lined
     // away in the early levels. Its top-speed cap ramps up toward (playerTop − patrolBandGap) between
     // patrolBandStart (no boost) and patrolBandFull (full boost) px behind you, so the bleed SLOWS at a
@@ -540,6 +566,9 @@ export class GameScene extends Phaser.Scene {
     // current distance, or it's not worth doing (skip and wait)
     this.respawnSpacing = 300; // a relocation spot must clear other cops by this much, so several
     // reinforcements don't all surface on the same road
+    this.respawnFrontCone = 0.45; // rad half-angle around YOUR direction of travel where no flank
+    // unit may be placed: never dead ahead on your road, but ahead-and-to-the-side (oncoming from a
+    // cross/parallel street) is allowed. Only applies while you're moving. 0 = no restriction.
     this.dropHeatCops = 3; // mission: pack size that converges on you the instant the drop is secured
     this.interceptAheadDist = 850; // px down the player's travel that an 'ahead-of-travel'
     // unit (interceptor) spawns, to set up a head-on
@@ -1285,6 +1314,15 @@ export class GameScene extends Phaser.Scene {
     // letting a far cop rejoin a 780 razorback. Linear(base, base+boost, f) == the old formula.
     const rbTarget = Math.max(cop.baseMaxSpeed + this.rbSpeedBoost, this.playerMaxSpeed + this.rbOvertake);
     cop.maxSpeed = Phaser.Math.Linear(cop.baseMaxSpeed, rbTarget, f);
+    // Far band: beyond rbFull, an off-camera cop's top keeps rising toward (yourTop + rbFarOvertake).
+    // _farBlend also lifts the blind corner floor in _applyNavProfile.
+    let g = 0;
+    if (dist > this.rbFull && this._offCamera(cop.sprite.x, cop.sprite.y, this.rbFarMargin)) {
+      g = Phaser.Math.Clamp((dist - this.rbFull) / Math.max(1, this.rbFarFull - this.rbFull), 0, 1);
+      const farTop = this.playerMaxSpeed + this.rbFarOvertake;
+      if (farTop > rbTarget) cop.maxSpeed = Phaser.Math.Linear(rbTarget, farTop, g);
+    }
+    cop._farBlend = g;
     cop.gripLow = Phaser.Math.Linear(cop.baseGripLow, this.rbGrip, f);
     cop.gripHigh = Phaser.Math.Linear(cop.baseGripHigh, this.rbGrip, f);
     const turnMult = 1 + (this.rbTurnMult - 1) * f;
@@ -1304,7 +1342,12 @@ export class GameScene extends Phaser.Scene {
   _applyNavProfile(cop, slow, active) {
     let floor = 0;
     if (slow) floor = this._searchSpeed();
-    else if (active && !cop.hasLOS) floor = this.activeBlindFloor;
+    else if (active && !cop.hasLOS)
+      floor = Phaser.Math.Linear(
+        this.activeBlindFloor,
+        Math.max(this.activeBlindFloor, this.rbFarCornerFloor),
+        cop._farBlend || 0,
+      );
     cop.ai.cornerFloor = floor;
     if (floor > 0) {
       cop.gripLow = this.rbGrip;
@@ -1370,7 +1413,9 @@ export class GameScene extends Phaser.Scene {
   // Tier-2: relocate cops that have been lost (far + not chasing + off-screen) for a
   // sustained beat. Per cop, accumulate "lost" time; once over the threshold and the
   // cop itself is off-screen, try to warp it to a fresh off-screen road node near the
-  // player (biased to the side it was coming from). Nothing happens if no off-screen
+  // player, on a RANDOM bearing (a unit joining from anywhere in the city — re-entering from
+  // the side it fell behind on just restarted the same losing tail chase), never dead ahead
+  // of your travel. Nothing happens if no off-screen
   // spot is available (e.g. player in the open) — it just waits, so no pop-in.
   _respawnLostCops(px, py, dt) {
     if (!this.respawnEnabled) return;
@@ -1398,7 +1443,7 @@ export class GameScene extends Phaser.Scene {
         this._offCamera(cop.sprite.x, cop.sprite.y, this.respawnMargin) &&
         (ahead
           ? this._placeAheadFor(cop, px, py)
-          : this._tryRespawnCop(cop, px, py))
+          : this._tryRespawnCop(cop, px, py, true))
       ) {
         cop._lostT = 0;
         cop._respawnCd = this.respawnCooldown;
@@ -1418,21 +1463,33 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
-  // Find an off-screen road node near the player, biased to the bearing the cop is
-  // currently coming from (so it re-enters from the same side), and drop the cop there
-  // facing the player with fresh state. Returns false if no valid off-screen spot.
-  _tryRespawnCop(cop, px, py) {
+  // Is (x,y) inside the no-spawn cone dead ahead of the moving player? (See respawnFrontCone.)
+  _inFrontCone(x, y, px, py) {
+    const car = this.car;
+    if (this.respawnFrontCone <= 0 || car.getSpeed() < 80) return false;
+    const dir = Math.atan2(car.vy, car.vx);
+    const diff = Phaser.Math.Angle.Wrap(Math.atan2(y - py, x - px) - dir);
+    return Math.abs(diff) < this.respawnFrontCone;
+  }
+
+  // Find an off-screen road node near the player and drop the cop there facing the player with
+  // fresh state. Returns false if no valid off-screen spot. By default the search is biased to the
+  // bearing the cop currently sits at (callers seed that to steer it); `anywhere` picks a random
+  // bearing instead — a unit joining from wherever in the city. Either way, never dead ahead of a
+  // moving player (_inFrontCone): ahead-and-to-the-side is fine, on your nose is not.
+  _tryRespawnCop(cop, px, py, anywhere = false) {
     const cur = Phaser.Math.Distance.Between(
       cop.sprite.x,
       cop.sprite.y,
       px,
       py,
     );
-    // Bias to the bearing the cop came from, but jitter it so several cops respawning
-    // at once don't all snap to the SAME road ("all 3 came out of the same alley").
-    const base =
-      Math.atan2(cop.sprite.y - py, cop.sprite.x - px) +
-      (Math.random() - 0.5) * 0.7;
+    // Jitter the seeded bearing so several cops respawning at once don't all snap to the SAME
+    // road ("all 3 came out of the same alley").
+    const base = anywhere
+      ? Math.random() * Math.PI * 2
+      : Math.atan2(cop.sprite.y - py, cop.sprite.x - px) +
+        (Math.random() - 0.5) * 0.7;
     const angOffsets = [0, 0.5, -0.5, 1.0, -1.0, 1.6, -1.6, 2.3, -2.3, Math.PI];
     for (const off of angOffsets) {
       const ang = base + off;
@@ -1454,6 +1511,7 @@ export class GameScene extends Phaser.Scene {
           Phaser.Math.Distance.Between(p.x, p.y, px, py) <
             cur - this.respawnMinGain &&
           this._offCamera(p.x, p.y, this.respawnMargin) &&
+          !this._inFrontCone(p.x, p.y, px, py) &&
           !this.cops.some(
             (o) =>
               o !== cop &&
@@ -2353,14 +2411,39 @@ export class GameScene extends Phaser.Scene {
     while (this.traffic.length < this.trafficCount && guard++ < this.trafficCount) {
       if (!this._spawnCivilian()) break; // couldn't place one this frame — try again next
     }
-    // Drive each civilian node→node.
+    // Drive each civilian node→node. Three rules make them behave like traffic rather than rams:
+    //   • KEEP RIGHT — each drives trafficLane px right of the road centreline, so opposing cars pass
+    //     instead of meeting nose-to-nose on the same line.
+    //   • KEEP A GAP — a car (player, cop or civilian) in its lane ahead within trafficLook slows it,
+    //     down to a stop at trafficStopGap. Followers settle a full trafficLook behind the car in front
+    //     (no bunching), and a civilian STOPS behind a stationary player instead of pushing through.
+    //   • ACCELERATE, don't teleport velocity — speed moves toward the wanted value at trafficAccel /
+    //     trafficBrake, so a collision's momentum exchange actually sticks (a hit slows them, they
+    //     recover) instead of being overwritten with full cruise speed the next frame.
+    const others = (this._civOthers ||= []);
+    others.length = 0;
+    others.push(this.car.sprite);
+    for (const cop of this.cops) others.push(cop.sprite);
+    for (const c of this.traffic) others.push(c.body);
+    const look = this.trafficLook, stop = this.trafficStopGap;
     for (const c of this.traffic) {
-      const b = c.body;
-      if (c._hitCd > 0) { c._hitCd -= dt; b.body.velocity.scale(0.9); continue; } // panicked/stalled — coast
-      const tp = this.navGrid.pos(c.target);
-      const dx = tp.x - b.x, dy = tp.y - b.y;
-      if (dx * dx + dy * dy < this.trafficNodeReach * this.trafficNodeReach) {
-        // Arrived — advance to a neighbour of the target, preferring not to immediately reverse.
+      const b = c.body, vel = b.body.velocity;
+      if (c._hitCd > 0) { c._hitCd -= dt; vel.scale(0.9); c.img.setPosition(b.x, b.y); continue; } // panicked/stalled — coast
+      const np = this.navGrid.pos(c.node), tp = this.navGrid.pos(c.target);
+      let ux = tp.x - np.x, uy = tp.y - np.y;
+      const segLen = Math.hypot(ux, uy);
+      let aimX = tp.x, aimY = tp.y, arrived;
+      if (segLen > 1) {
+        ux /= segLen; uy /= segLen;
+        aimX -= uy * this.trafficLane; aimY += ux * this.trafficLane; // right of travel
+        const along = (tp.x - b.x) * ux + (tp.y - b.y) * uy;
+        const lat = Math.abs((tp.x - b.x) * uy - (tp.y - b.y) * ux);
+        arrived = along < this.trafficNodeReach && lat < 70; // level with the node AND still on this road
+      } else {
+        arrived = Math.hypot(tp.x - b.x, tp.y - b.y) < this.trafficNodeReach; // no segment (just re-homed)
+      }
+      if (arrived) {
+        // Advance to a neighbour of the target, preferring not to immediately reverse.
         const nbrs = this.navGrid.nbr[c.target] || [];
         const fwd = nbrs.filter((n) => n !== c.node);
         const pool = fwd.length ? fwd : nbrs;
@@ -2368,9 +2451,48 @@ export class GameScene extends Phaser.Scene {
         c.target = pool.length ? pool[(Math.random() * pool.length) | 0] : c.node;
         continue;
       }
-      const h = Math.atan2(dy, dx);
-      b.body.velocity.set(Math.cos(h) * this.trafficSpeed, Math.sin(h) * this.trafficSpeed);
-      c.baseRot = h + Math.PI / 2;                 // capsule facing (baseRot − π/2) = travel heading
+      // STEER, don't snap: the car has its own heading that swings toward the aim point at
+      // trafficTurnRate, and it always drives along that heading — so a junction is an arc with the
+      // nose leading, not an instant re-face followed by a sideways slide. Slower when crawling so
+      // a stopped car doesn't pivot on the spot.
+      if (c.heading == null) c.heading = c.baseRot - Math.PI / 2;
+      const cur = Math.hypot(vel.x, vel.y);
+      const turn = this.trafficTurnRate * Phaser.Math.Clamp(cur / 60, 0.25, 1) * dt;
+      c.heading = Phaser.Math.Angle.RotateTo(c.heading, Math.atan2(aimY - b.y, aimX - b.x), turn);
+      const hx = Math.cos(c.heading), hy = Math.sin(c.heading);
+
+      // Gap sensor: nearest car in my lane ahead → speed factor 0..1.
+      let f = 1, blockedByCiv = false;
+      c._pushT = Math.max(0, (c._pushT || 0) - dt);
+      if (c._pushT <= 0) {
+        for (const o of others) {
+          if (o === b) continue;
+          // The spacing rule is for OTHER CIVILIANS only. The player and cops get just a bumper
+          // check — a car stopped dead ahead within a car length — so a civilian doesn't drive
+          // into (and shove) a stationary car, but never visibly reacts to you driving near it.
+          const isCiv = !!(o.rbCar && o.rbCar.civ);
+          const lk = isCiv ? look : this.trafficBumperLook, st = isCiv ? stop : this.trafficBumperStop;
+          const rx = o.x - b.x, ry = o.y - b.y, along = rx * hx + ry * hy;
+          if (along <= 0 || along >= lk) continue;                           // behind me / too far
+          if (Math.abs(rx * hy - ry * hx) > (isCiv ? this.trafficLaneHalf : this.trafficBumperHalf)) continue; // not in my lane
+          const g = Phaser.Math.Clamp((along - st) / (lk - st), 0, 1);
+          if (g < f) { f = g; blockedByCiv = isCiv; }
+        }
+      }
+      // Deadlock breaker: two civilians each waiting on the other (a tangle at a junction) would sit
+      // forever — after trafficWaitMax one stops yielding for a beat and noses through. Never applies
+      // when the thing in the way is the player or a cop: a civilian just waits behind those.
+      c._waitT = f < 0.05 && blockedByCiv ? (c._waitT || 0) + dt : 0;
+      if (c._waitT > this.trafficWaitMax) { c._waitT = 0; c._pushT = 1.5; }
+
+      const want = (c.cruise || this.trafficSpeed) * f;
+      // Speed is a scalar along the heading: what the car already carries that way (so a bump's
+      // slowdown sticks), eased toward the wanted speed.
+      const fwd = Math.max(0, vel.x * hx + vel.y * hy);
+      const step = (f < 1 || fwd > want ? this.trafficBrake : this.trafficAccel) * dt;
+      const sp = fwd + Phaser.Math.Clamp(want - fwd, -step, step);
+      vel.set(hx * sp, hy * sp);
+      c.baseRot = c.heading + Math.PI / 2; // capsule facing (baseRot − π/2) = travel heading
       c.img.setRotation(c.baseRot).setPosition(b.x, b.y);
     }
   }
@@ -2399,12 +2521,20 @@ export class GameScene extends Phaser.Scene {
       if (p.x > v.x - 60 && p.x < v.right + 60 && p.y > v.y - 60 && p.y < v.bottom + 60) continue;
       const nbrs = this.navGrid.nbr[node];
       if (!nbrs || !nbrs.length) continue;
+      // Not on top of another civilian — spawning in clumps is where bunching starts.
+      const gap2 = this.trafficSpawnGap * this.trafficSpawnGap;
+      if (this.traffic.some((o) => (o.body.x - p.x) ** 2 + (o.body.y - p.y) ** 2 < gap2)) continue;
       const target = nbrs[(Math.random() * nbrs.length) | 0];
       const tp = this.navGrid.pos(target);
       const h = Math.atan2(tp.y - p.y, tp.x - p.x);
       const car = this._makeCarObstacle(p.x, p.y, h + Math.PI / 2, spec, 0x3fa0ff);
       car.img.setTint(this._trafficPalette[(Math.random() * this._trafficPalette.length) | 0]);
       car.civ = true; car.node = node; car.target = target; car._hitCd = 0;
+      car.cruise = this.trafficSpeed * (0.85 + Math.random() * 0.3); // each drives its own pace
+      // No Arcade drag on a DRIVEN car: the obstacle default (rbCarDrag, 600 px/s²) is far stronger
+      // than trafficAccel, so with it on a civilian can never pull away from a standstill. Its speed
+      // is governed by _updateTraffic instead (accel/brake toward cruise, and the 0.9 coast when hit).
+      car.body.body.setDrag(0, 0);
       // Head + tail lights. CarLights wants a vehicle; this adapter exposes the obstacle's physics
       // body and reads `facing` off the visible sprite, so the lights follow shoves/spins too.
       const lightV = { sprite: car.body, lightHalfLen: spec.visL / 2, lightHalfWid: spec.visW / 2,
@@ -3260,8 +3390,9 @@ export class GameScene extends Phaser.Scene {
     else if (aCop && b.rbCar) { this._agentRamDamage(a, b, this.copCopRamThreshold, this.copCopRamMult); this._rbDamage(b, a); }
     else if (bCop && a.rbCar) { this._agentRamDamage(b, a, this.copCopRamThreshold, this.copCopRamMult); this._rbDamage(a, b); }
     // Civilian shoved by the player or a cop → separation already applied above; just stall it (panic).
-    else if (a.civ && (b.player || bCop)) this._civHit(a, b);
-    else if (b.civ && (a.player || aCop)) this._civHit(b, a);
+    // A cop that crashes into one takes a small chip of damage (high threshold, low mult, light car).
+    else if (a.civ && (b.player || bCop)) { this._civHit(a, b); if (bCop) this._agentRamDamage(b, a, this.copCopRamThreshold, this.civRamMult); }
+    else if (b.civ && (a.player || aCop)) { this._civHit(b, a); if (aCop) this._agentRamDamage(a, b, this.copCopRamThreshold, this.civRamMult); }
   }
 
   // HEAD-ON crunch. A frontal, opposed-facing, high-closing player↔cop contact arrests BOTH cars
@@ -3396,6 +3527,7 @@ export class GameScene extends Phaser.Scene {
     rs.add(this, "respawnDist", 400, 3000, 50).name("Fell-behind dist (px)");
     rs.add(this, "respawnTime", 0.5, 12, 0.5).name("…for this long (s)");
     rs.add(this, "respawnCooldown", 0, 20, 0.5).name("Respawn cooldown (s)");
+    rs.add(this, "respawnFrontCone", 0, 1.5, 0.05).name("No-spawn cone ahead (rad)");
     rs.add(this, "interceptAheadDist", 200, 2000, 25).name(
       "Spawn-ahead dist (px)",
     );
@@ -3536,7 +3668,7 @@ this.interceptAheadDist = ${this.interceptAheadDist}; this.interceptEntrySpeed =
       .add({ copy: () => this._copyManeuverStats() }, "copy")
       .name("Copy Maneuvers → Console");
 
-    this._persistPanel(gui, "gd_maneuverTune_v23"); // bumped: PIT physical push (lateral shove + grip break)
+    this._persistPanel(gui, "gd_maneuverTune_v24"); // bumped: respawnFrontCone
 
     gui.domElement.style.position = "fixed";
     gui.domElement.style.top = "8px";
@@ -5474,6 +5606,9 @@ this.withdrawColor = ${hex(f.withdrawColor)};`;
       rbTurnMult: this.rbTurnMult,
       rbSpeedBoost: this.rbSpeedBoost,
       rbOvertake: this.rbOvertake,
+      rbFarFull: this.rbFarFull,
+      rbFarOvertake: this.rbFarOvertake,
+      rbFarCornerFloor: this.rbFarCornerFloor,
       patrolBandEnabled: this.patrolBandEnabled,
       patrolBandStart: this.patrolBandStart,
       patrolBandFull: this.patrolBandFull,
@@ -5688,6 +5823,18 @@ this.withdrawColor = ${hex(f.withdrawColor)};`;
       .name("Overtake vs your top")
       .onChange(apply);
     rejoin
+      .add(this.copTuning, "rbFarFull", 700, 4000, 50)
+      .name("Far band full (px)")
+      .onChange(apply);
+    rejoin
+      .add(this.copTuning, "rbFarOvertake", 0, 500, 10)
+      .name("Far overtake vs your top")
+      .onChange(apply);
+    rejoin
+      .add(this.copTuning, "rbFarCornerFloor", 300, 650, 10)
+      .name("Far blind corner floor")
+      .onChange(apply);
+    rejoin
       .add(this.copTuning, "patrolBandEnabled")
       .name("Patrol rubber band")
       .onChange(apply);
@@ -5760,6 +5907,7 @@ boxTriggerSpeed: ${t.boxTriggerSpeed}, boxEngageRange: ${t.boxEngageRange},
 // --- Separation + rejoin band + search (GameScene) ---
 sepRadius: ${t.sepRadius}, sepStrength: ${t.sepStrength},
 rbStart: ${t.rbStart}, rbFull: ${t.rbFull}, rbGrip: ${t.rbGrip}, rbTurnMult: ${t.rbTurnMult}, rbSpeedBoost: ${t.rbSpeedBoost}, rbOvertake: ${t.rbOvertake},
+rbFarFull: ${t.rbFarFull}, rbFarOvertake: ${t.rbFarOvertake}, rbFarCornerFloor: ${t.rbFarCornerFloor},
 patrolBandGap: ${t.patrolBandGap}, patrolBandStart: ${t.patrolBandStart}, patrolBandFull: ${t.patrolBandFull},
 respawnEnabled: ${t.respawnEnabled}, respawnDist: ${t.respawnDist}, respawnTime: ${t.respawnTime},
 searchSpeed: ${t.searchSpeed}, searchSpeedGain: ${t.searchSpeedGain}, searchDepth: ${t.searchDepth}, searchMaxDepth: ${t.searchMaxDepth}, coverageTTL: ${t.coverageTTL}, searchDirBias: ${t.searchDirBias}, searchDwell: ${t.searchDwell}, searchStall: ${t.searchStall},
@@ -5772,7 +5920,7 @@ searchBurst: { on: ${t.searchBurstEnabled}, delay: ${t.searchBurstDelay}, cooldo
 
     // Persist across refresh. Key bumped to v16: huntLead removed (blind cops now go
     // straight to last-known, no forward projection).
-    this._persistPanel(gui, "gd_copTuning36"); // bumped: search-burst + level-scaled search speed
+    this._persistPanel(gui, "gd_copTuning37"); // bumped: far band (rbFar*)
 
     gui.domElement.style.position = "fixed";
     gui.domElement.style.top = "8px";
@@ -5895,6 +6043,9 @@ searchBurst: { on: ${t.searchBurstEnabled}, delay: ${t.searchBurstDelay}, cooldo
     this.rbTurnMult = t.rbTurnMult;
     this.rbSpeedBoost = t.rbSpeedBoost;
     this.rbOvertake = t.rbOvertake;
+    this.rbFarFull = t.rbFarFull;
+    this.rbFarOvertake = t.rbFarOvertake;
+    this.rbFarCornerFloor = t.rbFarCornerFloor;
     this.respawnEnabled = t.respawnEnabled;
     this.respawnDist = t.respawnDist;
     this.respawnTime = t.respawnTime;
@@ -6537,8 +6688,21 @@ searchBurst: { on: ${t.searchBurstEnabled}, delay: ${t.searchBurstDelay}, cooldo
         target = this._cooldownTarget(cop);
       else if (state === PursuitState.RETURNING) target = this.station;
       // Separation spreads cops apart so they don't pile up; clamp always.
+      // Separation only for a cop that SEES the player (it beelines, so nudging its aim spreads the
+      // pack). A blind/searching/returning cop's target is a GOAL for the road graph — shifting it
+      // only risks flipping which node it routes to. And the nudge must never put the aim behind a
+      // wall (in a narrow street the offset is wider than the road): that fails CopAI's clear-line
+      // test and drops a sighted cop out of the beeline. So keep the nudged point only if the line
+      // player→point is clear; else try half the nudge; else aim at the un-nudged target.
       if (target) {
-        target = this._separate(cop, target);
+        if (state === PursuitState.ACTIVE && cop.hasLOS) {
+          const sep = this._separate(cop, target);
+          if (sep !== target) {
+            const half = { x: (target.x + sep.x) / 2, y: (target.y + sep.y) / 2 };
+            if (segmentClear(px, py, sep.x, sep.y, this.losRects)) target = sep;
+            else if (segmentClear(px, py, half.x, half.y, this.losRects)) target = half;
+          }
+        }
         target = this._clampWorld(target);
       }
       // Full speed while chasing OR hunting; capped only for sustained search / withdrawal.

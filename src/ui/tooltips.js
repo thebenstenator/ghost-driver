@@ -221,6 +221,7 @@ export const TOOLTIPS = {
   // ── Respawn-ahead / dispatch ────────────────────────────────────────────────
   respawnDist: "Distance you must out-run a non-chasing cop before it's 'lost' and relocated. Raise to relocate less eagerly.",
   respawnTime: "Seconds a cop must stay lost + off-screen before relocating. Raise to relocate less eagerly.",
+  respawnFrontCone: "Half-angle (radians) of the cone dead ahead of your travel where flank units may NOT appear. Raise to keep spawns further off your nose; 0 = anywhere.",
   respawnCooldown: "Seconds before a just-respawned cop can respawn again (anti-thrash). Raise to space out respawns.",
   interceptAheadDist: "Distance ahead an interceptor/heavy spawns for its head-on. Raise to spawn further ahead.",
   interceptEntrySpeed: "Speed an ahead-spawned interceptor rolls in at (toward you). Raise for a faster closing head-on.",
@@ -249,4 +250,7 @@ export const TOOLTIPS = {
   rbGrip: "Grip a far cop blends toward (higher = it stops washing wide). Raise to plant lagging cops.",
   rbTurnMult: "Turn-rate boost a far cop blends toward. Raise so lagging cops corner tighter to catch up.",
   rbSpeedBoost: "Top-speed boost a far cop blends toward. Raise so lagging cops catch up faster.",
+  rbFarFull: "Distance where the FAR band is maxed (it starts at Blend full). Off-camera cops only.",
+  rbFarOvertake: "How far over YOUR top speed an off-camera cop may go at full far blend. Raise so lost cops rejoin sooner.",
+  rbFarCornerFloor: "Blind corner speed floor at full far blend (rises from the ACTIVE-blind floor). Lower it if far cops clip walls.",
 };
