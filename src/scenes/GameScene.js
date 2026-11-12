@@ -677,7 +677,13 @@ export class GameScene extends Phaser.Scene {
                                     // a SECOND quick ditch doesn't immediately re-spawn a fresh wave (the
                                     // first ditch bursts and bites; ditch again fast and you get a clean break)
     this.searchReengageTrim  = 5;   // s of sustained ACTIVE re-engagement before over-cap searchers are trimmed
-    this.searchLateral       = 380; // px the ahead-spawn is offset onto a PARALLEL street (not your lane)
+    this.searchLateral       = 700; // px the ahead-spawn is offset sideways — about TWO streets over, not
+                                    // the adjacent one. At one street over (380) a searcher driving back
+                                    // toward last-known saw you through every cross street: a certain
+                                    // re-acquire, not a chance of one.
+    this.searchLaneClear     = 450; // px — a searcher spawn spot must be at least this far to the SIDE of
+                                    // your line of travel (node snapping can pull a spot back onto your
+                                    // own street; this rejects it). Your road straight ahead stays clear.
     this.searchMinDist       = 950; // px — a searcher spawn spot must be at least this far from you AND
                                     // off-camera. This is the hard floor: nearestNodeAhead can snap to a
                                     // node closer than searchAheadDist in bent corridors, and at 650 an
@@ -1303,7 +1309,10 @@ export class GameScene extends Phaser.Scene {
   // into walls and rejoin cleanly. Writes the live stat fields each frame (Vehicle
   // reads them directly); the base copies on the cop are what we blend FROM, so the
   // tuning panel still owns the baseline.
-  _applyRejoinBand(cop, dist) {
+  // `far` enables the stage-2 far band. It is only on while the chase is LIVE (ACTIVE with eyes on
+  // you — the same gate as the Tier-2 respawn): once you break sight, lost cops go back to the
+  // plain band, so the pack can't race in to last-known at far-band pace and smother a ditch.
+  _applyRejoinBand(cop, dist, far = true) {
     const f = Phaser.Math.Clamp(
       (dist - this.rbStart) / Math.max(1, this.rbFull - this.rbStart),
       0,
@@ -1317,7 +1326,7 @@ export class GameScene extends Phaser.Scene {
     // Far band: beyond rbFull, an off-camera cop's top keeps rising toward (yourTop + rbFarOvertake).
     // _farBlend also lifts the blind corner floor in _applyNavProfile.
     let g = 0;
-    if (dist > this.rbFull && this._offCamera(cop.sprite.x, cop.sprite.y, this.rbFarMargin)) {
+    if (far && dist > this.rbFull && this._offCamera(cop.sprite.x, cop.sprite.y, this.rbFarMargin)) {
       g = Phaser.Math.Clamp((dist - this.rbFull) / Math.max(1, this.rbFarFull - this.rbFull), 0, 1);
       const farTop = this.playerMaxSpeed + this.rbFarOvertake;
       if (farTop > rbTarget) cop.maxSpeed = Phaser.Math.Linear(rbTarget, farTop, g);
@@ -1848,6 +1857,7 @@ export class GameScene extends Phaser.Scene {
       cop.ai._unstuck = { startX: f.x, startY: f.y, age: 0 }; // force recovery (set AFTER _placeCop, which clears it)
     }
   }
+          Math.abs((p.x - px) * perpx + (p.y - py) * perpy) >= this.searchLaneClear &&
 
   // Pile test: stack several cops nose-to-tail in a tight column DIRECTLY behind the player,
   // all facing (and aiming at) the player, so they jam into one contact knot — every car
@@ -4067,7 +4077,7 @@ this.spikeStripLen = ${this.spikeStripLen}; this.spikeLifetime = ${this.spikeLif
       .add({ copy: () => this._copyPursuitLevels() }, "copy")
       .name("Copy Levels → Console");
 
-    this._persistPanel(gui, "gd_pursuitLevel7"); // bumped: culled search-burst counts (−1/level)
+    this._persistPanel(gui, "gd_pursuitLevel8"); // bumped: search-burst counts −1/level again (L1 has none)
 
     gui.domElement.style.position = "fixed";
     gui.domElement.style.top = "8px";
@@ -5920,7 +5930,7 @@ searchBurst: { on: ${t.searchBurstEnabled}, delay: ${t.searchBurstDelay}, cooldo
 
     // Persist across refresh. Key bumped to v16: huntLead removed (blind cops now go
     // straight to last-known, no forward projection).
-    this._persistPanel(gui, "gd_copTuning37"); // bumped: far band (rbFar*)
+    this._persistPanel(gui, "gd_copTuning38"); // bumped: searchLateral 380 → 700
 
     gui.domElement.style.position = "fixed";
     gui.domElement.style.top = "8px";
@@ -6799,6 +6809,7 @@ searchBurst: { on: ${t.searchBurstEnabled}, delay: ${t.searchBurstDelay}, cooldo
     }
     this._pmark("cops");
 
+        state === PursuitState.ACTIVE && anyLOS,
     // Custom rotated-car capsule collision: now that the player AND every cop have
     // integrated this frame, push every agent's 3-circle spine out of walls and apart
     // from each other (Arcade's AABB can't cover a rotated car). ADDITIVE to Arcade.
