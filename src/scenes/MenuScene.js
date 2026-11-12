@@ -50,10 +50,10 @@ export class MenuScene extends Phaser.Scene {
 
     addMenuItem(this, navX, 226, "CAREER", {
       size: 36,
-      onClick: () => this._start(1, true, "m1"),
+      onClick: () => this.scene.start("CareerScene"),
     });
     this.add
-      .text(navX, 252, "reach the drop · lose the cops · get paid", {
+      .text(navX, 252, "take a job · lose the cops · get paid", {
         fontFamily: NOIR.uiFont,
         fontSize: "13px",
         color: NOIR.dim,

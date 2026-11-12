@@ -3,6 +3,7 @@ import Phaser from 'phaser';
 import { BootScene } from './scenes/BootScene.js';
 import { MenuScene } from './scenes/MenuScene.js';
 import { GarageScene } from './scenes/GarageScene.js';
+import { CareerScene } from './scenes/CareerScene.js';
 import { OptionsScene } from './scenes/OptionsScene.js';
 import { GameScene } from './scenes/GameScene.js';
 import { MapTestScene } from './scenes/MapTestScene.js';
@@ -28,5 +29,5 @@ new Phaser.Game({
     // one side (more black space on the left). Leave centering to the CSS.
     autoCenter: Phaser.Scale.NO_CENTER
   },
-  scene: [BootScene, MenuScene, GarageScene, OptionsScene, GameScene, MapTestScene, NavTestScene]
+  scene: [BootScene, MenuScene, CareerScene, GarageScene, OptionsScene, GameScene, MapTestScene, NavTestScene]
 });

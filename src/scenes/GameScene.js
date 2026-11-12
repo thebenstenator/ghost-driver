@@ -38,7 +38,7 @@ import {
 import { BUILDINGS, GARAGES, streetWidthV, streetWidthH } from "../world/city.js";
 import { GROUND_COLOR, drawPuddles } from "../world/cityRender.js";
 import { CityBake } from "../world/cityBake.js";
-import { Mission, missionById } from "../systems/Mission.js";
+import { Mission, MISSIONS, missionById } from "../systems/Mission.js";
 
 export class GameScene extends Phaser.Scene {
   constructor() {
@@ -674,6 +674,9 @@ export class GameScene extends Phaser.Scene {
     // unit may be placed: never dead ahead on your road, but ahead-and-to-the-side (oncoming from a
     // cross/parallel street) is allowed. Only applies while you're moving. 0 = no restriction.
     this.dropHeatCops = 3; // mission: pack size that converges on you the instant the drop is secured
+    this.hintShowTime = 6; // s the objective line stays up when a mission step begins
+    this.passengerAccelMult = 0.88; // mission passenger: acceleration × while they're aboard
+    this.passengerTurnMult = 0.92;  // …and turn rate × (the "extra weight")
     this.interceptAheadDist = 850; // px down the player's travel that an 'ahead-of-travel'
     // unit (interceptor) spawns, to set up a head-on
     this.interceptEntrySpeed = 260; // px/s an ahead-spawned interceptor enters AT (rolling toward
@@ -831,7 +834,12 @@ export class GameScene extends Phaser.Scene {
 
     // Escalation brain (Pursuit Mode only). Heat → level → cop cap; reinforcements
     // trickle in toward the cap on a timer + an instant one each level-up.
-    this.pursuitLevel = this.pursuitMode ? new PursuitLevel() : null;
+    // A mission may cap the pursuit level (early jobs stay gentle): same curve, lower ceiling.
+    const mDef = this.missionId ? missionById(this.missionId) : null;
+    const levelCfg = mDef && mDef.maxLevel
+      ? { ...PursuitLevel.defaultConfig(), maxLevel: mDef.maxLevel }
+      : null;
+    this.pursuitLevel = this.pursuitMode ? new PursuitLevel(levelCfg) : null;
     // Notoriety from the selected car: heatRate scales how fast a chase ESCALATES (heat);
     // stealth (1-5 → 0..1 notoriety) scales how fast cops CALL IN reinforcements.
     if (this.pursuitLevel) {
@@ -902,16 +910,16 @@ export class GameScene extends Phaser.Scene {
     // Mission (Phase 3): instantiate the loop + its on-road objective marker (world space, under
     // cars). Screen-space mission UI (briefing card, objective tracker, beacon, result) is built in
     // _setupHud so it joins the HUD camera. All gated on this.mission — null for non-mission modes.
-    this.mission = this.missionId ? new Mission(missionById(this.missionId)) : null;
+    // Open-air POIs are snapped to the nearest road node so they're always drivable-to (a nominal
+    // spot can land inside a building). A safehouse is entered via its garage door, so it stays put.
+    // Always a clone, so the shared POIS export is never mutated.
+    const snapPoi = (poi) => {
+      if (!poi || poi.id.startsWith("safe_")) return poi;
+      const p = this.navGrid.pos(this.navGrid.nearestNode(poi.x, poi.y));
+      return { ...poi, x: p.x, y: p.y };
+    };
+    this.mission = this.missionId ? new Mission(missionById(this.missionId), snapPoi) : null;
     if (this.mission) {
-      // Snap the open-air Drop to the nearest road node so it's always drivable-to (its nominal
-      // spot can land inside a Docks warehouse). The safehouse is entered via its garage door, so
-      // it stays put.
-      const d = this.mission.drop;
-      if (d) {
-        const p = this.navGrid.pos(this.navGrid.nearestNode(d.x, d.y));
-        this.mission.drop = { ...d, x: p.x, y: p.y }; // clone so the POIS module export is not mutated
-      }
       this.poiGfx = this.add.graphics().setDepth(6.5);
       this.worldLayer.add(this.poiGfx);
     }
@@ -1017,7 +1025,7 @@ export class GameScene extends Phaser.Scene {
     this.briefingText
       .setText(
         `${this.mission.def.name}\n\n${this.mission.def.briefing}\n\n` +
-          `TIP: cut your lights (Q) while you sit on the drop — a blacked-out car is only spotted up close\n\n` +
+          (this.mission.def.tip ? `TIP: ${this.mission.def.tip}\n\n` : "") +
           `[ SPACE to roll out ]`,
       )
       .setAlpha(1);
@@ -1029,7 +1037,7 @@ export class GameScene extends Phaser.Scene {
     this.briefingText.setAlpha(0);
     this.physics.resume();
     this._beginChase(); // cops "already coming"
-    this.mission.begin(); // BRIEFING → GOTO_DROP
+    this.mission.begin(); // BRIEFING → first step
   }
 
   // Mission ended (win or lose): freeze the run (reuse the bust freeze + R/M handlers) and show the
@@ -1039,6 +1047,9 @@ export class GameScene extends Phaser.Scene {
     this.busted = true; // freezes gameplay + input; R restarts, M menus (both ungated)
     if (this.mission.won) {
       const total = GameScene.addBank(this.mission.reward);
+      // First completion opens the next job in the career list.
+      const first = GameScene.completeMission(this.missionId);
+      const next = MISSIONS[MISSIONS.findIndex((m) => m.id === this.missionId) + 1];
       this.resultText
         .setText(
           `MISSION COMPLETE\n\n+ $${this.mission.reward.toLocaleString()}\n` +
@@ -4479,7 +4490,10 @@ reinforceUrgency: { cadenceGain: ${ru.cadenceGain}, recognition: ${ru.recognitio
     // Quit to the menu — ONLY from the frozen bust/result screen (the run is already over, so it's
     // safe). Deliberately NOT bound during live play: quitting mid-run goes through the pause menu's
     // YES/NO confirm, so a stray M can't vaporize a chase. This is what the "M for menu" prompt means.
-    this.input.keyboard.on("keydown-M", () => { if (this.busted) this.scene.start("MenuScene"); });
+    // After a mission it returns to the job list (pick the next job / replay), not the title screen.
+    this.input.keyboard.on("keydown-M", () => {
+      if (this.busted) this.scene.start(this.missionId ? "CareerScene" : "MenuScene");
+    });
     // Briefing dismiss (SPACE / ENTER) — no-op outside a mission briefing, so it can't clash with
     // SPACE-handbrake during play (that's polled separately, not a keydown).
     this.input.keyboard.on("keydown-SPACE", () => this._dismissBriefing());
@@ -4765,21 +4779,18 @@ reinforceUrgency: { cadenceGain: ${ru.cadenceGain}, recognition: ${ru.recognitio
       .setDepth(101)
       .setAlpha(0);
 
-    // --- Mission UI (Phase 3) — only built for a mission run; null otherwise ---
+    // --- Mission UI — only built for a mission run; null otherwise ---
     if (this.mission) {
-      const h = this.scale.height;
-      // Objective tracker — just under the pursuit status line.
-      this.objectiveText = this.add
-        .text(width / 2, 58, "", {
-          fontFamily: "monospace",
-          fontSize: "16px",
-          fontStyle: "bold",
-          color: "#ffd23f",
-        })
-        .setOrigin(0.5, 0)
-        .setScrollFactor(0)
-        .setDepth(100);
-      // Off-screen beacon — arrow at the screen edge pointing to the objective POI (+ distance).
+      // Objective HINT (top of the screen): a small kicker over one line of text. Not a permanent
+      // tracker — it shows for a few seconds when a step starts, and while you're AT the objective
+      // but failing its condition (or the dwell is running). See _updateMissionHud.
+      this.hintKicker = hudText(width / 2, 20, "", {
+        fontFamily: HUD.font.text, fontSize: "14px", fontStyle: "600", color: HUD.css.brassHi, letterSpacing: 7,
+      }).setOrigin(0.5, 0).setAlpha(0);
+      this.hintText = hudText(width / 2, 40, "", {
+        fontFamily: HUD.font.text, fontSize: "28px", fontStyle: "500", color: HUD.css.bone, letterSpacing: 2,
+      }).setOrigin(0.5, 0).setAlpha(0);
+      // Off-screen pointer — a brass arrow at the screen edge toward the objective, with distance.
       this.beaconGfx = this.add.graphics().setScrollFactor(0).setDepth(100);
       // Briefing card (shown at start, dismissed with SPACE/ENTER to drop into the chase).
       this.briefingText = this.add
@@ -4967,9 +4978,11 @@ reinforceUrgency: { cadenceGain: ${ru.cadenceGain}, recognition: ${ru.recognitio
     });
   }
 
-  // Mission HUD each frame: the objective line, the on-road POI ring (world space), and an
-  // off-screen beacon arrow at the screen edge pointing to the current target POI. Only the
-  // GOTO_DROP state has a target; ESCAPE clears the ring/beacon (the objective is just "ditch").
+  // Mission HUD each frame. There is no permanent objective line; guidance is:
+  //   • the on-road ring at the objective (world space) + its marker on the minimap,
+  //   • a pointer at the screen edge with the distance while the objective is off-screen,
+  //   • a HINT at the top of the screen only when it's needed — for a few seconds when a step
+  //     starts, and while you're at the objective but failing its condition / the dwell is running.
   _updateMissionHud() {
     const m = this.mission;
     const px = this.car.sprite.x,
@@ -4978,9 +4991,21 @@ reinforceUrgency: { cadenceGain: ${ru.cadenceGain}, recognition: ${ru.recognitio
     this.poiGfx.clear();
     this.beaconGfx.clear();
 
-    if (!poi) {
-      this.objectiveText.setText(m.objectiveLabel ? `◉ ${m.objectiveLabel}` : "");
-      return;
+    // Hint: a live one from the mission (blocked / stop / dwell) wins; otherwise the step's own
+    // line for hintShowTime after the step begins, fading out over the last 0.6s.
+    if (this._hintStep !== m.index) { this._hintStep = m.index; this._hintT = 0; }
+    this._hintT += this.game.loop.delta / 1000;
+    let hint = m.hint, alpha = 1;
+    if (!hint && m.step && this._hintT < this.hintShowTime) {
+      hint = { kicker: "OBJECTIVE", text: m.step.label, tone: "info" };
+      alpha = Math.min(1, (this.hintShowTime - this._hintT) / 0.6);
+    }
+    if (hint) {
+      this.hintKicker.setText(hint.kicker).setColor(hint.tone === "warn" ? HUD.css.redSoft : HUD.css.brassHi).setAlpha(alpha);
+      this.hintText.setText(hint.text).setAlpha(alpha);
+    } else {
+      this.hintKicker.setAlpha(0);
+      this.hintText.setAlpha(0);
     }
 
     const dist = Math.round(Math.hypot(poi.x - px, poi.y - py));
@@ -4995,8 +5020,8 @@ reinforceUrgency: { cadenceGain: ${ru.cadenceGain}, recognition: ${ru.recognitio
     g.strokeCircle(poi.x, poi.y, poi.r);
     g.lineStyle(2, 0xffd23f, 0.3);
     g.strokeCircle(poi.x, poi.y, poi.r * (0.45 + 0.55 * pulse));
-    // Dwell progress: a green core that grows as the drop secures (resets if seen / you leave).
-    const frac = this.mission.dwellFrac;
+    // Dwell progress: a bone core that grows as the step completes (resets if seen / you leave).
+    const frac = m.dwellFrac;
     if (frac > 0) {
       g.fillStyle(0x39ff14, 0.35);
       g.fillCircle(poi.x, poi.y, poi.r * frac);
@@ -5028,14 +5053,9 @@ reinforceUrgency: { cadenceGain: ${ru.cadenceGain}, recognition: ${ru.recognitio
     );
   }
 
-  // Per-level heat-bar fill colours. Distinct hue per level so they read apart at a
-  // glance: yellow → orange → red → magenta → violet (escalating, and none clashes with
-  // the blue paused state or the green player UI).
-  static HEAT_COLORS = [0xffe14d, 0xff9e1a, 0xff3b3b, 0xff36c0, 0x9b3cff];
-
-  // Pursuit-Mode heat meter: thin bar under the status. Fill colour deepens with level;
-  // turns BLUE while heat is paused (pre-ditch cooldown / lost LOS) or bleeding down
-  // during withdraw. Every cleared level stays filled as the base, so each new level's
+  // Minimap (bottom-right): a north-up disc of the blocks around you — parks, water, safehouses,
+  // cops (red while they're aware of you), wrecks and the mission objective (a brass diamond,
+  // clamped to the rim when out of range). The pursuit ring around it is _drawHeatBar's.
   _drawMinimap() {
     if (!this.minimapVisible) return; // hidden via M — skip the per-frame redraw
     const cx = this._mmCx, cy = this._mmCy, R = this._mmR;
@@ -5092,7 +5112,7 @@ reinforceUrgency: { cadenceGain: ${ru.cadenceGain}, recognition: ${ru.recognitio
       cg.fillStyle(0x555566, 1).fillCircle(cx + rx, cy + ry, 3);
     }
 
-    // Mission target — yellow dot, clamped to circle edge when off-screen
+    // Mission target — brass diamond, clamped to the rim when out of range
     if (this.mission) {
       const poi = this.mission.targetPoi;
       if (poi) {
@@ -7029,9 +7049,18 @@ searchBurst: { on: ${t.searchBurstEnabled}, delay: ${t.searchBurstDelay}, cooldo
         this.bust.isBusted,
         delta / 1000,
       );
-      // Drop just secured → a patrol "happens upon" you: spawn one just off-screen and let the
-      // area go hot so it (and the pack) closes in. Diegetic, not a telepathic alert.
-      if (this.mission.justSecuredDrop) this._dropDiscovered(px, py);
+      // A step that blows your cover (drop secured, contact picked up) → a patrol "happens upon"
+      // you: spawn just off-screen and let the area go hot so the pack closes in. Diegetic, not a
+      // telepathic alert.
+      if (this.mission.justAlert) this._dropDiscovered(px, py);
+      // Passenger aboard → the car carries the weight for the rest of the run: a little slower off
+      // the line and into a turn. Applied once, to the live stats (the per-frame nitro / damage
+      // modifiers save-and-restore around whatever value is here, so it sticks).
+      if (this.mission.justPassenger) {
+        this.car.acceleration *= this.passengerAccelMult;
+        this.car.turnSpeed *= this.passengerTurnMult;
+        this.car.turnSpeedLow *= this.passengerTurnMult;
+      }
       if (this.mission.isOver) {
         this._onMissionEnd();
         return;

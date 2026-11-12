@@ -240,6 +240,10 @@ const { xs: NAV_XS, ys: NAV_YS } = navLines();
 const node = (line, row) => ({ x: NAV_XS[line], y: NAV_YS[row] });
 export const POIS = [
   { id: 'drop', name: 'The Drop', ...node(CB2 + 12, 4), r: 80 },
+  // Mission 2: a back-alley drop deep in the Backstreets (SE).
+  { id: 'alley_drop', name: 'Alley Drop', ...node(CB2 + 11, HB + 12), r: 70 },
+  // Mission 3: the contact waits in the Ironworks (NW) — the far corner from the Backstreet safehouse.
+  { id: 'contact', name: 'The Contact', ...node(9, 11), r: 70 },
   ...SAFEHOUSES,
 ];
 export const poiById = (id) => POIS.find((p) => p.id === id) || null;
