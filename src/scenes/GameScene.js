@@ -1,7 +1,7 @@
 import Phaser from "phaser";
 import GUI from "lil-gui";
 import { PlayerCar } from "../entities/PlayerCar.js";
-import { vehicleById } from "../vehicles/catalog.js";
+import { VEHICLES, vehicleById } from "../vehicles/catalog.js";
 import { CopCar } from "../entities/CopCar.js";
 import { NavGrid } from "../ai/NavGrid.js";
 import { segmentClear } from "../ai/lineOfSight.js";
@@ -66,8 +66,11 @@ export class GameScene extends Phaser.Scene {
   // Selected playable vehicle — persisted so the garage choice carries into every run.
   static VEHICLE_KEY = "gd_vehicle";
   static getVehicle() {
-    try { return localStorage.getItem(GameScene.VEHICLE_KEY) || "prowler"; }
-    catch (e) { return "prowler"; }
+    let id = "prowler";
+    try { id = localStorage.getItem(GameScene.VEHICLE_KEY) || "prowler"; }
+    catch (e) { /* fall through */ }
+    // You can only drive a car you own (a stale save may name one that's now locked).
+    return GameScene.getOwnedVehicles().includes(id) ? id : "prowler";
   }
   static setVehicle(id) {
     try { localStorage.setItem(GameScene.VEHICLE_KEY, id); }
@@ -75,6 +78,105 @@ export class GameScene extends Phaser.Scene {
   }
 
   // Player gadget loadout (≤3 gadget ids, in slot order). Persisted so the menu choice sticks.
+  // Owned vehicles — free ones (price 0) are always owned; the rest are bought in the garage.
+  static OWNED_VEHICLES_KEY = "gd_ownedVehicles";
+  static getOwnedVehicles() {
+    let ids = [];
+    try {
+      const raw = localStorage.getItem(GameScene.OWNED_VEHICLES_KEY);
+      if (raw != null) ids = JSON.parse(raw).filter((id) => VEHICLES.some((v) => v.id === id));
+    } catch (e) {
+      /* fall through */
+    }
+    return [...new Set([...VEHICLES.filter((v) => !v.price).map((v) => v.id), ...ids])];
+  }
+  // Buy a vehicle if it's affordable and not already owned. Returns true on success.
+  static buyVehicle(id) {
+    const def = VEHICLES.find((v) => v.id === id);
+    if (!def || GameScene.getOwnedVehicles().includes(id)) return false;
+    if (!GameScene.spendBank(def.price || 0)) return false;
+    try {
+      localStorage.setItem(
+        GameScene.OWNED_VEHICLES_KEY,
+        JSON.stringify([...GameScene.getOwnedVehicles(), id]),
+      );
+    } catch (e) {
+      /* ignore */
+    }
+    return true;
+  }
+
+  // Gadget upgrade tiers owned, as { gadgetId: count }. Tiers are bought strictly in order, so a
+  // count is the whole state: tiers [0, count) of that gadget's `upgrades` list are owned.
+  static UPGRADES_KEY = "gd_upgrades";
+  static getUpgrades() {
+    try {
+      const o = JSON.parse(localStorage.getItem(GameScene.UPGRADES_KEY) || "{}");
+      return o && typeof o === "object" ? o : {};
+    } catch (e) {
+      return {};
+    }
+  }
+  static getUpgradeLevel(id) {
+    const def = gadgetById(id);
+    const n = parseInt(GameScene.getUpgrades()[id], 10);
+    return def && Number.isFinite(n) ? Phaser.Math.Clamp(n, 0, (def.upgrades || []).length) : 0;
+  }
+  // Buy the NEXT upgrade tier of an owned gadget. Returns true on success.
+  static buyUpgrade(id) {
+    const def = gadgetById(id);
+    if (!def || !GameScene.getOwned().includes(id)) return false;
+    const level = GameScene.getUpgradeLevel(id);
+    const next = (def.upgrades || [])[level];
+    if (!next || !GameScene.spendBank(next.price)) return false;
+    try {
+      localStorage.setItem(
+        GameScene.UPGRADES_KEY,
+        JSON.stringify({ ...GameScene.getUpgrades(), [id]: level + 1 }),
+      );
+    } catch (e) {
+      /* ignore */
+    }
+    return true;
+  }
+  // Career progress — ids of missions completed at least once. Missions unlock in registry order:
+  // the first is always open, each later one opens when the one before it has been completed.
+  static MISSIONS_KEY = "gd_missionsDone";
+  static getMissionsDone() {
+    try {
+      const a = JSON.parse(localStorage.getItem(GameScene.MISSIONS_KEY) || "[]");
+      return Array.isArray(a) ? a.filter((id) => missionById(id)) : [];
+    } catch (e) {
+      return [];
+    }
+  }
+  static missionUnlocked(id) {
+    const i = MISSIONS.findIndex((m) => m.id === id);
+    return i === 0 || (i > 0 && GameScene.getMissionsDone().includes(MISSIONS[i - 1].id));
+  }
+  // Record a completion. Returns true if this was the FIRST time (something new just unlocked).
+  static completeMission(id) {
+    const done = GameScene.getMissionsDone();
+    if (done.includes(id)) return false;
+    try {
+      localStorage.setItem(GameScene.MISSIONS_KEY, JSON.stringify([...done, id]));
+    } catch (e) {
+      /* ignore */
+    }
+    return true;
+  }
+
+  // Wipe all progress (bank, owned gadgets/vehicles, upgrades, loadout, car, missions). Dev tool.
+  static resetProgress() {
+    try {
+      for (const k of [GameScene.BANK_KEY, GameScene.OWNED_KEY, GameScene.OWNED_VEHICLES_KEY,
+        GameScene.UPGRADES_KEY, GameScene.LOADOUT_KEY, GameScene.VEHICLE_KEY, GameScene.MISSIONS_KEY])
+        localStorage.removeItem(k);
+    } catch (e) {
+      /* ignore */
+    }
+  }
+
   static LOADOUT_KEY = "gd_loadout";
   static getLoadout() {
     try {
@@ -187,6 +289,8 @@ export class GameScene extends Phaser.Scene {
     // and HUD setup below branch on it. Game logic is identical either way.
     this.devMode = GameScene.isDevMode();
     // The testbed is reached from a dev-only menu button, so it always wants the dev
+    // Dev-server only: expose the live scene for console poking and headless capture scripts.
+    if (import.meta.env.DEV) window.__scene = this;
     // overlays/panels regardless of the persisted toggle.
     if (this.sandbox) this.devMode = true;
 
@@ -832,6 +936,7 @@ export class GameScene extends Phaser.Scene {
       if (this.sandbox) {
         this._setupTestbedPanel(); // spawn/clear chosen unit types
         this._setupUnitTunePanel(this._testbed.unitType); // tune the selected type's def
+    this._applyProgression();
         this._setupManeuverPanel(); // tune director maneuver/box behavior
         this._setupHealthPanel(); // tune cop health / ramming / disabling
       } else {
@@ -2979,6 +3084,24 @@ export class GameScene extends Phaser.Scene {
           const def = gadgetById(id);
           return def ? { def, key: PLAYER_SLOT_KEYS[i] } : null;
         })
+  // Career progression → gadget stats. In PLAYER mode every gadget starts from its `base` (the
+  // weakest version, as bought) and gains the upgrade tiers owned in the garage, in order; charges
+  // are then refilled to the resulting max. DEV mode skips this entirely, so the gadget panel's
+  // tuned values stand and everything is testable at full power.
+  _applyProgression() {
+    if (this.devMode) return;
+    for (const def of GADGETS) {
+      if (def.base) def.base(this);
+      const level = GameScene.getUpgradeLevel(def.id);
+      for (let i = 0; i < level; i++) def.upgrades[i].apply(this);
+    }
+    this.oilCharges = this.oilMaxCharges;
+    this.nitroCharges = this.nitroMaxCharges;
+    this.smokeCharges = this.smokeMaxCharges;
+    this.repairCharges = this.repairMaxCharges;
+    this.pspikeCharges = this.pspikeMaxCharges;
+  }
+
         .filter(Boolean)
         .slice(0, MAX_LOADOUT);
     }

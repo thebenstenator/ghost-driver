@@ -1,5 +1,7 @@
 // Master list of playable vehicles. Import this wherever you need to enumerate cars
 // (garage UI, save/load, GameScene creation). Stats live in their own per-vehicle file.
+// `price` is the garage unlock cost (0 = the starter). Cars are the long-term cash goal — priced
+// well above gadgets so they take several jobs to afford.
 import { PROWLER } from './prowler/stats.js';
 import { RAZORBACK } from './razorback/stats.js';
 import { VAULT } from './vault/stats.js';
@@ -11,6 +13,7 @@ export const VEHICLES = [
     flavor:  'Nothing to see here.',
     stats:   PROWLER,
     speed: 3, accel: 3, handling: 3,
+    price: 0, // starter — always owned
   },
   {
     id:      'razorback',
@@ -18,6 +21,7 @@ export const VEHICLES = [
     flavor:  'Fast enough to outrun the mistake of driving it.',
     stats:   RAZORBACK,
     speed: 5, accel: 4, handling: 3,
+    price: 35000, // the car you save up for
   },
   {
     id:      'vault',
@@ -25,6 +29,7 @@ export const VEHICLES = [
     flavor:  "They can't stop what they can't move.",
     stats:   VAULT,
     speed: 1, accel: 1, handling: 2,
+    price: 20000,
   },
 ];
 

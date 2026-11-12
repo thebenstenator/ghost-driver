@@ -4,7 +4,14 @@
 //   short   : the HUD label
 //   desc    : the menu tooltip
 //   charges/max/active : (scene) => … accessors the HUD reads to draw the pips
-//   icon    : (graphics, cx, cy, size) => … a little procedural picture for the menu
+//   icon    : (graphics, cx, cy, size, col?) => … a little procedural picture. Drawn in the gadget's
+//             own colours by default; pass `col` to draw it in one flat colour (the in-chase HUD).
+//   price   : garage unlock cost (0 = starter). Late-game gadgets cost more.
+//   base    : (scene) => … sets the gadget's stats at its MOST BASIC (what you get on purchase)
+//   upgrades: ordered tiers, each { name, desc, price, apply(scene) }. They are bought strictly in
+//             order in the garage (tier N unlocks tier N+1) and applied on top of `base`.
+// Progression (base + owned upgrades) is applied by GameScene._applyProgression in PLAYER mode
+// only; DEV mode keeps the gadget panel's tuned values so every gadget is testable at full power.
 //
 // Keys: in DEV mode every gadget is bound on its own key (DEV_GADGET_KEYS, in this order); in
 // PLAYER mode only the chosen loadout (≤3) is bound, mapped onto PLAYER_SLOT_KEYS by slot.
@@ -13,7 +20,14 @@ export const GADGETS = [
     id: "smoke",
     name: "Smoke Screen",
     short: "SMOKE",
-    price: 2500,
+    price: 3000,
+    base: (s) => { s.smokeMaxCharges = 1; s.smokeRadius = 80; s.smokeLifetime = 5; },
+    upgrades: [
+      { name: "Second Canister", desc: "1 → 2 charges", price: 2000, apply: (s) => { s.smokeMaxCharges = 2; } },
+      { name: "Dense Mix", desc: "Bigger cloud", price: 3500, apply: (s) => { s.smokeRadius = 110; } },
+      { name: "Slow Burn", desc: "Cloud lasts 5s → 8s", price: 5000, apply: (s) => { s.smokeLifetime = 8; } },
+      { name: "Third Canister", desc: "2 → 3 charges", price: 7000, apply: (s) => { s.smokeMaxCharges = 3; } },
+    ],
     deploy: "_deploySmoke",
     hudColor: "#b9b9c2",
     color: 0xb9b9c2,
@@ -34,6 +48,13 @@ export const GADGETS = [
     name: "Nitro Boost",
     short: "NITRO",
     price: 0, // starter
+    base: (s) => { s.nitroMaxCharges = 2; s.nitroDuration = 2.2; s.nitroSpeedMult = 1.35; },
+    upgrades: [
+      { name: "Third Bottle", desc: "2 → 3 charges", price: 1500, apply: (s) => { s.nitroMaxCharges = 3; } },
+      { name: "Long Burn", desc: "Boost lasts 2.2s → 3s", price: 3000, apply: (s) => { s.nitroDuration = 3; } },
+      { name: "Hot Mix", desc: "Higher boosted top speed", price: 5000, apply: (s) => { s.nitroSpeedMult = 1.45; } },
+      { name: "Fourth Bottle", desc: "3 → 4 charges", price: 7500, apply: (s) => { s.nitroMaxCharges = 4; } },
+    ],
     deploy: "_fireNitro",
     hudColor: "#7fd8ff",
     color: 0x7fd8ff,
@@ -54,7 +75,14 @@ export const GADGETS = [
     id: "oil",
     name: "Oil Slick",
     short: "OIL",
-    price: 0, // starter
+    price: 2000,
+    base: (s) => { s.oilMaxCharges = 2; s.oilPatchRadius = 24; s.oilLifetime = 20; },
+    upgrades: [
+      { name: "Bigger Tank", desc: "2 → 3 charges", price: 1500, apply: (s) => { s.oilMaxCharges = 3; } },
+      { name: "Wide Nozzle", desc: "Wider spread", price: 3000, apply: (s) => { s.oilPatchRadius = 34; } },
+      { name: "Heavy Crude", desc: "Patch stays 20s → 35s", price: 4000, apply: (s) => { s.oilLifetime = 35; } },
+      { name: "Flood Valve", desc: "Widest spread, 3 → 4 charges", price: 6500, apply: (s) => { s.oilPatchRadius = 44; s.oilMaxCharges = 4; } },
+    ],
     deploy: "_deployOilSlick",
     hudColor: "#d8c27a",
     color: 0xd8c27a,
@@ -75,7 +103,13 @@ export const GADGETS = [
     id: "repair",
     name: "Repair Kit",
     short: "REPAIR",
-    price: 4000,
+    price: 5000,
+    base: (s) => { s.repairMaxCharges = 1; s.repairHealthAmount = 40; },
+    upgrades: [
+      { name: "Proper Tools", desc: "Restores more health", price: 3000, apply: (s) => { s.repairHealthAmount = 70; } },
+      { name: "Spare Kit", desc: "1 → 2 charges", price: 5500, apply: (s) => { s.repairMaxCharges = 2; } },
+      { name: "Pit Crew", desc: "Restores the most health", price: 8000, apply: (s) => { s.repairHealthAmount = 100; } },
+    ],
     deploy: "_useRepairKit",
     hudColor: "#7dff9e",
     color: 0x7dff9e,
@@ -95,7 +129,14 @@ export const GADGETS = [
     id: "grapple",
     name: "Grappling Hook",
     short: "GRAPPLE",
-    price: 3000,
+    price: 9000,
+    base: (s) => { s.grappleCooldown = 28; s.grappleRange = 220; s.grappleLifetime = 14; },
+    upgrades: [
+      { name: "Fast Winch", desc: "Cooldown 28s → 22s", price: 4500, apply: (s) => { s.grappleCooldown = 22; } },
+      { name: "Long Line", desc: "Longer reach", price: 6500, apply: (s) => { s.grappleRange = 300; } },
+      { name: "Dead Weight", desc: "Blockade stays longer", price: 8000, apply: (s) => { s.grappleLifetime = 22; } },
+      { name: "Twin Motor", desc: "Cooldown 22s → 16s", price: 11000, apply: (s) => { s.grappleCooldown = 16; } },
+    ],
     deploy: "_fireGrapple",
     hudColor: "#ffb14a",
     color: 0xffb14a,
@@ -116,7 +157,14 @@ export const GADGETS = [
     id: "pspike",
     name: "Spike Strip",
     short: "SPIKE",
-    price: 2000,
+    price: 4000,
+    base: (s) => { s.pspikeMaxCharges = 1; s.pspikeWidth = 52; s.pspikeSlowDuration = 8; },
+    upgrades: [
+      { name: "Second Strip", desc: "1 → 2 charges", price: 2500, apply: (s) => { s.pspikeMaxCharges = 2; } },
+      { name: "Wide Strip", desc: "Covers more of the road", price: 4000, apply: (s) => { s.pspikeWidth = 76; } },
+      { name: "Barbed Teeth", desc: "Cops stay crippled 8s → 13s", price: 5500, apply: (s) => { s.pspikeSlowDuration = 13; } },
+      { name: "Third Strip", desc: "2 → 3 charges", price: 7500, apply: (s) => { s.pspikeMaxCharges = 3; } },
+    ],
     deploy: "_deployPlayerSpike",
     release: "_releasePlayerSpike", // hold to arm (telegraph shows), release to drop
     hudColor: "#c0c0c8",
@@ -140,7 +188,14 @@ export const GADGETS = [
     id: "emp",
     name: "EMP Blast",
     short: "EMP",
-    price: 4000,
+    price: 14000,
+    base: (s) => { s.empCooldown = 42; s.empRadius = 210; s.empStall = 6; },
+    upgrades: [
+      { name: "Wide Coil", desc: "Larger blast radius", price: 6000, apply: (s) => { s.empRadius = 270; } },
+      { name: "Hard Reset", desc: "Cops stalled 6s → 10s", price: 8500, apply: (s) => { s.empStall = 10; } },
+      { name: "Fast Capacitor", desc: "Cooldown 42s → 30s", price: 11000, apply: (s) => { s.empCooldown = 30; } },
+      { name: "Overcharge", desc: "Widest blast radius", price: 15000, apply: (s) => { s.empRadius = 330; } },
+    ],
     deploy: "_fireEmp",
     hudColor: "#4aa0ff",
     color: 0x4aa0ff,
@@ -164,7 +219,7 @@ export const DEV_GADGET_KEYS = ["Z", "X", "C", "V", "F", "S", "D"]; // dev: ever
 export const MAX_LOADOUT = 3;
 // Gadgets you OWN at the start (price 0). The rest are bought in the garage with mission cash. The
 // default loadout is just the starters, since a fresh player can only equip what they own.
-export const STARTER_GADGETS = ["nitro", "oil"];
+export const STARTER_GADGETS = ["nitro"];
 export const DEFAULT_LOADOUT = [...STARTER_GADGETS];
 
 export function gadgetById(id) {
