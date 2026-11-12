@@ -74,6 +74,8 @@ export class BootScene extends Phaser.Scene {
         document.fonts.load('700 32px "Cinzel"'),
         document.fonts.load('600 20px "Oswald"'),
         document.fonts.load('400 16px "Oswald"'),
+        document.fonts.load('500 20px "Barlow Condensed"'),
+        document.fonts.load('600 16px "Barlow Condensed"'),
       ]);
     } catch (e) {
       // Fonts failed to load (offline, blocked, etc.) — fall back to system fonts rather than hang.

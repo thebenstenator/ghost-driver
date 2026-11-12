@@ -35,8 +35,8 @@ export const GADGETS = [
     charges: (s) => s.smokeCharges,
     max: (s) => s.smokeMaxCharges,
     active: (s) => s.smokes.length > 0,
-    icon: (g, x, y, s) => {
-      g.fillStyle(0xb9b9c2, 1);
+    icon: (g, x, y, s, col) => {
+      g.fillStyle(col ?? 0xb9b9c2, 1);
       g.fillCircle(x - s * 0.16, y + s * 0.06, s * 0.18);
       g.fillCircle(x + s * 0.16, y + s * 0.04, s * 0.2);
       g.fillCircle(x, y - s * 0.1, s * 0.22);
@@ -62,8 +62,8 @@ export const GADGETS = [
     charges: (s) => s.nitroCharges,
     max: (s) => s.nitroMaxCharges,
     active: (s) => s.nitroTimer > 0,
-    icon: (g, x, y, s) => {
-      g.fillStyle(0x7fd8ff, 1);
+    icon: (g, x, y, s, col) => {
+      g.fillStyle(col ?? 0x7fd8ff, 1);
       const w = s * 0.3,
         h = s * 0.22;
       for (const oy of [-s * 0.1, s * 0.14]) {
@@ -90,12 +90,12 @@ export const GADGETS = [
     charges: (s) => s.oilCharges,
     max: (s) => s.oilMaxCharges,
     active: () => false,
-    icon: (g, x, y, s) => {
-      g.fillStyle(0x14140e, 1);
+    icon: (g, x, y, s, col) => {
+      g.fillStyle(col ?? 0x14140e, 1);
       g.fillCircle(x - s * 0.15, y + s * 0.08, s * 0.18);
       g.fillCircle(x + s * 0.16, y + s * 0.02, s * 0.2);
       g.fillCircle(x, y - s * 0.1, s * 0.17);
-      g.fillStyle(0x6a6448, 0.85);
+      g.fillStyle(col != null ? 0x0c0c11 : 0x6a6448, 0.85);
       g.fillCircle(x - s * 0.04, y - s * 0.02, s * 0.07);
     },
   },
@@ -117,8 +117,8 @@ export const GADGETS = [
     charges: (s) => s.repairCharges,
     max: (s) => s.repairMaxCharges,
     active: (s) => s.time.now < s._repairFlashUntil,
-    icon: (g, x, y, s) => {
-      g.fillStyle(0x7dff9e, 1);
+    icon: (g, x, y, s, col) => {
+      g.fillStyle(col ?? 0x7dff9e, 1);
       const t = s * 0.12,
         a = s * 0.32;
       g.fillRect(x - t, y - a, 2 * t, 2 * a);
@@ -143,8 +143,9 @@ export const GADGETS = [
     desc: "Fires at the nearest parked car and yanks it into the road behind you — an instant blockade for the cops on your tail.",
     active: (s) => (s.thrownCars || []).some((c) => c._pull),
     cooldown: (s) => s.grappleCdRemaining, // seconds until ready (0 = ready) → HUD shows a countdown
-    icon: (g, x, y, s) => {
-      g.fillStyle(0xffb14a, 1);
+    cooldownMax: (s) => s.grappleCooldown, // full cooldown → HUD recharge bar
+    icon: (g, x, y, s, col) => {
+      g.fillStyle(col ?? 0xffb14a, 1);
       const t = s * 0.07;
       g.fillRect(x - t, y - s * 0.34, 2 * t, s * 0.46); // shaft
       // three-pronged claw at the base
@@ -173,10 +174,10 @@ export const GADGETS = [
     charges: (s) => s.pspikeCharges,
     max: (s) => s.pspikeMaxCharges,
     active: () => false,
-    icon: (g, x, y, s) => {
-      g.fillStyle(0x8a8f98, 1);
+    icon: (g, x, y, s, col) => {
+      g.fillStyle(col ?? 0x8a8f98, 1);
       g.fillRect(x - s * 0.34, y + s * 0.06, s * 0.68, s * 0.12); // the strip bar
-      g.fillStyle(0xd0d0d8, 1);
+      g.fillStyle(col ?? 0xd0d0d8, 1);
       const n = 5, w = s * 0.64;
       for (let i = 0; i < n; i++) {
         const tx = x - w / 2 + ((i + 0.5) / n) * w; // a row of teeth
@@ -202,12 +203,13 @@ export const GADGETS = [
     desc: "A short-range pulse that fries nearby cop electronics — engines cut and they roll dead for a few seconds. Long cooldown.",
     active: (s) => (s._empRipple ? s._empRipple.t < s.empRippleTime : false),
     cooldown: (s) => s.empCdRemaining,
-    icon: (g, x, y, s) => {
+    cooldownMax: (s) => s.empCooldown,
+    icon: (g, x, y, s, col) => {
       // concentric arcs (a pulse) + a lightning bolt
-      g.lineStyle(Math.max(2, s * 0.06), 0x4aa0ff, 1);
+      g.lineStyle(Math.max(2, s * 0.06), col ?? 0x4aa0ff, 1);
       g.strokeCircle(x, y, s * 0.34);
       g.strokeCircle(x, y, s * 0.2);
-      g.fillStyle(0xaad4ff, 1);
+      g.fillStyle(col ?? 0xaad4ff, 1);
       g.fillTriangle(x - s * 0.05, y - s * 0.16, x + s * 0.09, y - s * 0.16, x - s * 0.02, y + s * 0.02);
       g.fillTriangle(x + s * 0.05, y + s * 0.16, x - s * 0.09, y + s * 0.16, x + s * 0.02, y - s * 0.02);
     },

@@ -8,6 +8,7 @@ import { segmentClear } from "../ai/lineOfSight.js";
 import { CopAI } from "../ai/CopAI.js";
 import { UNITS } from "../ai/units.js";
 import { TOOLTIPS } from "../ui/tooltips.js";
+import { HUD } from "../ui/hudTheme.js";
 import { PursuitDirector, CopState } from "../ai/PursuitDirector.js";
 import { Pursuit, PursuitState } from "../systems/Pursuit.js";
 import { PursuitLevel } from "../systems/PursuitLevel.js";
@@ -77,7 +78,6 @@ export class GameScene extends Phaser.Scene {
     catch (e) { /* ignore */ }
   }
 
-  // Player gadget loadout (≤3 gadget ids, in slot order). Persisted so the menu choice sticks.
   // Owned vehicles — free ones (price 0) are always owned; the rest are bought in the garage.
   static OWNED_VEHICLES_KEY = "gd_ownedVehicles";
   static getOwnedVehicles() {
@@ -177,6 +177,7 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
+  // Player gadget loadout (≤3 gadget ids, in slot order). Persisted so the menu choice sticks.
   static LOADOUT_KEY = "gd_loadout";
   static getLoadout() {
     try {
@@ -288,9 +289,9 @@ export class GameScene extends Phaser.Scene {
     // tuning panels are suppressed for a clean playtest screen. Read FIRST — cop spawn
     // and HUD setup below branch on it. Game logic is identical either way.
     this.devMode = GameScene.isDevMode();
-    // The testbed is reached from a dev-only menu button, so it always wants the dev
     // Dev-server only: expose the live scene for console poking and headless capture scripts.
     if (import.meta.env.DEV) window.__scene = this;
+    // The testbed is reached from a dev-only menu button, so it always wants the dev
     // overlays/panels regardless of the persisted toggle.
     if (this.sandbox) this.devMode = true;
 
@@ -673,10 +674,10 @@ export class GameScene extends Phaser.Scene {
     this.respawnFrontCone = 0.45; // rad half-angle around YOUR direction of travel where no flank
     // unit may be placed: never dead ahead on your road, but ahead-and-to-the-side (oncoming from a
     // cross/parallel street) is allowed. Only applies while you're moving. 0 = no restriction.
-    this.dropHeatCops = 3; // mission: pack size that converges on you the instant the drop is secured
     this.hintShowTime = 6; // s the objective line stays up when a mission step begins
     this.passengerAccelMult = 0.88; // mission passenger: acceleration × while they're aboard
     this.passengerTurnMult = 0.92;  // …and turn rate × (the "extra weight")
+    this.dropHeatCops = 3; // mission: pack size that converges on you the instant the drop is secured
     this.interceptAheadDist = 850; // px down the player's travel that an 'ahead-of-travel'
     // unit (interceptor) spawns, to set up a head-on
     this.interceptEntrySpeed = 260; // px/s an ahead-spawned interceptor enters AT (rolling toward
@@ -935,6 +936,7 @@ export class GameScene extends Phaser.Scene {
     this.cameras.main.startFollow(this.car.sprite, true, 0.1, 0.1);
     this.cameras.main.setZoom(1.0);
 
+    this._applyProgression();
     this._setupInput();
     this._setupProfiler(); // frame profiler (F) — available in playtest, not dev-gated
     if (this.devMode) {
@@ -944,7 +946,6 @@ export class GameScene extends Phaser.Scene {
       if (this.sandbox) {
         this._setupTestbedPanel(); // spawn/clear chosen unit types
         this._setupUnitTunePanel(this._testbed.unitType); // tune the selected type's def
-    this._applyProgression();
         this._setupManeuverPanel(); // tune director maneuver/box behavior
         this._setupHealthPanel(); // tune cop health / ramming / disabling
       } else {
@@ -963,19 +964,18 @@ export class GameScene extends Phaser.Scene {
     this.uiCamera.setScroll(0, 0);
     const hud = [
       this.statusText,
-      this.cooldownText,
       this.ghostText,
       this.bustGfx,
       this.bustLabel,
       this.bustedText,
       this.pausedText,
       this.heatGfx,
-      this.heatLabel,
       this.reinforceText,
       this.killLightsText,
       this.spikeText,
       this.garageText,
       ...this.gadgetTexts,
+      this.gadgetGfx,
       this.screenFx.gfx,
       this.minimapContentGfx,
       this.minimapGfx,
@@ -985,7 +985,7 @@ export class GameScene extends Phaser.Scene {
     if (this.debugText) hud.push(this.debugText);
     if (this.copCountText) hud.push(this.copCountText);
     if (this.mission)
-      hud.push(this.objectiveText, this.beaconGfx, this.briefingText, this.resultText);
+      hud.push(this.hintKicker, this.hintText, this.beaconGfx, this.beaconText, this.briefingText, this.resultText);
     this.cameras.main.ignore(hud); // world cam skips HUD
     this.uiCamera.ignore(this.worldLayer); // UI cam skips the world (and its future children)
 
@@ -1053,14 +1053,16 @@ export class GameScene extends Phaser.Scene {
       this.resultText
         .setText(
           `MISSION COMPLETE\n\n+ $${this.mission.reward.toLocaleString()}\n` +
-            `BANK  $${total.toLocaleString()}\n\npress R to run again   ·   M for menu`,
+            `BANK  $${total.toLocaleString()}\n` +
+            (first && next ? `NEW JOB: ${next.name}\n` : "") +
+            `\npress R to run again   ·   M for jobs`,
         )
-        .setColor("#39ff14")
+        .setColor(HUD.css.brassHi)
         .setAlpha(1);
     } else {
       this.resultText
-        .setText("BUSTED\nMISSION FAILED\n\npress R to retry   ·   M for menu")
-        .setColor("#ff3b3b")
+        .setText("BUSTED\nMISSION FAILED\n\npress R to retry   ·   M for jobs")
+        .setColor(HUD.css.red)
         .setAlpha(1);
     }
   }
@@ -1855,6 +1857,7 @@ export class GameScene extends Phaser.Scene {
         const p = this.navGrid.pos(this.navGrid.nearestNodeAhead(tx, ty, px, py, dir));
         if (
           Phaser.Math.Distance.Between(p.x, p.y, px, py) >= this.searchMinDist &&
+          Math.abs((p.x - px) * perpx + (p.y - py) * perpy) >= this.searchLaneClear &&
           this._offCamera(p.x, p.y, this.respawnMargin) &&
           // Must be OCCLUDED from you — a spot with clear LOS would spot you the instant it spawns
           // (the "one always crossing the road in front of me" case). Forces it behind a building.
@@ -1973,7 +1976,6 @@ export class GameScene extends Phaser.Scene {
       cop.ai._unstuck = { startX: f.x, startY: f.y, age: 0 }; // force recovery (set AFTER _placeCop, which clears it)
     }
   }
-          Math.abs((p.x - px) * perpx + (p.y - py) * perpy) >= this.searchLaneClear &&
 
   // Pile test: stack several cops nose-to-tail in a tight column DIRECTLY behind the player,
   // all facing (and aiming at) the player, so they jam into one contact knot — every car
@@ -3082,19 +3084,6 @@ export class GameScene extends Phaser.Scene {
     this._repairFlashUntil = this.time.now + 900; // brief green pip flash
   }
 
-  // Resolve which gadgets are live this run and on which keys: DEV binds every gadget (so all are
-  // testable); PLAYER binds only the chosen loadout (≤3), mapped onto Z/X/C by slot. Result drives
-  // both the keybinds (_setupInput) and the HUD pips (_setupHud/update). Each entry: { def, key }.
-  _resolveGadgets() {
-    if (this.devMode) {
-      this._activeGadgets = GADGETS.map((def, i) => ({ def, key: DEV_GADGET_KEYS[i] }))
-        .filter((e) => e.key);
-    } else {
-      this._activeGadgets = GameScene.getLoadout()
-        .map((id, i) => {
-          const def = gadgetById(id);
-          return def ? { def, key: PLAYER_SLOT_KEYS[i] } : null;
-        })
   // Career progression → gadget stats. In PLAYER mode every gadget starts from its `base` (the
   // weakest version, as bought) and gains the upgrade tiers owned in the garage, in order; charges
   // are then refilled to the resulting max. DEV mode skips this entirely, so the gadget panel's
@@ -3113,6 +3102,19 @@ export class GameScene extends Phaser.Scene {
     this.pspikeCharges = this.pspikeMaxCharges;
   }
 
+  // Resolve which gadgets are live this run and on which keys: DEV binds every gadget (so all are
+  // testable); PLAYER binds only the chosen loadout (≤3), mapped onto Z/X/C by slot. Result drives
+  // both the keybinds (_setupInput) and the HUD pips (_setupHud/update). Each entry: { def, key }.
+  _resolveGadgets() {
+    if (this.devMode) {
+      this._activeGadgets = GADGETS.map((def, i) => ({ def, key: DEV_GADGET_KEYS[i] }))
+        .filter((e) => e.key);
+    } else {
+      this._activeGadgets = GameScene.getLoadout()
+        .map((id, i) => {
+          const def = gadgetById(id);
+          return def ? { def, key: PLAYER_SLOT_KEYS[i] } : null;
+        })
         .filter(Boolean)
         .slice(0, MAX_LOADOUT);
     }
@@ -4593,104 +4595,68 @@ reinforceUrgency: { cadenceGain: ${ru.cadenceGain}, recognition: ${ru.recognitio
   }
 
   _setupHud() {
-    const { width } = this.scale;
-    // Pursuit status (top centre)
-    this.statusText = this.add
-      .text(width / 2, 24, "", {
-        fontFamily: "monospace",
-        fontSize: "22px",
-        fontStyle: "bold",
-        color: "#ffffff",
-      })
-      .setOrigin(0.5, 0)
-      .setScrollFactor(0)
-      .setDepth(100);
-
-    // Kill Lights (Q) stealth indicator — bottom-centre, only shown while lights are off.
-    this.killLightsText = this.add
-      .text(width / 2, this.scale.height - 28, "◐ LIGHTS OFF", {
-        fontFamily: "monospace",
-        fontSize: "14px",
-        fontStyle: "bold",
-        color: "#7fd8ff",
-      })
-      .setOrigin(0.5, 1)
-      .setScrollFactor(0)
-      .setDepth(100)
-      .setAlpha(0);
-
-    // Blown-tires warning — bottom-centre (above the garage/lights rows), only while crippled.
-    this.spikeText = this.add
-      .text(width / 2, this.scale.height - 72, "⚠ BLOWN TIRES", {
-        fontFamily: "monospace",
-        fontSize: "14px",
-        fontStyle: "bold",
-        color: "#ff5a3c",
-      })
-      .setOrigin(0.5, 1)
-      .setScrollFactor(0)
-      .setDepth(100)
-      .setAlpha(0);
-
-    // Parking-garage status — shown only while inside a garage (HIDDEN vs SEEN).
-    this.garageText = this.add
-      .text(width / 2, this.scale.height - 50, "", {
-        fontFamily: "monospace",
-        fontSize: "14px",
-        fontStyle: "bold",
-        color: "#39ff14",
-      })
-      .setOrigin(0.5, 1)
-      .setScrollFactor(0)
-      .setDepth(100)
-      .setAlpha(0);
-
-    // Gadget charge pips (bottom-left), one row per ACTIVE gadget (loadout/dev — see _resolveGadgets),
-    // stacked upward. Each row "KEY NAME ◉◉" is refreshed each frame in update(). The bottom row starts
-    // above the vehicle health bar (drawn at ~height-30) so they never overlap.
-    this.gadgetTexts = this._activeGadgets.map((slot, i) =>
+    const { width, height } = this.scale;
+    // HUD text: scene-root, pinned, with a soft drop shadow so it reads over the road with no plate.
+    const hudText = (x, y, str, style, depth = 100) =>
       this.add
-        .text(16, this.scale.height - 38 - i * 20, "", {
-          fontFamily: "monospace",
-          fontSize: "15px",
-          fontStyle: "bold",
-          color: slot.def.hudColor,
-        })
-        .setOrigin(0, 1)
+        .text(x, y, str, style)
+        .setShadow(0, 1, "#000000", 6, true, true)
         .setScrollFactor(0)
-        .setDepth(100),
+        .setDepth(depth);
+    const deco = (size, color, spacing) => ({
+      fontFamily: HUD.font.deco, fontSize: size + "px", fontStyle: "700", color, letterSpacing: spacing,
+    });
+    const cue = (color) => ({
+      fontFamily: HUD.font.text, fontSize: "16px", fontStyle: "600", color, letterSpacing: 5,
+    });
+
+    // Minimap geometry (bottom-right). The pursuit lives ON it: heat is the arc on its outer ring,
+    // level is the row of diamonds above it — nothing sits at the top of the screen while you drive.
+    const mmR = 88;
+    const mmCx = width - 22 - (mmR + 12), mmCy = height - 20 - (mmR + 12);
+    this._mmCx = mmCx; this._mmCy = mmCy; this._mmR = mmR;
+    this._statusY = mmCy - (mmR + 12) - 16; // the status word + level diamonds row
+
+    // Pursuit status word (PURSUIT / EVADING 12 / AREA HOT 8 / …) — positioned each frame by
+    // _drawHeatBar so the word + diamonds stay centred over the minimap as the word changes.
+    this.statusText = hudText(mmCx, this._statusY, "", deco(12, HUD.css.red, 4)).setOrigin(0, 0.5);
+    // Heat ring + level diamonds (drawn each frame by _drawHeatBar), above the minimap layers.
+    this.heatGfx = this.add.graphics().setScrollFactor(0).setDepth(102);
+    // "Units inbound" flash above the status row on each dispatch.
+    this.reinforceText = hudText(mmCx, this._statusY - 20, "UNITS INBOUND", cue(HUD.css.redSoft), 101)
+      .setOrigin(0.5)
+      .setAlpha(0);
+
+    // Bottom-centre status cues, shown only while true: lights off, garage state, blown tyres.
+    this.killLightsText = hudText(width / 2, height - 64, "LIGHTS OFF", cue(HUD.css.bone)).setOrigin(0.5, 1).setAlpha(0);
+    this.garageText = hudText(width / 2, height - 86, "", cue(HUD.css.bone)).setOrigin(0.5, 1).setAlpha(0);
+    this.spikeText = hudText(width / 2, height - 108, "BLOWN TIRES", cue(HUD.css.red)).setOrigin(0.5, 1).setAlpha(0);
+
+    // Gadget tiles (bottom-left), one per ACTIVE gadget (loadout/dev — see _resolveGadgets). The
+    // tiles, icons, charge pips and cooldown bars are drawn each frame by _drawGadgets; only the
+    // key letter and the cooldown number are text objects.
+    const S = 50, GAP = 10;
+    this._gadX = 36;                 // slot 0's left edge (the chassis rail sits left of it at x=22)
+    this._gadTop = height - 20 - 13 - S; // tile top; 13px under the tile for pips / the cooldown bar
+    this._gadS = S; this._gadGap = GAP;
+    this.gadgetGfx = this.add.graphics().setScrollFactor(0).setDepth(100);
+    this.gadgetKeyTexts = this._activeGadgets.map((slot, i) =>
+      this.add
+        .text(this._gadX + i * (S + GAP) + 8, this._gadTop + 8, slot.key, {
+          fontFamily: HUD.font.ui, fontSize: "11px", fontStyle: "600", color: HUD.css.ink,
+        })
+        .setOrigin(0.5)
+        .setScrollFactor(0)
+        .setDepth(101),
     );
+    this.gadgetCdTexts = this._activeGadgets.map((slot, i) =>
+      hudText(this._gadX + i * (S + GAP) + S / 2, this._gadTop + S / 2 + 1, "", {
+        fontFamily: HUD.font.ui, fontSize: "18px", fontStyle: "600", color: HUD.css.bone,
+      }, 101).setOrigin(0.5),
+    );
+    this.gadgetTexts = [...this.gadgetKeyTexts, ...this.gadgetCdTexts];
 
-    // Heat / pursuit-level meter (Pursuit Mode only) — a thin bar under the status
-    // showing progress toward the next level. Drawn each frame by _drawHeatBar.
-    this.heatGfx = this.add.graphics().setScrollFactor(0).setDepth(100);
-    this.heatLabel = this.add
-      .text(width / 2, 44, "", {
-        fontFamily: "monospace",
-        fontSize: "11px",
-        fontStyle: "bold",
-        color: "#c8c8d4",
-      })
-      .setOrigin(1, 0.5)
-      .setScrollFactor(0)
-      .setDepth(101)
-      .setAlpha(0);
-
-    // "Reinforcements incoming" flash, shown beside the heat bar on each dispatch.
-    this.reinforceText = this.add
-      .text(width / 2, 62, "⚠ REINFORCEMENTS INCOMING", {
-        fontFamily: "monospace",
-        fontSize: "12px",
-        fontStyle: "bold",
-        color: "#ff5a1a",
-      })
-      .setOrigin(0.5, 0.5)
-      .setScrollFactor(0)
-      .setDepth(101)
-      .setAlpha(0);
-
-    // Dev-only deployment counter, positioned in _drawCopCounter just right of the heat
-    // bar (open space, clear of the centred pursuit HUD and the right-edge dev panel).
+    // Dev-only deployment counter (top centre — the live HUD leaves the top of the screen empty).
     if (this.devMode) {
       this.copCountText = this.add
         .text(0, 0, "", {
@@ -4698,81 +4664,41 @@ reinforceUrgency: { cadenceGain: ${ru.cadenceGain}, recognition: ${ru.recognitio
           fontSize: "12px",
           fontStyle: "bold",
           color: "#c8c8d4",
-          align: "left",
+          align: "center",
         })
-        .setOrigin(0, 0.5)
+        .setOrigin(0.5, 0)
         .setScrollFactor(0)
         .setDepth(101)
         .setAlpha(0);
     }
 
-    // Large cooldown timer, shown only during the cooldown phase (below the heat bar)
-    this.cooldownText = this.add
-      .text(width / 2, 64, "", {
-        fontFamily: "monospace",
-        fontSize: "40px",
-        fontStyle: "bold",
-        color: "#ffd23f",
-      })
-      .setOrigin(0.5, 0)
-      .setScrollFactor(0)
-      .setDepth(100);
-
     // Brief "GHOST" flash when a ditch completes
-    this.ghostText = this.add
-      .text(width / 2, this.scale.height / 2, "GHOST", {
-        fontFamily: "monospace",
-        fontSize: "96px",
-        fontStyle: "bold",
-        color: "#39ff14",
-      })
-      .setOrigin(0.5)
-      .setScrollFactor(0)
-      .setDepth(100)
-      .setAlpha(0);
+    this.ghostText = hudText(width / 2, height / 2, "GHOST", deco(96, HUD.css.bone, 16)).setOrigin(0.5).setAlpha(0);
 
-    // Bust meter bar (bottom centre) + its label
+    // Bust meter (bottom centre) — hidden at zero, fades in only while a cop is pinning you.
     this.bustGfx = this.add.graphics().setScrollFactor(0).setDepth(100);
-    // Player vehicle health bar (bottom-left) — drawn by _drawPlayerHealth when the system is on.
+    this.bustLabel = hudText(width / 2, height - 40, "BUST", deco(12, HUD.css.bone, 6)).setOrigin(0.5, 1).setAlpha(0);
+    // Player vehicle health — a thin rail left of the gadget tiles (see _drawPlayerHealth).
     this.playerHpGfx = this.add.graphics().setScrollFactor(0).setDepth(100);
-    this.bustLabel = this.add
-      .text(width / 2, this.scale.height - 52, "BUST", {
-        fontFamily: "monospace",
-        fontSize: "12px",
-        fontStyle: "bold",
-        color: "#ffffff",
-      })
-      .setOrigin(0.5, 1)
-      .setScrollFactor(0)
-      .setDepth(100)
-      .setAlpha(0);
 
     // BUSTED overlay
-    this.bustedText = this.add
-      .text(width / 2, this.scale.height / 2, "BUSTED\n\npress R to restart   ·   M for menu", {
-        fontFamily: "monospace",
-        fontSize: "56px",
-        fontStyle: "bold",
-        color: "#ff3b3b",
-        align: "center",
-      })
-      .setOrigin(0.5)
-      .setScrollFactor(0)
-      .setDepth(101)
-      .setAlpha(0);
+    this.bustedText = hudText(width / 2, height / 2, "BUSTED\n\npress R to restart   ·   M for menu", {
+      ...deco(48, HUD.css.red, 4), align: "center", lineSpacing: 6,
+    }, 101).setOrigin(0.5).setAlpha(0);
 
     // PAUSED overlay — a navigable menu (see _togglePause / _renderPauseMenu). Text is
     // rebuilt each time the selection or view changes; the initial string is a placeholder.
     this.pausedText = this.add
-      .text(width / 2, this.scale.height / 2, "PAUSED", {
-        fontFamily: "monospace",
-        fontSize: "28px",
-        fontStyle: "bold",
-        color: "#ffffff",
+      .text(width / 2, height / 2, "PAUSED", {
+        fontFamily: HUD.font.ui,
+        fontSize: "26px",
+        fontStyle: "500",
+        color: HUD.css.bone,
         align: "center",
-        lineSpacing: 8,
-        backgroundColor: "#000000cc",
-        padding: { x: 40, y: 28 },
+        lineSpacing: 10,
+        letterSpacing: 2,
+        backgroundColor: "#0c0c11e6",
+        padding: { x: 44, y: 30 },
       })
       .setOrigin(0.5)
       .setScrollFactor(0)
@@ -4792,48 +4718,90 @@ reinforceUrgency: { cadenceGain: ${ru.cadenceGain}, recognition: ${ru.recognitio
       }).setOrigin(0.5, 0).setAlpha(0);
       // Off-screen pointer — a brass arrow at the screen edge toward the objective, with distance.
       this.beaconGfx = this.add.graphics().setScrollFactor(0).setDepth(100);
+      this.beaconText = hudText(0, 0, "", {
+        fontFamily: HUD.font.text, fontSize: "20px", fontStyle: "500", color: HUD.css.bone, letterSpacing: 1,
+      }).setOrigin(0.5).setAlpha(0);
       // Briefing card (shown at start, dismissed with SPACE/ENTER to drop into the chase).
       this.briefingText = this.add
-        .text(width / 2, h / 2, "", {
-          fontFamily: "monospace",
+        .text(width / 2, height / 2, "", {
+          fontFamily: HUD.font.ui,
           fontSize: "20px",
-          color: "#e8e8f0",
+          color: HUD.css.bone,
           align: "center",
-          backgroundColor: "#0d0d14",
-          padding: { x: 30, y: 24 },
-          lineSpacing: 8,
+          backgroundColor: "#0c0c11f2",
+          padding: { x: 36, y: 28 },
+          lineSpacing: 9,
+          letterSpacing: 1,
         })
         .setOrigin(0.5)
         .setScrollFactor(0)
         .setDepth(102)
         .setAlpha(0);
       // Result overlay (MISSION COMPLETE / MISSION FAILED).
-      this.resultText = this.add
-        .text(width / 2, h / 2, "", {
-          fontFamily: "monospace",
-          fontSize: "44px",
-          fontStyle: "bold",
-          color: "#39ff14",
-          align: "center",
-          lineSpacing: 6,
-        })
-        .setOrigin(0.5)
-        .setScrollFactor(0)
-        .setDepth(102)
-        .setAlpha(0);
+      this.resultText = hudText(width / 2, height / 2, "", {
+        ...deco(40, HUD.css.brassHi, 3), align: "center", lineSpacing: 8,
+      }, 102).setOrigin(0.5).setAlpha(0);
     }
-    // Minimap: content (rotates, clipped to circle) + overlay (border + player blip, no clip)
-    const mmR = 100;
-    const mmCx = this.scale.width - mmR - 14, mmCy = this.scale.height - mmR - 14;
-    this._mmCx = mmCx; this._mmCy = mmCy; this._mmR = mmR;
-    // Geometry mask clips buildings/cops to the circle (no overflow).
+
+    // Minimap: content (clipped to the circle) + overlay (frame + player blip, no clip).
     const mmMaskGfx = this.make.graphics({ add: false });
     mmMaskGfx.fillStyle(0xffffff, 1).fillCircle(mmCx, mmCy, mmR - 1);
     this.minimapContentGfx = this.add.graphics().setScrollFactor(0).setDepth(100);
     this.minimapContentGfx.setMask(mmMaskGfx.createGeometryMask());
-    // Border + player blip drawn above the mask so they're never clipped.
     this.minimapGfx = this.add.graphics().setScrollFactor(0).setDepth(101);
     this.minimapVisible = true; // toggled by E (see _toggleMinimap)
+  }
+
+  // A HUD diamond (the level / charge pip shape) centred on (x, y), half-size r.
+  _hudDiamond(g, x, y, r, filled, col) {
+    const pts = [{ x, y: y - r }, { x: x + r, y }, { x, y: y + r }, { x: x - r, y }];
+    if (filled) {
+      g.fillStyle(col, 1).fillPoints(pts, true);
+    } else {
+      g.fillStyle(HUD.plate, 0.75).fillPoints(pts, true);
+      g.lineStyle(1, HUD.brass, 1).strokePoints(pts, true);
+    }
+  }
+
+  // Gadget tiles (bottom-left): a 50px framed tile per active gadget with its icon, the key it's
+  // bound to on a brass tab, and under it either charge pips or a cooldown bar (+ seconds left in
+  // the tile). Frame colour is the state: brass = ready, bone = in use right now, dim = spent.
+  _drawGadgets() {
+    const g = this.gadgetGfx;
+    g.clear();
+    const S = this._gadS, top = this._gadTop;
+    this._activeGadgets.forEach(({ def }, i) => {
+      const x = this._gadX + i * (S + this._gadGap), cx = x + S / 2;
+      const active = def.active(this);
+      let ready, rem = 0, frac = 1;
+      if (def.cooldown) {
+        rem = def.cooldown(this);
+        ready = rem <= 0.05;
+        const max = def.cooldownMax ? def.cooldownMax(this) : 0;
+        frac = ready || max <= 0 ? 1 : 1 - Phaser.Math.Clamp(rem / max, 0, 1);
+      } else {
+        ready = def.charges(this) > 0;
+      }
+      const edge = active ? HUD.bone : ready ? HUD.brass : HUD.dim;
+      g.fillStyle(HUD.plate, 0.84).fillRect(x, top, S, S);
+      if (active) g.fillStyle(HUD.bone, 0.16).fillRect(x, top, S, S);
+      def.icon(g, cx + 2, top + S / 2 + 3, 34, ready ? HUD.bone : HUD.iconDim);
+      g.lineStyle(1, edge, 1).strokeRect(x + 0.5, top + 0.5, S - 1, S - 1);
+      g.fillStyle(ready ? HUD.brass : HUD.dim, 1).fillRect(x, top, 16, 16); // key tab
+
+      const by = top + S + 8; // centre line of the pip / bar row
+      if (def.cooldown) {
+        this.gadgetCdTexts[i].setText(ready ? "" : String(Math.ceil(rem)));
+        g.fillStyle(HUD.plate, 0.8).fillRect(x, by - 1.5, S, 3);
+        g.fillStyle(ready ? HUD.brassHi : HUD.brass, 1).fillRect(x, by - 1.5, S * frac, 3);
+      } else {
+        this.gadgetCdTexts[i].setText("");
+        const cur = def.charges(this), max = Math.max(def.max(this), cur);
+        const step = Math.min(12, (S - 8) / Math.max(1, max - 1 || 1));
+        const x0 = cx - ((max - 1) * step) / 2;
+        for (let k = 0; k < max; k++) this._hudDiamond(g, x0 + k * step, by, 4, k < cur, HUD.brassHi);
+      }
+    });
   }
 
   // M toggles the minimap. Hidden = skip the (per-frame, not-cheap) redraw entirely.
@@ -4927,18 +4895,16 @@ reinforceUrgency: { cadenceGain: ${ru.cadenceGain}, recognition: ${ru.recognitio
     }
   }
 
-  // Player vehicle health bar — bottom-left. Green → amber → red as it drops; hidden when the
-  // health system is off (so pure Pursuit Mode shows nothing).
+  // Player vehicle health — a thin vertical rail left of the gadget tiles, draining downward. Bone
+  // normally, red under a quarter. Hidden when the health system is off.
   _drawPlayerHealth() {
     const g = this.playerHpGfx;
     g.clear();
     if (!this.playerHealthEnabled || this.car.maxHealth <= 0) return;
     const f = Phaser.Math.Clamp(this.car.health / this.car.maxHealth, 0, 1);
-    const w = 150, h = 12, x = 20, y = this.scale.height - 30;
-    const col = f > 0.5 ? 0x39ff14 : f > 0.25 ? 0xffd23f : 0xff3b3b;
-    g.fillStyle(0x000000, 0.5).fillRect(x - 2, y - 2, w + 4, h + 4);
-    g.fillStyle(0x222228, 1).fillRect(x, y, w, h);
-    g.fillStyle(col, 1).fillRect(x, y, w * f, h);
+    const x = 22, w = 4, top = this._gadTop, h = this._gadS + 13;
+    g.fillStyle(HUD.plate, 0.8).fillRect(x, top, w, h);
+    g.fillStyle(f > 0.25 ? HUD.bone : HUD.red, 1).fillRect(x, top + h * (1 - f), w, h * f);
   }
 
   _drawBustBar() {
@@ -4949,22 +4915,12 @@ reinforceUrgency: { cadenceGain: ${ru.cadenceGain}, recognition: ${ru.recognitio
       this.bustLabel.setAlpha(0);
       return;
     }
-
     const { width, height } = this.scale;
-    const w = 300,
-      h = 16,
-      x = (width - w) / 2,
-      y = height - 40;
+    const w = 280, h = 4, x = (width - w) / 2, y = height - 32;
     const frac = v / 100;
-    const col = frac < 0.5 ? 0xffd23f : frac < 0.8 ? 0xff8c1a : 0xff3b3b;
-
-    g.fillStyle(0x000000, 0.5);
-    g.fillRect(x - 2, y - 2, w + 4, h + 4);
-    g.fillStyle(col, 0.9);
-    g.fillRect(x, y, w * frac, h);
-    g.lineStyle(1, 0xffffff, 0.4);
-    g.strokeRect(x, y, w, h);
-    this.bustLabel.setAlpha(0.9);
+    g.fillStyle(HUD.plate, 0.8).fillRect(x, y, w, h);
+    g.fillStyle(frac < 0.7 ? HUD.brassHi : HUD.red, 1).fillRect(x, y, w * frac, h);
+    this.bustLabel.setAlpha(1);
   }
 
   _flashGhost() {
@@ -5008,49 +4964,61 @@ reinforceUrgency: { cadenceGain: ${ru.cadenceGain}, recognition: ${ru.recognitio
       this.hintText.setAlpha(0);
     }
 
-    const dist = Math.round(Math.hypot(poi.x - px, poi.y - py));
-    this.objectiveText.setText(`◉ ${m.objectiveLabel}   ${dist}m`);
+    if (!poi) { this.beaconText.setAlpha(0); return; }
 
     // World-space pulsing ring on the road at the objective.
     const pulse = 0.5 + 0.5 * Math.sin((this.time.now % 1200) / 1200 * Math.PI * 2);
     const g = this.poiGfx;
-    g.fillStyle(0xffd23f, 0.1);
+    g.fillStyle(HUD.brassHi, 0.08);
     g.fillCircle(poi.x, poi.y, poi.r);
-    g.lineStyle(4, 0xffd23f, 0.4 + 0.45 * pulse);
+    g.lineStyle(3, HUD.brassHi, 0.45 + 0.4 * pulse);
     g.strokeCircle(poi.x, poi.y, poi.r);
-    g.lineStyle(2, 0xffd23f, 0.3);
+    g.lineStyle(1.5, HUD.brassHi, 0.3);
     g.strokeCircle(poi.x, poi.y, poi.r * (0.45 + 0.55 * pulse));
     // Dwell progress: a bone core that grows as the step completes (resets if seen / you leave).
     const frac = m.dwellFrac;
     if (frac > 0) {
-      g.fillStyle(0x39ff14, 0.35);
+      g.fillStyle(HUD.bone, 0.3);
       g.fillCircle(poi.x, poi.y, poi.r * frac);
     }
 
-    // Screen-space beacon — draw only while the POI is off the visible view.
+    // Screen-edge pointer + distance — only while the POI is off the visible view.
     const v = this.cameras.main.worldView;
     const onScreen = poi.x >= v.x && poi.x <= v.right && poi.y >= v.y && poi.y <= v.bottom;
-    if (onScreen) return;
+    if (onScreen) { this.beaconText.setAlpha(0); return; }
     const sw = this.scale.width,
       sh = this.scale.height,
       cx = sw / 2,
       cy = sh / 2,
-      margin = 64;
+      margin = 56;
     const ang = Math.atan2(poi.y - py, poi.x - px);
+    const ca = Math.cos(ang), sa = Math.sin(ang);
     // March from screen centre out to the edge (minus margin) along the bearing to the POI.
     const rad = Math.min(
-      (sw / 2 - margin) / (Math.abs(Math.cos(ang)) || 1e-3),
-      (sh / 2 - margin) / (Math.abs(Math.sin(ang)) || 1e-3),
+      (sw / 2 - margin) / (Math.abs(ca) || 1e-3),
+      (sh / 2 - margin) / (Math.abs(sa) || 1e-3),
     );
-    const ax = cx + Math.cos(ang) * rad,
-      ay = cy + Math.sin(ang) * rad,
-      s = 16;
-    this.beaconGfx.fillStyle(0xffd23f, 0.9);
-    this.beaconGfx.fillTriangle(
-      ax + Math.cos(ang) * s, ay + Math.sin(ang) * s,
-      ax + Math.cos(ang + 2.5) * s, ay + Math.sin(ang + 2.5) * s,
-      ax + Math.cos(ang - 2.5) * s, ay + Math.sin(ang - 2.5) * s,
-    );
+    // …then pull it back in until it (and its distance label) clears the two bottom corners the
+    // HUD owns: the minimap + status row on the right, the gadget tiles on the left.
+    const mmLeft = this._mmCx - this._mmR - 70, mmTop = this._statusY - 50;
+    const gadRight = this._gadX + this._activeGadgets.length * (this._gadS + this._gadGap) + 50;
+    const gadTop = this._gadTop - 50;
+    let r = rad, ax = cx + ca * r, ay = cy + sa * r;
+    while (r > 60 && ((ax > mmLeft && ay > mmTop) || (ax < gadRight && ay > gadTop))) {
+      r -= 12;
+      ax = cx + ca * r;
+      ay = cy + sa * r;
+    }
+    // A notched arrowhead: tip, two wings, and a notch pulled toward the tip.
+    const P = (fwd, side) => ({ x: ax + ca * fwd - sa * side, y: ay + sa * fwd + ca * side });
+    const pts = [P(15, 0), P(-11, 11), P(-5, 0), P(-11, -11)];
+    this.beaconGfx.fillStyle(HUD.brassHi, 1).fillPoints(pts, true);
+    this.beaconGfx.lineStyle(1.5, 0x0b0b10, 1).strokePoints(pts, true);
+    const dist = Math.round(Math.hypot(poi.x - px, poi.y - py));
+    this.beaconText
+      .setText(dist.toLocaleString() + " m")
+      .setPosition(ax - ca * 46, ay - sa * 30)
+      .setAlpha(1);
   }
 
   // Minimap (bottom-right): a north-up disc of the blocks around you — parks, water, safehouses,
@@ -5068,10 +5036,9 @@ reinforceUrgency: { cadenceGain: ${ru.cadenceGain}, recognition: ${ru.recognitio
     // Content layer (clipped to circle by the geometry mask)
     const cg = this.minimapContentGfx;
     cg.clear();
-    cg.fillStyle(0x0c0c10, 0.88).fillCircle(cx, cy, R + 2); // dark background
+    cg.fillStyle(HUD.plate, 0.88).fillCircle(cx, cy, R + 2); // dark background
 
     // Buildings — project all 4 corners so they rotate correctly with the world view
-    cg.fillStyle(0x2c2c38, 1);
     const cullR2 = (RANGE + 300) * (RANGE + 300);
     for (const b of BUILDINGS) {
       const bdx = b.x + b.w / 2 - px, bdy = b.y + b.h / 2 - py;
@@ -5079,7 +5046,7 @@ reinforceUrgency: { cadenceGain: ${ru.cadenceGain}, recognition: ${ru.recognitio
       const [rcx, rcy] = proj(bdx, bdy);
       if (rcx * rcx + rcy * rcy > (R + 20) * (R + 20)) continue;
       const hw = b.w / 2, hh = b.h / 2;
-      cg.fillStyle(b.kind === "water" ? 0x153246 : b.kind === "park" ? 0x1f3a28 : 0x2c2c38, 1);
+      cg.fillStyle(b.kind === "water" ? 0x16262f : b.kind === "park" ? 0x1f2b22 : 0x2b2a33, 1);
       const pts = [
         proj(bdx - hw, bdy - hh), proj(bdx + hw, bdy - hh),
         proj(bdx + hw, bdy + hh), proj(bdx - hw, bdy + hh),
@@ -5087,8 +5054,8 @@ reinforceUrgency: { cadenceGain: ${ru.cadenceGain}, recognition: ${ru.recognitio
       cg.fillPoints(pts, true, true);
     }
 
-    // Safehouses — same 4-corner projection as buildings but blue
-    cg.fillStyle(0x3388ff, 1);
+    // Safehouses — same 4-corner projection as buildings, in a muted steel blue
+    cg.fillStyle(0x7fa6c4, 1);
     for (const gar of GARAGES) {
       const bdx = gar.x + gar.w / 2 - px, bdy = gar.y + gar.h / 2 - py;
       if (bdx * bdx + bdy * bdy > cullR2) continue;
@@ -5104,12 +5071,12 @@ reinforceUrgency: { cadenceGain: ${ru.cadenceGain}, recognition: ${ru.recognitio
     for (const cop of this.cops) {
       const [rx, ry] = proj(cop.sprite.x - px, cop.sprite.y - py);
       if (rx * rx + ry * ry > R * R) continue;
-      cg.fillStyle(cop.aware ? 0xff2424 : 0xff7744, 1).fillCircle(cx + rx, cy + ry, 4);
+      cg.fillStyle(cop.aware ? HUD.red : 0xa8644f, 1).fillCircle(cx + rx, cy + ry, 4);
     }
     for (const cop of this.wrecks) {
       const [rx, ry] = proj(cop.sprite.x - px, cop.sprite.y - py);
       if (rx * rx + ry * ry > R * R) continue;
-      cg.fillStyle(0x555566, 1).fillCircle(cx + rx, cy + ry, 3);
+      cg.fillStyle(0x55535c, 1).fillCircle(cx + rx, cy + ry, 3);
     }
 
     // Mission target — brass diamond, clamped to the rim when out of range
@@ -5121,11 +5088,11 @@ reinforceUrgency: { cadenceGain: ${ru.cadenceGain}, recognition: ${ru.recognitio
         let mx, my;
         if (d2 <= edgeR * edgeR) { mx = cx + rx; my = cy + ry; }
         else { const d = Math.sqrt(d2); mx = cx + (rx / d) * edgeR; my = cy + (ry / d) * edgeR; }
-        cg.fillStyle(0xffd23f, 1).fillCircle(mx, my, 5);
+        this._hudDiamond(cg, mx, my, 6, true, HUD.brassHi);
       }
     }
 
-    // Overlay layer (not masked): player heading arrow + white border
+    // Overlay layer (not masked): player heading arrow + the brass frame
     const g = this.minimapGfx;
     g.clear();
     // Triangle tip points in the player's facing direction on the fixed map.
@@ -5134,79 +5101,59 @@ reinforceUrgency: { cadenceGain: ${ru.cadenceGain}, recognition: ${ru.recognitio
     const f = this.car.facing;
     const ra = f + Math.PI / 2, rc = Math.cos(ra), rs = Math.sin(ra);
     const rv = (lx, ly) => [cx + lx * rc - ly * rs, cy + lx * rs + ly * rc];
-    const [t1x, t1y] = rv(0, -7), [t2x, t2y] = rv(-5, 5), [t3x, t3y] = rv(5, 5);
-    g.fillStyle(0xffffff, 1).fillTriangle(t1x, t1y, t2x, t2y, t3x, t3y);
-    g.lineStyle(2, 0xffffff, 1).strokeCircle(cx, cy, R);
+    const arrow = [rv(0, -9), rv(6, 7), rv(0, 3), rv(-6, 7)].map(([x, y]) => ({ x, y }));
+    g.fillStyle(HUD.bone, 1).fillPoints(arrow, true);
+    g.lineStyle(1, HUD.brass, 1).strokeCircle(cx, cy, R);
   }
 
-  // colour BUILDS ON TOP of the previous one instead of refilling an empty track. Flashes
-  // "REINFORCEMENTS INCOMING" on each dispatch. `state` selects the colour phase.
+  // The pursuit, drawn on the minimap. The ARC on its outer ring is whatever clock matters now:
+  //   • chased (ACTIVE / hunting) → RED, filling toward the next pursuit level (full at max heat);
+  //   • evading (lost them, pre-ditch) → BRASS, draining as the ditch countdown runs out;
+  //   • area hot (ditched) → dim bone, draining until the cops stand down.
+  // The row above the minimap is the status word + one diamond per pursuit level (filled = reached).
+  // A dispatch flashes the ring white and shows "UNITS INBOUND".
   _drawHeatBar(state) {
     const g = this.heatGfx;
     g.clear();
-    if (!this.pursuitLevel || !this.cops.length) {
-      this.heatLabel.setAlpha(0);
-      this.reinforceText.setAlpha(0);
-      return;
-    }
-
-    const { width } = this.scale;
-    const w = 200,
-      h = 9,
-      x = (width - w) / 2,
-      y = 46;
+    const cx = this._mmCx, cy = this._mmCy, R = this._mmR;
     const P = this.pursuitLevel;
-    const frac = P.heatFraction();
-    const rising = state === PursuitState.ACTIVE;
-    const lvIdx = Math.min(P.level, 5) - 1;
-    const lvCol = GameScene.HEAT_COLORS[lvIdx];
-    const col = rising ? lvCol : 0x4a90ff; // blue while paused / bleeding
+    const live = this.cops.length > 0;
 
-    // Track border — thin outline so empty reads as background.
-    g.lineStyle(1, 0xffffff, 0.22);
-    g.strokeRect(x, y, w, h);
+    // Status row: word + level diamonds, centred as a pair over the minimap.
+    const n = P && live ? P.maxLevel : 0;
+    const tw = this.statusText.width;
+    const total = tw + (n ? 12 + (n - 1) * 15 + 8 : 0);
+    const sx = cx - total / 2, sy = this._statusY;
+    this.statusText.setPosition(sx, sy);
+    for (let i = 0; i < n; i++) this._hudDiamond(g, sx + tw + 16 + i * 15, sy, 5, i < P.level, HUD.red);
 
-    // Base layer: every already-cleared level keeps its colour across the full bar, so
-    // at level N the whole track reads as the N-1 colour and the current level's
-    // progress layers over it (the "building on top" effect).
-    if (lvIdx > 0) {
-      g.fillStyle(GameScene.HEAT_COLORS[lvIdx - 1], 0.95);
-      g.fillRect(x, y, w, h);
-    }
-
-    // Current level's progress on top of the base.
-    g.fillStyle(col, 0.95);
-    g.fillRect(x, y, w * frac, h);
-
-    // Width of the visibly-filled bar (full once a base exists, else just the fill).
-    const filledW = lvIdx > 0 ? w : w * frac;
-
-    // Reinforcement flash: white pulse over the filled bar + the warning label, fading.
     const flashT = (this._reinforceFlashUntil || 0) - this.time.now;
-    if (flashT > 0) {
-      const a = Math.min(flashT / 1400, 1);
-      g.fillStyle(0xffffff, a * 0.6);
-      g.fillRect(x, y, filledW, h);
-      this.reinforceText
-        .setPosition(width / 2, y + 18)
-        .setColor("#ff5a1a")
-        .setAlpha(a);
-    } else {
-      this.reinforceText.setAlpha(0);
-    }
+    const flash = flashT > 0 ? Math.min(flashT / 1400, 1) : 0;
+    this.reinforceText.setAlpha(flash);
+    if (!this.minimapVisible) return; // E hides the map — and the ring with it
 
-    const label = !rising
-      ? state === PursuitState.SEARCH && !this.pursuit.ditched
-        ? "HOLD"
-        : "COOLING"
-      : P.atMax()
-        ? "MAX HEAT"
-        : "HEAT";
-    this.heatLabel
-      .setText(label)
-      .setPosition(x - 8, y + h / 2)
-      .setColor(`#${col.toString(16).padStart(6, "0")}`)
-      .setAlpha(0.9);
+    const rr = R + 9;
+    g.lineStyle(7, HUD.plate, 0.85).strokeCircle(cx, cy, rr);
+    let frac = 0, col = HUD.red;
+    if (live) {
+      if (state === PursuitState.ACTIVE || this.pursuit.hunting) {
+        frac = P ? (P.atMax() ? 1 : P.heatFraction()) : 1;
+      } else if (state === PursuitState.SEARCH && !this.pursuit.ditched) {
+        frac = this.pursuit.cooldown / Math.max(0.01, this.pursuit.cooldownDuration);
+        col = HUD.brassHi;
+      } else if (state === PursuitState.SEARCH) {
+        frac = this.pursuit.hot / Math.max(0.01, this.pursuit.hotDuration);
+        col = HUD.boneDim;
+      }
+    }
+    frac = Phaser.Math.Clamp(frac, 0, 1);
+    if (frac > 0.004) {
+      g.lineStyle(5, col, 1);
+      g.beginPath();
+      g.arc(cx, cy, rr, -Math.PI / 2, -Math.PI / 2 + frac * Math.PI * 2, false);
+      g.strokePath();
+    }
+    if (flash > 0) g.lineStyle(7, 0xffffff, flash * 0.7).strokeCircle(cx, cy, rr);
   }
 
   // Dev-only deployment readout (top-right): total cops + how many are "special" (non-
@@ -5228,7 +5175,7 @@ reinforceUrgency: { cadenceGain: ${ru.cadenceGain}, recognition: ${ru.recognitio
       .join("  ");
     this.copCountText
       .setText(`${total} COPS · ${special} SPECIAL\n${breakdown}`)
-      .setPosition((this.scale.width + 200) / 2 + 14, 50) // just right of the centred heat bar
+      .setPosition(this.scale.width / 2, 96) // top centre, under the objective hint
       .setColor(special > 0 ? "#ff9e1a" : "#c8c8d4")
       .setAlpha(0.9);
   }
@@ -6630,24 +6577,8 @@ searchBurst: { on: ${t.searchBurstEnabled}, delay: ${t.searchBurstDelay}, cooldo
       this.spikeCrippleTime > 0 ? 0.55 + 0.45 * Math.abs(Math.sin(_time / 180)) : 0,
     );
 
-    // Gadget readout (bottom-left), one row per active gadget: charge gadgets show "KEY NAME ◉○"
-    // pips; cooldown gadgets show "KEY NAME ●" when ready or a "…Ns" countdown while recharging.
-    for (let i = 0; i < this.gadgetTexts.length; i++) {
-      const { def, key } = this._activeGadgets[i];
-      const t = this.gadgetTexts[i];
-      if (def.cooldown) {
-        const rem = def.cooldown(this);
-        const ready = rem <= 0.05;
-        t.setText(`${key} ${def.short} ` + (ready ? "●" : `${Math.ceil(rem)}s`)).setColor(
-          def.active(this) ? "#ffffff" : ready ? def.hudColor : "#55555c",
-        );
-      } else {
-        const cur = def.charges(this), max = def.max(this);
-        t.setText(
-          `${key} ${def.short} ` + "◉".repeat(cur) + "○".repeat(Math.max(0, max - cur)),
-        ).setColor(def.active(this) ? "#ffffff" : cur > 0 ? def.hudColor : "#55555c");
-      }
-    }
+    // Gadget tiles (bottom-left): icon + key, charge pips or a cooldown bar. See _drawGadgets.
+    this._drawGadgets();
 
     // --- Perception: a cop is AWARE of the player if it has a clear sight line
     // within range, OR the player is within close proximity (omnidirectional —
@@ -6711,8 +6642,8 @@ searchBurst: { on: ${t.searchBurstEnabled}, delay: ${t.searchBurstDelay}, cooldo
     // Garage HUD cue.
     if (!gar) this.garageText.setAlpha(0);
     else if (this._garageHidden)
-      this.garageText.setText("◼ HIDDEN").setColor("#39ff14").setAlpha(1);
-    else this.garageText.setText("◼ SEEN — MOVE").setColor("#ff5555").setAlpha(1);
+      this.garageText.setText("HIDDEN").setColor(HUD.css.bone).setAlpha(1);
+    else this.garageText.setText("SEEN — MOVE").setColor(HUD.css.red).setAlpha(1);
 
     // --- Pursuit state machine. `aware` (grace) keeps it ACTIVE through flickers;
     // only a real line of sight (`anyLOS`) moves the last-known marker, so a juke
@@ -6878,6 +6809,7 @@ searchBurst: { on: ${t.searchBurstEnabled}, delay: ${t.searchBurstDelay}, cooldo
       this._applyRejoinBand(
         cop,
         Phaser.Math.Distance.Between(cop.sprite.x, cop.sprite.y, px, py),
+        state === PursuitState.ACTIVE && anyLOS,
       );
       // Overtake speed boost: a committed overtaker gets extra top-end so it can actually
       // pass the player. Applied AFTER the rejoin band (which rewrites maxSpeed from base),
@@ -6952,7 +6884,6 @@ searchBurst: { on: ${t.searchBurstEnabled}, delay: ${t.searchBurstDelay}, cooldo
     }
     this._pmark("cops");
 
-        state === PursuitState.ACTIVE && anyLOS,
     // Custom rotated-car capsule collision: now that the player AND every cop have
     // integrated this frame, push every agent's 3-circle spine out of walls and apart
     // from each other (Arcade's AABB can't cover a rotated car). ADDITIVE to Arcade.
@@ -7045,7 +6976,12 @@ searchBurst: { on: ${t.searchBurstEnabled}, delay: ${t.searchBurstDelay}, cooldo
       this.mission.update(
         px,
         py,
-        state === PursuitState.ACTIVE,
+        {
+          active: state === PursuitState.ACTIVE,
+          // "Fully lost": the ditch cooldown has run out (or the cops have already stood down).
+          ditched: this.pursuit.ditched || state === PursuitState.RETURNING || state === PursuitState.IDLE,
+          speed: this.car.getSpeed(),
+        },
         this.bust.isBusted,
         delta / 1000,
       );
@@ -7130,27 +7066,22 @@ searchBurst: { on: ${t.searchBurstEnabled}, delay: ${t.searchBurstDelay}, cooldo
       );
     }
 
-    // --- Pursuit HUD ---
+    // --- Pursuit status word (above the minimap; the ring around it is _drawHeatBar's) ---
+    // The countdowns ride along with the word: seconds until you've ditched them, then seconds
+    // until the area cools.
     if (!this.cops.length) {
-      this.statusText.setText("FREE DRIVE").setColor("#9aa0b5");
-      this.cooldownText.setText("");
+      this.statusText.setText("FREE DRIVE").setColor(HUD.css.boneDim);
     } else if (state === PursuitState.ACTIVE || hunting) {
       // Hunting = they just lost sight and are still charging — read as pursuit.
-      const lv = this.pursuitLevel ? ` · L${this.pursuitLevel.level}` : "";
-      this.statusText.setText(`● PURSUIT${lv}`).setColor("#ff3b3b");
-      this.cooldownText.setText("");
+      this.statusText.setText("PURSUIT").setColor(HUD.css.red);
     } else if (state === PursuitState.SEARCH && !this.pursuit.ditched) {
-      this.statusText.setText("EVADING").setColor("#ffd23f");
-      this.cooldownText.setText(this.pursuit.cooldown.toFixed(1));
+      this.statusText.setText("EVADING  " + Math.ceil(this.pursuit.cooldown)).setColor(HUD.css.brassHi);
     } else if (state === PursuitState.SEARCH && this.pursuit.ditched) {
-      this.statusText.setText("AREA HOT").setColor("#ff8c1a");
-      this.cooldownText.setText(this.pursuit.hot.toFixed(0));
+      this.statusText.setText("AREA HOT  " + Math.ceil(this.pursuit.hot)).setColor(HUD.css.bone);
     } else if (state === PursuitState.RETURNING) {
-      this.statusText.setText("WITHDRAWING").setColor("#9aa0b5");
-      this.cooldownText.setText("");
+      this.statusText.setText("WITHDRAWING").setColor(HUD.css.boneDim);
     } else {
-      this.statusText.setText("CLEAR").setColor("#39ff14");
-      this.cooldownText.setText("");
+      this.statusText.setText("CLEAR").setColor(HUD.css.bone);
     }
 
     // Dev text overlay (top-left stats + controls reference).
