@@ -46,10 +46,11 @@ export class MenuScene extends Phaser.Scene {
     // Panel behind the nav — sized to hug the menu column (right edge fixed at navX+40, since
     // hover-grow scales the text about its own right-aligned origin and never moves that edge).
     // Adjust the (x, y, w, h) args below to resize/reposition it.
-    addPanel(this, GAME_WIDTH - 300, 200, 360, 322, 0.4);
+    addPanel(this, GAME_WIDTH - 300, 200, 360, 322, 0.66);
 
     addMenuItem(this, navX, 226, "CAREER", {
       size: 36,
+      idleAlpha: 0.82,
       onClick: () => this.scene.start("CareerScene"),
     });
     this.add
@@ -59,10 +60,11 @@ export class MenuScene extends Phaser.Scene {
         color: NOIR.dim,
       })
       .setOrigin(1, 0)
-      .setAlpha(0.55);
+      .setAlpha(0.85);
 
     addMenuItem(this, navX, 302, "PURSUIT MODE", {
       size: 26,
+      idleAlpha: 0.82,
       onClick: () => this._start(1, true),
     });
     this.add
@@ -72,10 +74,11 @@ export class MenuScene extends Phaser.Scene {
         color: NOIR.dim,
       })
       .setOrigin(1, 0)
-      .setAlpha(0.5);
+      .setAlpha(0.85);
 
     addMenuItem(this, navX, 372, "GARAGE", {
       size: 26,
+      idleAlpha: 0.82,
       onClick: () => this.scene.start("GarageScene"),
     });
     this.add
@@ -85,10 +88,11 @@ export class MenuScene extends Phaser.Scene {
         color: NOIR.dim,
       })
       .setOrigin(1, 0)
-      .setAlpha(0.5);
+      .setAlpha(0.85);
 
     addMenuItem(this, navX, 442, "FREE DRIVE", {
       size: 26,
+      idleAlpha: 0.82,
       onClick: () => this._start(0),
     });
 
