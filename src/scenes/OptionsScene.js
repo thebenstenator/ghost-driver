@@ -14,6 +14,11 @@ export class OptionsScene extends Phaser.Scene {
   create(data) {
     const cx = GAME_WIDTH / 2;
     addNoirBackground(this, 0.55);
+    // Overlay mode only if the scene we were launched over is REALLY sitting there paused. Phaser
+    // keeps a scene's last launch data when it is next started with none, so after one visit from
+    // the pause menu a later visit from the title would still carry returnTo — and 'back' would
+    // stop this scene and resume a game that isn't running (a black screen).
+    if (data && data.returnTo && !this.scene.isPaused(data.returnTo)) data = null;
     const back = () => {
       if (data && data.returnTo) {
         this.scene.stop();

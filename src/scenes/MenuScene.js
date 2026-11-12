@@ -94,7 +94,8 @@ export class MenuScene extends Phaser.Scene {
 
     addMenuItem(this, navX, 490, "OPTIONS", {
       size: 26,
-      onClick: () => this.scene.start("OptionsScene"),
+      idleAlpha: 0.82,
+      onClick: () => this.scene.start("OptionsScene", { returnTo: null }), // explicit: clears stale overlay data
     });
 
     // --- Dev-only: Cop Testbed (sandbox) entry, bottom-right. ---
