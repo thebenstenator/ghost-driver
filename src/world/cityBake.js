@@ -7,8 +7,11 @@
 // Nothing is saved to disk: chunks are baked lazily from the generator as the camera approaches
 // and the farthest ones are freed, so tuning the art is still "edit buildingArt.js → reload".
 //
-// Per chunk, three textures:
-//   body  (full res)  sidewalks → ONE flattened shadow layer → roofs / facades / props
+// Per chunk, four textures:
+//   ground (1/2 res)  sidewalks → ONE flattened shadow layer. Sits BELOW the headlight cones
+//                     (CarLights CONE_DEPTH 1.5), so a beam lights the shadowed street instead of
+//                     being dimmed by the shadow drawn over it.
+//   body  (full res)  roofs / facades / props — ABOVE the cones, so a building still occludes a beam
 //   glow  (1/2 res, ADD)  lit windows, signs, beacons — the upscale softens them like bloom
 //   spill (1/8 res, ADD)  light thrown on the street — the upscale IS the blur
 import Phaser from 'phaser';
@@ -20,7 +23,7 @@ const CH = 1024;        // chunk edge (world px = body texels)
 const OVERFLOW = 140;   // how far a block's art can reach past its footprint (shadows, light spill)
 const PREBAKE = 360;    // bake this far beyond the view, a chunk per frame, so driving never hitches
 const MAX_BAKED = 26;   // texture budget (~5 MB per chunk)
-const GLOW_S = 0.5, SPILL_S = 0.125, SHADOW_A = 0.55;
+const GROUND_S = 0.5, GLOW_S = 0.5, SPILL_S = 0.125, SHADOW_A = 0.55;
 
 const cl = (v) => (v < 0 ? 0 : v > 255 ? 255 : Math.round(v));
 const hex = (c) => (cl(c[0]) << 16) | (cl(c[1]) << 8) | cl(c[2]);
@@ -68,6 +71,7 @@ export class CityBake {
 
   _applyVis(ch) {
     if (!ch.body) return;
+    ch.ground.setVisible(ch.vis && this.show[0]);
     ch.body.setVisible(ch.vis && this.show[0]);
     ch.glow.setVisible(ch.vis && this.show[1]);
     ch.spill.setVisible(ch.vis && this.show[1]);
@@ -101,7 +105,7 @@ export class CityBake {
       const old = [...this.baked.values()].filter((ch) => ch.seen !== this.tick).sort((a, b) => a.seen - b.seen);
       for (const ch of old) {
         if (this.baked.size <= MAX_BAKED) break;
-        if (ch.body) { ch.body.destroy(); ch.glow.destroy(); ch.spill.destroy(); }
+        if (ch.body) { ch.ground.destroy(); ch.body.destroy(); ch.glow.destroy(); ch.spill.destroy(); }
         this.baked.delete(ch.key);
       }
     }
@@ -122,14 +126,16 @@ export class CityBake {
     };
     const pass = (rt, s, fill) => { g.clear(); fill(); g.setScale(s); rt.draw(g, -x * s, -y * s); g.setScale(1); };
 
-    ch.body = mk(1, 2, false);
-    pass(ch.body, 1, () => { for (const b of list) if (!b.garage) sidewalk(g, b); });
+    // Ground: above the road markings (depth 1), below the headlight cones (1.5).
+    ch.ground = mk(GROUND_S, 1.3, false);
+    pass(ch.ground, GROUND_S, () => { for (const b of list) if (!b.garage) sidewalk(g, b); });
     // Shadows: drawn opaque into a scratch texture, then composited at ONE alpha, so the many
     // overlapping shadow shapes never double-darken.
     tmp.clear();
-    pass(tmp, 1, () => { for (const a of arts) replay(g, a.shadow); });
+    pass(tmp, GROUND_S, () => { for (const a of arts) replay(g, a.shadow); });
     tmp.setAlpha(SHADOW_A);
-    ch.body.draw(tmp, 0, 0);
+    ch.ground.draw(tmp, 0, 0);
+    ch.body = mk(1, 2, false);
     pass(ch.body, 1, () => { for (const a of arts) replay(g, a.body); });
 
     ch.spill = mk(SPILL_S, 4.8, true);
