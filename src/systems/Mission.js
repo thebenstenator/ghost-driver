@@ -26,8 +26,30 @@ export const MissionState = {
 };
 
 // Mission registry, in career order: finishing one unlocks the next (GameScene.missionUnlocked).
+// The ids are save keys, not positions — Side Streets (m2) is the opening job because it is the
+// gentlest; The Shakedown (m1) follows.
 // `maxLevel` caps the pursuit level for the job (omit = the full 5-level curve).
 export const MISSIONS = [
+  {
+    id: 'm2',
+    name: 'SIDE STREETS',
+    job: 'Package Drop',
+    summary: 'Deliver to a back-alley drop. Lead the cops there and it is off.',
+    briefing:
+      'Simple delivery: a parcel for a man who does not exist, at an address in the\n' +
+      'Backstreets that is not on any map. One rule — you do NOT bring company.\n' +
+      'Out of sight is not good enough. Lose them completely, let the radio go\n' +
+      'quiet, and only then roll up to the drop. Arrive hot and the door stays shut.',
+    tip: 'the alleys are tight but they break line of sight fast — wait for the chase to cool right down',
+    reward: 3500,
+    maxLevel: 2,
+    steps: [
+      { poi: 'alley_drop', need: 'ditched', dwell: 2, stop: true,
+        label: 'Lose the cops completely, then reach the Alley Drop',
+        blocked: 'Lose the cops completely',
+        hold: 'Making the drop' },
+    ],
+  },
   {
     id: 'm1',
     name: 'THE SHAKEDOWN',
@@ -40,33 +62,13 @@ export const MISSIONS = [
       'you are — lose them again and make the safehouse in the Neon Mile, all the way\n' +
       'back across town, to call it a night.',
     tip: 'cut your lights (Q) while you sit on the drop — a blacked-out car is only spotted up close',
-    reward: 3500,
+    reward: 4500,
     maxLevel: 2,
     steps: [
       { poi: 'drop', need: 'unseen', dwell: 5, alert: true,
         label: 'Reach the Drop and lie low', blocked: 'Shake them before you stop', hold: 'Securing the drop' },
       { poi: 'safe_neon', need: 'unseen', dwell: 0,
         label: 'Reach the Neon Mile Garage unseen', blocked: 'Break their line of sight first' },
-    ],
-  },
-  {
-    id: 'm2',
-    name: 'SIDE STREETS',
-    job: 'Package Drop',
-    summary: 'Deliver to a back-alley drop. Lead the cops there and it is off.',
-    briefing:
-      'Simple delivery: a parcel for a man who does not exist, at an address in the\n' +
-      'Backstreets that is not on any map. One rule — you do NOT bring company.\n' +
-      'Out of sight is not good enough. Lose them completely, let the radio go\n' +
-      'quiet, and only then roll up to the drop. Arrive hot and the door stays shut.',
-    tip: 'the alleys are tight but they break line of sight fast — wait for the chase to cool right down',
-    reward: 4500,
-    maxLevel: 2,
-    steps: [
-      { poi: 'alley_drop', need: 'ditched', dwell: 2, stop: true,
-        label: 'Lose the cops completely, then reach the Alley Drop',
-        blocked: 'Lose the cops completely',
-        hold: 'Making the drop' },
     ],
   },
   {
