@@ -241,9 +241,27 @@ const node = (line, row) => ({ x: NAV_XS[line], y: NAV_YS[row] });
 export const POIS = [
   { id: 'drop', name: 'The Drop', ...node(CB2 + 12, 4), r: 80 },
   // Mission 2: a back-alley drop deep in the Backstreets (SE).
+  // Side Streets: where the parcel is collected, in the Financial district.
+  { id: 'parcel', name: 'The Pickup', ...node(CB1 + 13, HB + 6), r: 70 },
   { id: 'alley_drop', name: 'Alley Drop', ...node(CB2 + 11, HB + 12), r: 70 },
   // Mission 3: the contact waits in the Ironworks (NW) — the far corner from the Backstreet safehouse.
   { id: 'contact', name: 'The Contact', ...node(9, 11), r: 70 },
+  // Double Cross: the fallback after the docks drop is blown — deep in the Neon Mile (SW).
+  { id: 'fallback_drop', name: 'Fallback Drop', ...node(10, HB + 13), r: 70 },
+  // Borrowed Time: the injured crew member, holed up in the Backstreets (SE).
+  { id: 'patient', name: 'The Patient', ...node(CB2 + 6, HB + 6), r: 70 },
   ...SAFEHOUSES,
 ];
 export const poiById = (id) => POIS.find((p) => p.id === id) || null;
+
+// --- Mission start points ---
+// Where a job's run begins (Mission def `start`), so every job doesn't open in the same central
+// intersection. GameScene snaps each to the nearest road node.
+export const STARTS = {
+  financial:   node(CB1 + 9, HB),
+  fin_south:   node(CB1 + 9, ROWS - 6),
+  industrial:  node(9, 5),
+  neon:        node(8, HB + 9),
+  docks:       node(CB2 + 8, 9),
+  backstreets: node(CB2 + 9, HB + 8),
+};

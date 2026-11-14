@@ -144,6 +144,8 @@ export class GarageScene extends Phaser.Scene {
     this._vehTag    = text(VEH_Y - CARD_H / 2 + 20, 13, NOIR.amber);
     this._vehStatus = text(VEH_Y + CARD_H / 2 + 28, 15, NOIR.green);
     this._vehBuy = this._makeButton(cx, VEH_Y + CARD_H / 2 + 30, 260, 40, "", () => this._buyVehicle(), { size: 17 });
+    // Respray: pay to knock a tier of notoriety off the viewed car (shown only when it has any).
+    this._vehSpray = this._makeButton(cx + 130, VEH_Y + CARD_H / 2 + 30, 230, 40, "", () => this._respray(), { size: 15 });
 
     // ◀ ▶ cycle arrows either side of the card.
     for (const dir of [-1, 1]) {
@@ -178,6 +180,14 @@ export class GarageScene extends Phaser.Scene {
     }
   }
 
+  _respray() {
+    const def = VEHICLES[this._vi];
+    if (GameScene.respray(def.id)) {
+      this._refreshAll();
+      this._say(`${def.name} resprayed — the police know it a little less.`, NOIR.green);
+    }
+  }
+
   _renderVehicle() {
     const cx = GAME_WIDTH / 2;
     const def = VEHICLES[this._vi];
@@ -194,7 +204,15 @@ export class GarageScene extends Phaser.Scene {
     this._vehStats
       .setText(`Speed ${def.speed}  ·  Accel ${def.accel}  ·  Handling ${def.handling}`)
       .setAlpha(owned ? 1 : 0.6);
-    this._vehTag.setText(owned ? "" : `LOCKED  ·  ${money(def.price)}`);
+    // Notoriety: how well the police know THIS car (it follows the car, owned or loaned).
+    const heat = GameScene.getNotoriety(def.id);
+    const tier = GameScene.notorietyTier(heat);
+    const tierName = GameScene.NOTORIETY_TIERS[tier];
+    this._vehTag
+      .setText(owned ? `HEAT  ·  ${tierName}` : `LOCKED  ·  ${money(def.price)}${tier ? `  ·  ${tierName}` : ""}`)
+      .setOrigin(owned ? 0 : 0.5, 0.5) // owned: tucked in the card's corner, clear of the car
+      .setX(owned ? cx - CARD_W / 2 + 18 : cx)
+      .setColor(!owned ? NOIR.amber : tier === 0 ? NOIR.dim : tier === 1 ? NOIR.white : tier === 2 ? NOIR.amber : "#ff6a55");
 
     const g = this._vehGfx;
     g.clear();
@@ -210,8 +228,15 @@ export class GarageScene extends Phaser.Scene {
 
     if (owned) {
       this._vehBuy.setVisible(false);
-      this._vehStatus.setVisible(true).setText("✓  YOUR RIDE");
+      this._vehStatus.setVisible(true).setText("✓  YOUR RIDE").setX(heat > 0 ? cx - 130 : cx);
+      this._vehSpray.setVisible(heat > 0);
+      if (heat > 0) {
+        const price = GameScene.RESPRAY_PRICE;
+        if (price > bank) this._vehSpray.set(`RESPRAY  ·  ${money(price)}`, false);
+        else this._vehSpray.set(`RESPRAY  ·  ${money(price)}`, true);
+      }
     } else {
+      this._vehSpray.setVisible(false);
       this._vehStatus.setVisible(false);
       this._vehBuy.setVisible(true);
       const short = def.price - bank;

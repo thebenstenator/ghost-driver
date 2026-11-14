@@ -126,6 +126,8 @@ export class PursuitLevel {
   setHeat(h)    { const e = this._enter(); this.heat = Math.max(this.heatFloor, Math.min(e[this.maxLevel], h)); this._level = this._levelFromHeat(e); }
   addHeat(n)    { const e = this._enter(); this.heat = Math.min(e[this.maxLevel], this.heat + n);                this._level = this._levelFromHeat(e); }
   atMax()       { return this.heat >= this.maxHeat - 0.5; }
+  // Heat needed to BE at a level (clamped to this config's range) — for starting a chase hot.
+  enterHeat(lv) { return this._enter()[Math.max(1, Math.min(this.maxLevel, lv))]; }
 
   // Heat from ONE cop contact, given the pre-collision closing speed. A gentle bumper-ride
   // (below ramHeatThreshold) counts as nothing; a real ram lands the flat ramHeat bump, scaled

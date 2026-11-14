@@ -36,7 +36,7 @@ import {
   MARGIN,
   GRID_STEP,
 } from "../config.js";
-import { BUILDINGS, GARAGES, streetWidthV, streetWidthH } from "../world/city.js";
+import { BUILDINGS, GARAGES, STARTS, streetWidthV, streetWidthH } from "../world/city.js";
 import { GROUND_COLOR, drawPuddles } from "../world/cityRender.js";
 import { CityBake } from "../world/cityBake.js";
 import { Mission, MISSIONS, missionById } from "../systems/Mission.js";
@@ -166,11 +166,76 @@ export class GameScene extends Phaser.Scene {
     return true;
   }
 
+  // ── Notoriety: how well the cops know each CAR (0..1), keyed by vehicle id ──
+  // The CHASE is what makes a car known: a mission run banks notoriety onto the car for being made,
+  // for each pursuit level the chase reached and for time spent actively chased — capped by the
+  // highest level reached, so a long level-2 chase can't max a car out but a level-5 one nearly
+  // will. It's banked win OR lose (and on quitting/restarting a run — no dodging it). A finished job
+  // the police saw adds a small bonus on top; a job finished without ever being made adds nothing.
+  // Every completed job cools all the OTHER cars a little. A respray knocks a full tier off, for
+  // cash. In a run notoriety sets how fast a patrol places you, how hard the chase opens, and how
+  // fast backup is called.
+  static NOTORIETY_KEY = "gd_notoriety";
+  static NOTORIETY_TIERS = ["CLEAN", "KNOWN", "WANTED", "NOTORIOUS", "LEGENDARY"];
+  static NOTORIETY_MADE = 0.05;  // being made at all
+  // Credit for REACHING each pursuit level (index = level; cumulative: L2 .10, L3 .22, L4 .37, L5 .57)
+  static NOTORIETY_LEVEL = [0, 0, 0.1, 0.12, 0.15, 0.2];
+  static NOTORIETY_PER_MIN = 0.05; // per minute of ACTIVE pursuit
+  // Most one run can add, by the highest level the chase reached (index = level)
+  static NOTORIETY_CAP = [0, 0.12, 0.25, 0.4, 0.6, 0.85];
+  static NOTORIETY_JOB = 0.05;   // finishing a job the police saw (a Mission def's 'notoriety' overrides)
+  static NOTORIETY_COOL = 0.06;  // what every other car sheds each time a job is completed
+  static RESPRAY_PRICE = 2500;   // garage: one tier (0.25) off the viewed car
+  static getNotorietyAll() {
+    try {
+      const o = JSON.parse(localStorage.getItem(GameScene.NOTORIETY_KEY) || "{}");
+      return o && typeof o === "object" && !Array.isArray(o) ? o : {};
+    } catch (e) {
+      return {};
+    }
+  }
+  static getNotoriety(id) {
+    const n = Number(GameScene.getNotorietyAll()[id]);
+    return Number.isFinite(n) ? Phaser.Math.Clamp(n, 0, 1) : 0;
+  }
+  // 0 Clean (<0.25) · 1 Known · 2 Wanted · 3 Notorious · 4 Legendary (1.0)
+  static notorietyTier(n) {
+    return Math.min(4, Math.floor(n * 4 + 1e-6));
+  }
+  static _saveNotoriety(map) {
+    try {
+      localStorage.setItem(GameScene.NOTORIETY_KEY, JSON.stringify(map));
+    } catch (e) {
+      /* ignore */
+    }
+  }
+  // Add notoriety to car 'id' (cool = a job was completed: every OTHER car cools off).
+  // Returns { before, after } for that car.
+  static addNotoriety(id, amount, cool = false) {
+    const map = GameScene.getNotorietyAll();
+    const before = GameScene.getNotoriety(id);
+    if (cool)
+      for (const k of Object.keys(map))
+        if (k !== id) map[k] = Math.max(0, (Number(map[k]) || 0) - GameScene.NOTORIETY_COOL);
+    const after = Phaser.Math.Clamp(before + amount, 0, 1);
+    map[id] = after;
+    GameScene._saveNotoriety(map);
+    return { before, after };
+  }
+  // Pay for a respray: one tier off. Returns true on success.
+  static respray(id) {
+    const n = GameScene.getNotoriety(id);
+    if (n <= 0 || !GameScene.spendBank(GameScene.RESPRAY_PRICE)) return false;
+    GameScene._saveNotoriety({ ...GameScene.getNotorietyAll(), [id]: Math.max(0, n - 0.25) });
+    return true;
+  }
+
   // Wipe all progress (bank, owned gadgets/vehicles, upgrades, loadout, car, missions). Dev tool.
   static resetProgress() {
     try {
       for (const k of [GameScene.BANK_KEY, GameScene.OWNED_KEY, GameScene.OWNED_VEHICLES_KEY,
-        GameScene.UPGRADES_KEY, GameScene.LOADOUT_KEY, GameScene.VEHICLE_KEY, GameScene.MISSIONS_KEY])
+        GameScene.UPGRADES_KEY, GameScene.LOADOUT_KEY, GameScene.VEHICLE_KEY, GameScene.MISSIONS_KEY,
+        GameScene.NOTORIETY_KEY])
         localStorage.removeItem(k);
     } catch (e) {
       /* ignore */
@@ -310,8 +375,14 @@ export class GameScene extends Phaser.Scene {
     // district superblock now that the map isn't a uniform grid).
     this.navGrid = new NavGrid();
     this._buildWorld();
-    const spawn = this.navGrid.pos(this.navGrid.nearestNode(WORLD_WIDTH / 2, WORLD_HEIGHT / 2));
-    this._vehicleStats = vehicleById(GameScene.getVehicle()).stats;
+    // A mission picks where the run starts (each job opens somewhere different) and may REQUIRE a
+    // car — a loaner, driven for this job whether or not you own it. Otherwise: the world centre and
+    // your garage pick.
+    const job = this.missionId ? missionById(this.missionId) : null;
+    const startAt = (job && STARTS[job.start]) || { x: WORLD_WIDTH / 2, y: WORLD_HEIGHT / 2 };
+    const spawn = this.navGrid.pos(this.navGrid.nearestNode(startAt.x, startAt.y));
+    this._vehicleId = (job && job.vehicle) || GameScene.getVehicle();
+    this._vehicleStats = vehicleById(this._vehicleId).stats;
     this.car = new PlayerCar(this, spawn.x, spawn.y, this._vehicleStats);
     this.worldLayer.add(this.car.sprite);
     // Shared light-tuning multipliers (brightness/size), adjusted live in the car panel.
@@ -674,6 +745,25 @@ export class GameScene extends Phaser.Scene {
     this.respawnFrontCone = 0.45; // rad half-angle around YOUR direction of travel where no flank
     // unit may be placed: never dead ahead on your road, but ahead-and-to-the-side (oncoming from a
     // cross/parallel street) is allowed. Only applies while you're moving. 0 = no restriction.
+    this.swapTime = 1.1;   // s from parking to sitting in the other car (the lights sequence)
+    // Cold streets (missions): patrols cruise the city and have to NOTICE you. See _updateSuspicion.
+    this.legalSpeed = 190;          // px/s — the speed limit: at or under it you draw no extra attention
+    this.recklessSpeed = 450;       // px/s — this fast in a patrol's sight and you're made on the spot
+    this.suspicionTimeClean = 6;    // s in plain sight, at the limit, for a patrol to place a CLEAN car
+    this.suspicionTimeHot = 0.35;   // s for a LEGENDARY one (on sight)
+    this.suspicionSpeedGain = 5;    // suspicion builds up to (1 + this)× faster as you near recklessSpeed
+    this.suspicionDecay = 0.2;      // /s the meter drains while no patrol can see you
+    this.suspicionStealthWeight = 0.3; // how much the car's own conspicuousness (Stealth stat) counts
+    this.madeNotoriety = 0.85;      // once chased in a run, patrols know the car at least this well
+    this.patrolCount = 4;           // cruisers kept on the streets around you while it's quiet
+    this.patrolCruise = 170;        // px/s patrol pace
+    this.patrolRingMin = 1300;      // patrols are seeded this far out (off-camera)…
+    this.patrolRingMax = 2300;      // …to this far
+    this.patrolCull = 3000;         // one that wanders past this is moved back into the ring
+    this.returnPatrolDelay = 4;     // s of WITHDRAWING before the cops go back to routine patrol
+    this.cruiseBrake = 320;         // px/s² the limiter eases you down to legalSpeed
+    this.suspicion = 0;             // 0..1 — full = a patrol has made you, the chase is on
+    this.cruise = false;            // TAB: hold the car to legalSpeed
     this.hintShowTime = 6; // s the objective line stays up when a mission step begins
     this.passengerAccelMult = 0.88; // mission passenger: acceleration × while they're aboard
     this.passengerTurnMult = 0.92;  // …and turn rate × (the "extra weight")
@@ -843,10 +933,12 @@ export class GameScene extends Phaser.Scene {
     this.pursuitLevel = this.pursuitMode ? new PursuitLevel(levelCfg) : null;
     // Notoriety from the selected car: heatRate scales how fast a chase ESCALATES (heat);
     // stealth (1-5 → 0..1 notoriety) scales how fast cops CALL IN reinforcements.
-    if (this.pursuitLevel) {
-      this.pursuitLevel.heatRate  = this._vehicleStats.heatRate ?? 1;
-      this.pursuitLevel.notoriety = (5 - (this._vehicleStats.stealth ?? 3)) / 4;
-    }
+    // A mission runs on COLD streets: patrols cruise and must notice you (suspicion) before any
+    // chase. 'opening: hot' on the Mission def keeps the old start — a cop already on your tail.
+    this._coldWorld = !!mDef;
+    this._coldOpen = !!mDef && mDef.opening !== "hot";
+    if (mDef && mDef.patrols != null) this.patrolCount = mDef.patrols;
+    this._setVehicleNotoriety();
     // Seed the timer with the cold-start recognition delay so the first reinforcement
     // reflects the car + starting heat (a stealthy cold car gets a routine-stop beat; a
     // notorious/hot one is called in fast). 0 would dispatch on frame 1 → "started with 2".
@@ -998,7 +1090,10 @@ export class GameScene extends Phaser.Scene {
 
     // Tear down the DOM tuning panels when the scene restarts / returns to menu,
     // otherwise they stack up duplicates on every R / menu cycle.
+    this._resetRunHeat();
+    // Leaving a mission run early (restart / quit) still banks what the chase cost the car.
     this.events.once("shutdown", () => {
+      if (this.mission && !this.mission.isOver) this._bankRunNotoriety(false);
       if (this.gui) this.gui.destroy();
       if (this.gadgetGui) this.gadgetGui.destroy();
       if (this.screenFxGui) this.screenFxGui.destroy();
@@ -1013,7 +1108,10 @@ export class GameScene extends Phaser.Scene {
     // Start paused on first load; launching from the menu (autostart) plays now. A mission instead
     // opens on its briefing card (frozen) regardless of autostart — the chase begins on dismiss.
     this.paused = false;
-    if (this.mission) this._showBriefing();
+    if (this.mission) {
+      this._spawnSwapCars();
+      this._showBriefing();
+    }
     else if (!this._autostart) this._togglePause();
   }
 
@@ -1025,6 +1123,7 @@ export class GameScene extends Phaser.Scene {
     this.briefingText
       .setText(
         `${this.mission.def.name}\n\n${this.mission.def.briefing}\n\n` +
+          this._carLine() + "\n\n" +
           (this.mission.def.tip ? `TIP: ${this.mission.def.tip}\n\n` : "") +
           `[ SPACE to roll out ]`,
       )
@@ -1036,8 +1135,161 @@ export class GameScene extends Phaser.Scene {
     this._inBriefing = false;
     this.briefingText.setAlpha(0);
     this.physics.resume();
-    this._beginChase(); // cops "already coming"
+    if (this._coldOpen) this._beginCold(); // quiet streets, patrols out
+    else this._beginChase(); // cops "already coming"
     this.mission.begin(); // BRIEFING → first step
+  }
+
+  // ── Mission car swap ─────────────────────────────────────────────────────────
+  // A mission step with `swap` puts that car in the step's safehouse garage, dark, parked against the
+  // left wall and facing the door. When you park inside unseen the step completes and _startSwap
+  // runs a short scripted beat: your lights go out, the waiting car's lights flash on, and you are
+  // in it — your old car stays behind as a parked prop. The cops are alerted by the step itself.
+  _spawnSwapCars() {
+    this._swapCars = {}; // vehicle id → the waiting prop
+    this._swap = null;   // the running switch: { id, t, done }
+    // The headlight cones render under the garage floor, so the "lights come on" beat gets its own
+    // glow drawn above it: two lamps and a short wash of light in front of the waiting car.
+    this.swapGfx = this.add.graphics().setDepth(11).setBlendMode(Phaser.BlendModes.ADD);
+    this.worldLayer.add(this.swapGfx);
+    for (const step of this.mission.steps) {
+      if (!step.swap || !step.target) continue;
+      const gar = this._garageAt(step.target.x, step.target.y);
+      if (!gar) continue;
+      const st = vehicleById(step.swap).stats;
+      const x = gar.interior.x + 42, y = gar.interior.centerY - 8;
+      const prop = this._makeCarObstacle(x, y, Math.PI, this._propSpec(st, 8), 0x39ff14); // nose to the door (south)
+      prop.swapCar = true;
+      prop.parked = true;
+      // Head + tail lights on the prop, dark until the switch (same adapter the civilians use).
+      const lightV = { sprite: prop.body, lightHalfLen: st.lightHalfLen ?? st.displayHeight / 2,
+                       lightHalfWid: st.lightHalfWid ?? st.displayWidth / 2, lightsOff: true,
+                       get facing() { return prop.img.rotation - Math.PI / 2; } };
+      prop.lightV = lightV;
+      prop.lights = new CarLights(this, lightV, "player", this.worldLayer, this.lightTuning);
+      this._civLit.add(prop); // the civ-light sweep updates it and cleans it up with the body
+      this.parkedCars.push(prop);
+      this._swapCars[step.swap] = prop;
+    }
+  }
+
+  // A car-obstacle spec (see _makeCarObstacle) that looks and collides like the given vehicle.
+  _propSpec(st, mass) {
+    return { tex: st.texture, visW: st.displayWidth, visL: st.displayHeight, body: 24,
+             capR: st.capR, capHalfLen: st.capHalfLen, mass, health: 1e9 };
+  }
+
+  _startSwap(vehicleId) {
+    if (!this._swapCars || !this._swapCars[vehicleId]) return;
+    this._swap = { id: vehicleId, t: 0, done: false };
+    this.car.vx = this.car.vy = 0;
+    this.car.sprite.body.setVelocity(0, 0);
+  }
+
+  // The switch, ~1.3s: your lights die, the waiting car blinks awake twice, then you're in it and
+  // control comes back. Input is held off while this._swap is set (see the controls in update()).
+  _updateSwap(dt) {
+    const sw = this._swap;
+    if (!sw) return;
+    sw.t += dt;
+    const prop = this._swapCars[sw.id];
+    if (!sw.done) {
+      this.car.lightsOff = true; // (kill-lights isn't toggled — this is just the lamps going out)
+      const lit = (sw.t > 0.3 && sw.t < 0.5) || sw.t > 0.7; // blink, blink, on
+      prop.lightV.lightsOff = !lit;
+      this._drawSwapGlow(lit, prop.body.x, prop.body.y, prop.img.rotation - Math.PI / 2, prop.lightV);
+      if (sw.t >= this.swapTime) {
+        this._swapInto(sw.id, prop);
+        sw.done = true;
+      }
+    } else if (sw.t >= this.swapTime + 0.5) {
+      this.swapGfx.clear();
+      this._swap = null;
+    } else {
+      // You're in it now — hold the glow a beat, fading, as control comes back.
+      const car = this.car, k = 1 - (sw.t - this.swapTime) / 0.5;
+      this._drawSwapGlow(true, car.sprite.x, car.sprite.y, car.facing, car, k);
+    }
+  }
+
+  // Lamps + a short wash of light ahead of a car at (x, y) heading `f`. `v` supplies the lamp
+  // geometry (lightHalfLen / lightHalfWid).
+  _drawSwapGlow(on, x, y, f, v, k = 1) {
+    const g = this.swapGfx;
+    g.clear();
+    if (!on) return;
+    const hl = (v.lightHalfLen ?? 30) - 3, hw = (v.lightHalfWid ?? 13) - 4;
+    const c = Math.cos(f), s = Math.sin(f);
+    const P = (fwd, side) => ({ x: x + c * fwd - s * side, y: y + s * fwd + c * side });
+    g.fillStyle(0xfff3d6, 0.16 * k).fillPoints([P(hl, -hw), P(hl, hw), P(hl + 78, hw + 26), P(hl + 78, -hw - 26)], true);
+    for (const side of [-hw, hw]) {
+      const p = P(hl, side);
+      g.fillStyle(0xfff3d6, 0.35 * k).fillCircle(p.x, p.y, 9);
+      g.fillStyle(0xffffff, 0.95 * k).fillCircle(p.x, p.y, 4);
+    }
+  }
+
+  // Become the other car: the player object takes on its stats, sprite and position; the car you
+  // arrived in is left where it stood as an inert parked prop.
+  _swapInto(vehicleId, prop) {
+    // The car you arrived in keeps what this run cost it; the new car's account starts here.
+    this._bankRunNotoriety(false);
+    this._resetRunHeat();
+    const car = this.car, st = vehicleById(vehicleId).stats, old = this._vehicleStats;
+    // Leave the old car behind.
+    const left = this._makeCarObstacle(car.sprite.x, car.sprite.y, car.facing + Math.PI / 2, this._propSpec(old, 3), 0x39ff14);
+    left.parked = true;
+    this.parkedCars.push(left);
+    // Every handling stat exactly as a fresh car of that type would have it: build a throwaway one
+    // and copy its tunables over (so nothing from the old car's stat file lingers).
+    const fresh = new PlayerCar(this, -500, -500, st);
+    for (const k of Object.keys(fresh)) {
+      const v = fresh[k];
+      if (k.startsWith("_") || k === "facing" || k === "vx" || k === "vy" || k === "driftAngle") continue;
+      if (typeof v === "number" || typeof v === "boolean") car[k] = v;
+    }
+    fresh.sprite.destroy();
+    car.sprite.setTexture(st.texture).setDisplaySize(st.displayWidth, st.displayHeight);
+    car.sprite.body.setSize(st.bodySize, st.bodySize);
+    // Take the waiting car's place and heading; it goes away.
+    const px = prop.body.x, py = prop.body.y;
+    car.facing = prop.img.rotation - Math.PI / 2;
+    this.parkedCars = this.parkedCars.filter((c) => c !== prop);
+    prop.body.destroy(); // (its lights are swept up by _updateCivLights)
+    prop.img.destroy();
+    delete this._swapCars[vehicleId];
+    car.sprite.body.reset(px, py);
+    car.vx = car.vy = 0;
+    car.sprite.setRotation(car.facing + Math.PI / 2 + (car.textureRotation || 0));
+    // Scene-side per-vehicle state.
+    this._vehicleId = vehicleId;
+    this._vehicleStats = st;
+    this.playerCapHalfLen = st.capHalfLen;
+    this.playerCapR = st.capR;
+    this.playerCapOffset = st.capOffset ?? 0;
+    this.playerMass = st.mass;
+    this.playerMaxSpeed = st.maxSpeed;
+    car.maxHealth = st.health ?? 100;
+    car.health = car.maxHealth; // a fresh car
+    this._setVehicleNotoriety();
+    car.lights.destroy();
+    car.lights = new CarLights(this, car, "player", this.worldLayer, this.lightTuning);
+    car.lightsOff = false;
+  }
+
+  // Mission limits (Mission def `limits`), in force once the passenger is aboard: a hard top-speed
+  // cap, and the job fails if the car's health drops under the allowed fraction.
+  _applyMissionLimits() {
+    const m = this.mission, lim = m.def.limits;
+    if (!lim || !m.passenger || m.isOver) return;
+    if (lim.speedCap && !this._limitCapped) {
+      this._limitCapped = true;
+      this.car.maxSpeed = Math.min(this.car.maxSpeed, lim.speedCap);
+      this.playerMaxSpeed = this.car.maxSpeed; // the cop speed bands anchor to your REAL top speed
+    }
+    if (lim.minHealth && this.playerHealthEnabled && this.car.maxHealth > 0 &&
+        this.car.health / this.car.maxHealth < lim.minHealth)
+      m.fail(lim.reason);
   }
 
   // Mission ended (win or lose): freeze the run (reuse the bust freeze + R/M handlers) and show the
@@ -1050,10 +1302,12 @@ export class GameScene extends Phaser.Scene {
       // First completion opens the next job in the career list.
       const first = GameScene.completeMission(this.missionId);
       const next = MISSIONS[MISSIONS.findIndex((m) => m.id === this.missionId) + 1];
+      const heatLine = this._bankRunNotoriety(true);
       this.resultText
         .setText(
           `MISSION COMPLETE\n\n+ $${this.mission.reward.toLocaleString()}\n` +
             `BANK  $${total.toLocaleString()}\n` +
+            heatLine +
             (first && next ? `NEW JOB: ${next.name}\n` : "") +
             `\npress R to run again   ·   M for jobs`,
         )
@@ -1061,7 +1315,8 @@ export class GameScene extends Phaser.Scene {
         .setAlpha(1);
     } else {
       this.resultText
-        .setText("BUSTED\nMISSION FAILED\n\npress R to retry   ·   M for jobs")
+        .setText((this.mission.failReason || "BUSTED") + "\nMISSION FAILED\n\n" + this._bankRunNotoriety(false) +
+          "\npress R to retry   ·   M for jobs")
         .setColor(HUD.css.red)
         .setAlpha(1);
     }
@@ -1103,8 +1358,8 @@ export class GameScene extends Phaser.Scene {
   // pursuit ("cops already coming"). Called immediately for non-mission runs, or on briefing
   // dismissal for a mission. Idempotent-ish — only meaningful once per run.
   _beginChase() {
-    const cx = WORLD_WIDTH / 2,
-      cy = WORLD_HEIGHT / 2;
+    const cx = this.car.sprite.x,
+      cy = this.car.sprite.y;
     const spawnPts = [
       { x: cx, y: cy + 504 }, // south (the Pursuit-Mode lone cop)
       { x: cx - 504, y: cy }, // west
@@ -1135,6 +1390,242 @@ export class GameScene extends Phaser.Scene {
     }
     if (this.cops.length)
       this.pursuit.begin(this.car.sprite.x, this.car.sprite.y);
+  }
+
+  // ── Cold streets: patrols, suspicion, notoriety ─────────────────────────────
+  // In a mission the city is QUIET until someone makes you. Patrol cars cruise the road network
+  // (pursuit IDLE) with their emergency bars dark; one that has you in sight builds SUSPICION,
+  // and when the meter fills the chase starts for real. How fast it fills is the car's notoriety
+  // and how you're driving — see _updateSuspicion. Patrols are ordinary cops in this.cops; all
+  // that's different is the TARGET they're handed while it's quiet (_patrolTarget: a road node,
+  // routed by the nav graph like any blind goal — never the player).
+
+  // The car's standing with the police, pushed into the pursuit brain. Earned notoriety counts
+  // in missions only (Pursuit Mode is a clean-slate arcade run).
+  _setVehicleNotoriety() {
+    const st = this._vehicleStats;
+    this._conspicuous = (5 - (st.stealth ?? 3)) / 4;
+    this._earnedNotoriety = this.missionId ? GameScene.getNotoriety(this._vehicleId) : 0;
+    if (this.pursuitLevel) {
+      this.pursuitLevel.heatRate = st.heatRate ?? 1;
+      this.pursuitLevel.notoriety = Phaser.Math.Clamp(this._conspicuous + this._earnedNotoriety, 0, 1);
+    }
+  }
+
+  // Briefing line: the car you're in and how hot it is.
+  _carLine() {
+    const tier = GameScene.NOTORIETY_TIERS[GameScene.notorietyTier(this._earnedNotoriety || 0)];
+    return vehicleById(this._vehicleId).name.toUpperCase() + "  ·  " + tier;
+  }
+
+  // Quiet start: no chase, just the patrols out on the streets around you.
+  _beginCold() {
+    const px = this.car.sprite.x, py = this.car.sprite.y;
+    for (let i = 0; i < this.patrolCount; i++) {
+      const spot = this._patrolSpot(px, py);
+      if (spot) this._seedPatrol(this._spawnCop(spot.x, spot.y, "patrol"), spot, px, py);
+    }
+  }
+
+  // A road node in the patrol ring around the player: off-camera, clear of other cops.
+  _patrolSpot(px, py) {
+    const g = this.navGrid;
+    for (let i = 0; i < 16; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const d = Phaser.Math.Linear(this.patrolRingMin, this.patrolRingMax, Math.random());
+      const n = g.nearestNode(
+        Phaser.Math.Clamp(px + Math.cos(a) * d, 120, WORLD_WIDTH - 120),
+        Phaser.Math.Clamp(py + Math.sin(a) * d, 120, WORLD_HEIGHT - 120),
+      );
+      const p = g.pos(n);
+      if (Math.hypot(p.x - px, p.y - py) < this.patrolRingMin * 0.85) continue;
+      if (!this._offCamera(p.x, p.y, 250)) continue;
+      if (!(g.nbr[n] || []).length) continue;
+      if (this.cops.some((c) => Math.hypot(c.sprite.x - p.x, c.sprite.y - p.y) < 700)) continue;
+      return { node: n, x: p.x, y: p.y };
+    }
+    return null;
+  }
+
+  // Put a cop on patrol at a spot, already rolling down one of the streets that leave it.
+  _seedPatrol(cop, spot, px, py) {
+    const g = this.navGrid;
+    const nbrs = g.nbr[spot.node];
+    const nb = nbrs[Math.floor(Math.random() * nbrs.length)];
+    const q = g.pos(nb);
+    this._placeCop(cop, spot.x, spot.y, px, py, Math.atan2(q.y - spot.y, q.x - spot.x));
+    cop._spawnEase = false; // the ease is for a cop joining a chase
+    cop._patrolNode = nb;
+    cop._patrolUntil = this.time.now + 14000;
+    cop.flashersOff = true;
+    cop.aware = cop.hasLOS = false;
+    cop.awareTimer = 0;
+  }
+
+  // Keep patrolCount cruisers around the player while it's quiet — like the civilian traffic, the
+  // city is too big to simulate everywhere. One change per half second, always off-camera: retire
+  // a spare, add a missing one, or bring back one that has wandered out of the ring.
+  _updatePatrols(dt, px, py) {
+    this._patrolTick = (this._patrolTick || 0) - dt;
+    if (this._patrolTick > 0) return;
+    this._patrolTick = 0.5;
+    let far = null, fd = -1;
+    for (const c of this.cops) {
+      const d = Math.hypot(c.sprite.x - px, c.sprite.y - py);
+      if (d > fd) { fd = d; far = c; }
+    }
+    const farHidden = far && this._offCamera(far.sprite.x, far.sprite.y, 150);
+    if (this.cops.length > this.patrolCount) {
+      if (farHidden) this._retireFarthestCop();
+    } else if (this.cops.length < this.patrolCount) {
+      const spot = this._patrolSpot(px, py);
+      if (spot) this._seedPatrol(this._spawnCop(spot.x, spot.y, "patrol"), spot, px, py);
+    } else if (farHidden && fd > this.patrolCull) {
+      const spot = this._patrolSpot(px, py);
+      if (spot) this._seedPatrol(far, spot, px, py);
+    }
+  }
+
+  // Where a patrolling cop is headed: a road node a few blocks on. It commits to the node until it
+  // gets there (or 14s pass — a stall), then picks the next leg from the streets leaving that
+  // intersection: mostly straight on, sometimes a turn, almost never back the way it came. A GOAL
+  // for the nav graph, so the cop drives the roads to it.
+  _patrolTarget(cop) {
+    const g = this.navGrid, now = this.time.now;
+    if (cop._patrolNode != null) {
+      const p = g.pos(cop._patrolNode);
+      if (Math.hypot(cop.sprite.x - p.x, cop.sprite.y - p.y) > 130 && now < (cop._patrolUntil || 0)) return p;
+    }
+    const cur = g.nearestNode(cop.sprite.x, cop.sprite.y);
+    const c0 = g.pos(cur);
+    const nbrs = g.nbr[cur] || [];
+    if (!nbrs.length) return c0;
+    const fx = Math.cos(cop.facing), fy = Math.sin(cop.facing);
+    let total = 0;
+    const w = nbrs.map((nb) => {
+      const p = g.pos(nb);
+      const dot = ((p.x - c0.x) * fx + (p.y - c0.y) * fy) / (Math.hypot(p.x - c0.x, p.y - c0.y) || 1);
+      const wt = dot > 0.5 ? 3 : dot > -0.5 ? 2 : 0.15;
+      total += wt;
+      return wt;
+    });
+    let r = Math.random() * total, pick = nbrs[0];
+    for (let i = 0; i < nbrs.length; i++) {
+      r -= w[i];
+      if (r <= 0) { pick = nbrs[i]; break; }
+    }
+    // Run on down the same street for up to two more blocks, so it isn't re-deciding every corner.
+    let prev = cur, node = pick;
+    const hops = 1 + Math.floor(Math.random() * 3);
+    for (let h = 1; h < hops; h++) {
+      const a = g.pos(prev), b = g.pos(node);
+      const dx = b.x - a.x, dy = b.y - a.y, L = Math.hypot(dx, dy) || 1;
+      const next = (g.nbr[node] || []).find((nb) => {
+        const q = g.pos(nb);
+        return ((q.x - b.x) * dx + (q.y - b.y) * dy) / (L * (Math.hypot(q.x - b.x, q.y - b.y) || 1)) > 0.9;
+      });
+      if (next == null) break;
+      prev = node;
+      node = next;
+    }
+    cop._patrolNode = node;
+    cop._patrolUntil = now + 14000;
+    return g.pos(node);
+  }
+
+  // How well the patrols know this car right now (0..1), for the suspicion clock: what the car has
+  // earned, plus a share of how conspicuous the model is. Once you've been chased in this run they
+  // have the description — at least madeNotoriety from then on.
+  _suspicionNotoriety() {
+    const n = Phaser.Math.Clamp(
+      (this._earnedNotoriety || 0) + this.suspicionStealthWeight * (this._conspicuous || 0), 0, 1);
+    return this._madeThisRun ? Math.max(n, this.madeNotoriety) : n;
+  }
+
+  // Suspicion (quiet streets only). While a patrol has you in sight the meter fills; out of sight
+  // it drains. Full = made → the chase starts (returns true). The fill time runs from
+  // suspicionTimeClean (a clean car, at the limit) down to suspicionTimeHot (a legendary one);
+  // speeding multiplies it, a closer patrol reads you faster, and at recklessSpeed — or if you ram
+  // one — you're made on the spot. So driving at the limit buys TIME in front of a patrol; it never
+  // makes you invisible, and it buys less every job the car gets hotter.
+  _updateSuspicion(dt, seen, dist, sight) {
+    if (this._forceMade) this.suspicion = 1;
+    else if (!seen) this.suspicion = Math.max(0, this.suspicion - this.suspicionDecay * dt);
+    else {
+      const speed = this.car.getSpeed();
+      if (speed >= this.recklessSpeed) this.suspicion = 1;
+      else {
+        const T = Phaser.Math.Linear(this.suspicionTimeClean, this.suspicionTimeHot, this._suspicionNotoriety());
+        const over = Phaser.Math.Clamp(
+          (speed - this.legalSpeed) / Math.max(1, this.recklessSpeed - this.legalSpeed), 0, 1);
+        const near = 1.5 - Phaser.Math.Clamp(dist / Math.max(1, sight), 0, 1); // 1.5× close, 0.5× at the edge
+        this.suspicion = Math.min(1, this.suspicion + ((1 + this.suspicionSpeedGain * over) * near * dt) / T);
+      }
+    }
+    return this.suspicion >= 1;
+  }
+
+  // ── Run notoriety: what this run's chase is costing the car ──
+  // Tracked per CAR (a swap banks the old car's share first): made?, peak level, active seconds.
+  _resetRunHeat() {
+    this._run = { made: false, peak: 0, active: 0, banked: false };
+  }
+
+  // Each frame of a mission run: once they're after you (chasing OR searching) the run is made and
+  // the peak level counts; only ACTIVE pursuit (eyes on you) adds time.
+  _trackRunHeat(state, dt) {
+    const r = this._run;
+    if (!r || !this.missionId) return;
+    if (state !== PursuitState.ACTIVE && state !== PursuitState.SEARCH) return;
+    r.made = true;
+    if (state === PursuitState.ACTIVE) r.active += dt;
+    if (this.pursuitLevel) r.peak = Math.max(r.peak, this.pursuitLevel.level);
+  }
+
+  // What this run has earned so far (before the completion bonus), capped by the peak level.
+  _runHeatGain() {
+    const r = this._run, G = GameScene;
+    if (!r || !r.made) return 0;
+    const peak = Math.max(1, r.peak);
+    let g = G.NOTORIETY_MADE + G.NOTORIETY_PER_MIN * (r.active / 60);
+    for (let lv = 2; lv <= peak; lv++) g += G.NOTORIETY_LEVEL[lv] || 0;
+    return Math.min(g, G.NOTORIETY_CAP[Math.min(5, peak)]);
+  }
+
+  // Bank the run's notoriety onto the current car (once). won adds the completion bonus — only if
+  // the police saw the job — and cools the other cars. Returns the result-screen line.
+  _bankRunNotoriety(won) {
+    const r = this._run;
+    if (!this.missionId || !r || r.banked) return "";
+    r.banked = true;
+    const gain = this._runHeatGain() + (won && r.made ? this.mission.def.notoriety ?? GameScene.NOTORIETY_JOB : 0);
+    const heat = GameScene.addNotoriety(this._vehicleId, gain, won);
+    const T = GameScene.NOTORIETY_TIERS;
+    const t0 = GameScene.notorietyTier(heat.before), t1 = GameScene.notorietyTier(heat.after);
+    const m = Math.floor(r.active / 60), s = Math.floor(r.active % 60);
+    const why = r.made
+      ? "made  ·  level " + Math.max(1, r.peak) + "  ·  " + m + ":" + String(s).padStart(2, "0") + " in pursuit"
+      : "never made — a clean job";
+    return vehicleById(this._vehicleId).name.toUpperCase() + "  ·  " +
+      (t1 > t0 ? T[t0] + " → " + T[t1] : T[t1]) + "\n" + why + "\n";
+  }
+
+  // A chase just began (made by a patrol, a mission alert, or a hot opening). A car the police
+  // already want starts further up the ladder: Wanted opens at level 2, Notorious 3, Legendary 4
+  // (within the job's level cap). Heat is the truth — the level follows from it.
+  _onChaseStart() {
+    this.suspicion = 0;
+    this._forceMade = false;
+    this._madeThisRun = true;
+    this._returnT = 0;
+    this.cruise = false; // foot down — the limiter comes off
+    this._cruiseLimit = null;
+    const P = this.pursuitLevel;
+    if (P && this.mission) {
+      const tier = GameScene.notorietyTier(this._earnedNotoriety || 0);
+      if (tier >= 2) P.setHeat(Math.max(P.getHeat(), P.enterHeat(tier)));
+      this._applyLevelTuning();
+    }
   }
 
   _spawnCop(x, y, unitType = "patrol") {
@@ -1727,7 +2218,9 @@ export class GameScene extends Phaser.Scene {
       this._reinforceTimer = P.reinforceEvery();
     }
     // Bled down a level: retire the extra cop(s) — they peel off the chase.
-    if (dLevel < 0) while (this.cops.length > cap) this._retireFarthestCop();
+    // (Not while it's quiet in a mission — those are the street patrols, kept by _updatePatrols.)
+    const coldIdle = this._coldWorld && state === PursuitState.IDLE;
+    if (dLevel < 0 && !coldIdle) while (this.cops.length > cap) this._retireFarthestCop();
 
     // Trickle reinforcements up to the cap while actively pursuing.
     if (state === PursuitState.ACTIVE && this.cops.length < cap) {
@@ -1762,7 +2255,7 @@ export class GameScene extends Phaser.Scene {
 
     // Reconcile over-cap (searcher) units back to the heat cap — but ONLY on a sustained re-engage
     // (real chase resumed) or once standing down. Never mid-search: that's when they're doing their job.
-    if (this.cops.length > cap) {
+    if (this.cops.length > cap && !coldIdle) {
       const sustained =
         state === PursuitState.ACTIVE &&
         this.time.now - this._activeSince >= this.searchReengageTrim * 1000;
@@ -2241,6 +2734,10 @@ export class GameScene extends Phaser.Scene {
   // ×heatRate) lives in PursuitLevel.contactHeat.
   _ramHeat(playerAgent, otherAgent) {
     if (!this.pursuitLevel) return;
+    // Quiet streets: hit a patrol car hard and there's nothing left to be suspicious about.
+    if (this._coldWorld && this.pursuit.state === PursuitState.IDLE &&
+        Math.hypot(playerAgent.preVx - otherAgent.preVx, playerAgent.preVy - otherAgent.preVy) > this.pursuitLevel.ramHeatThreshold)
+      this._forceMade = true;
     if (this.time.now - (this._lastRamAt || 0) <= this.ramHeatCooldown) return;
     const rel = Math.hypot(playerAgent.preVx - otherAgent.preVx, playerAgent.preVy - otherAgent.preVy);
     const add = this.pursuitLevel.contactHeat(rel);
@@ -2711,7 +3208,7 @@ export class GameScene extends Phaser.Scene {
       const d = dx * dx + dy * dy;
       if (d < best) { best = d; target = c; }
     };
-    for (const c of this.parkedCars) consider(c);
+    for (const c of this.parkedCars) if (!c.swapCar) consider(c); // never yank the mission's getaway car
     for (const c of this.traffic) consider(c);
     if (!target) return; // nothing eligible in reach — don't start the cooldown
     this.grappleCdRemaining = this.grappleCooldown;
@@ -4554,6 +5051,14 @@ reinforceUrgency: { cadenceGain: ${ru.cadenceGain}, recognition: ${ru.recognitio
       this.car.lightsOff = !this.car.lightsOff;
     });
 
+    // Speed limiter (TAB) — hold the car to the legal limit so patrols take longer to place you.
+    // Comes off by itself when a chase starts or you fire the nitro.
+    this.input.keyboard.addCapture("TAB");
+    this.input.keyboard.on("keydown-TAB", () => {
+      this.cruise = !this.cruise;
+      this._cruiseLimit = null;
+    });
+
     // Gadget cluster (left hand, one key each), from the resolved loadout — DEV binds all gadgets on
     // Z/X/C/V; PLAYER binds only its chosen ≤3 on Z/X/C. See _resolveGadgets.
     for (const { def, key } of this._activeGadgets) {
@@ -5120,7 +5625,8 @@ reinforceUrgency: { cadenceGain: ${ru.cadenceGain}, recognition: ${ru.recognitio
     const live = this.cops.length > 0;
 
     // Status row: word + level diamonds, centred as a pair over the minimap.
-    const n = P && live ? P.maxLevel : 0;
+    const quiet = this._coldWorld && state === PursuitState.IDLE; // no chase → no level row
+    const n = P && live && !quiet ? P.maxLevel : 0;
     const tw = this.statusText.width;
     const total = tw + (n ? 12 + (n - 1) * 15 + 8 : 0);
     const sx = cx - total / 2, sy = this._statusY;
@@ -5144,6 +5650,9 @@ reinforceUrgency: { cadenceGain: ${ru.cadenceGain}, recognition: ${ru.recognitio
       } else if (state === PursuitState.SEARCH) {
         frac = this.pursuit.hot / Math.max(0.01, this.pursuit.hotDuration);
         col = HUD.boneDim;
+      } else if (quiet && this.suspicion > 0) {
+        frac = this.suspicion; // a patrol is working out who you are
+        col = HUD.brassHi;
       }
     }
     frac = Phaser.Math.Clamp(frac, 0, 1);
@@ -6406,7 +6915,9 @@ searchBurst: { on: ${t.searchBurstEnabled}, delay: ${t.searchBurstDelay}, cooldo
     // While spectating a cop (camera not on the player), freeze the car so the
     // observer can't accidentally drive or re-trigger anything.
     const spectating = this.camFocusIndex !== 0;
-    const controls = spectating
+    this._updateSwap(delta / 1000);
+    // Hands off the wheel while spectating a cop — and for the beat it takes to switch cars.
+    const controls = spectating || this._swap
       ? {
           up: false,
           down: false,
@@ -6423,6 +6934,21 @@ searchBurst: { on: ${t.searchBurstEnabled}, delay: ${t.searchBurstDelay}, cooldo
           handbrake: this.cursors.space.isDown,
           brake: this.shiftKey.isDown,
         };
+
+    // Speed limiter: ease the top speed down to the legal limit (the cap is a hard clamp, so it's
+    // walked down from your current speed rather than snapped). Outermost of the stash/restore set.
+    let _cruiseSpeed = null;
+    if (this.cruise) {
+      if (this.nitroTimer > 0) { this.cruise = false; this._cruiseLimit = null; }
+      else {
+        this._cruiseLimit = Math.max(
+          this.legalSpeed,
+          (this._cruiseLimit ?? this.car.getSpeed()) - this.cruiseBrake * (delta / 1000),
+        );
+        _cruiseSpeed = this.car.maxSpeed;
+        this.car.maxSpeed = Math.min(this.car.maxSpeed, this._cruiseLimit);
+      }
+    }
 
     // Ram bog: after a frontal cop ram the engine briefly loses power so you can't instantly
     // power back through. Scale acceleration down for this update only, then restore (so the
@@ -6501,6 +7027,7 @@ searchBurst: { on: ${t.searchBurstEnabled}, delay: ${t.searchBurstDelay}, cooldo
       this.car.maxSpeed = _nitroSpeed;
     }
     if (_bogAccel != null) this.car.acceleration = _bogAccel;
+    if (_cruiseSpeed != null) this.car.maxSpeed = _cruiseSpeed;
     this._carLastVx = this.car.vx;
     this._carLastVy = this.car.vy; // pre-collision cache (see _updateCopDamage)
 
@@ -6570,7 +7097,13 @@ searchBurst: { on: ${t.searchBurstEnabled}, delay: ${t.searchBurstDelay}, cooldo
       this.car.lightsOff = false;
     }
     // Indicator shows only while you're actually blacked out (cleared the instant lights snap back).
-    this.killLightsText.setAlpha(this.car.lightsOff ? 1 : 0);
+    // (Shares the line with the speed-limiter cue.)
+    const cue = (this.cruise ? "SPEED LIMIT" : "") +
+      (this.cruise && this.car.lightsOff ? "   ·   " : "") + (this.car.lightsOff ? "LIGHTS OFF" : "");
+    if (cue !== this._cueShown) {
+      this._cueShown = cue;
+      this.killLightsText.setText(cue || " ").setAlpha(cue ? 1 : 0);
+    }
 
     // Blown-tires warning — visible while a spike blowout is active, pulsing for urgency.
     this.spikeText.setAlpha(
@@ -6592,6 +7125,7 @@ searchBurst: { on: ${t.searchBurstEnabled}, delay: ${t.searchBurstDelay}, cooldo
     let anyAware = false,
       anyLOS = false;
     let nearestCopDist = Infinity;
+    let seeDist = Infinity; // nearest cop that can actually see you (drives suspicion)
     // Effective clear-LOS spotting range this frame — shrinks when the player kills the
     // lights and crawls (Kill Lights stealth); full sightRange otherwise. Computed once.
     const effSight = this._detectRange();
@@ -6615,7 +7149,22 @@ searchBurst: { on: ${t.searchBurstEnabled}, delay: ${t.searchBurstDelay}, cooldo
       cop.hasLOS = sees; // instantaneous real line of sight
       cop.aware = cop.awareTimer > 0; // includes the memory grace
       if (cop.aware) anyAware = true;
-      if (sees) anyLOS = true;
+      if (sees) {
+        anyLOS = true;
+        if (d < seeDist) seeDist = d;
+      }
+    }
+    // Quiet streets (mission, pursuit IDLE): being seen doesn't start a chase — it feeds the
+    // suspicion meter, and only a full meter does. Until then no cop is "aware": their sight is
+    // wiped here so nothing downstream (state machine, garage rule, beeline) treats you as spotted.
+    if (this._coldWorld && !this.sandbox && this.pursuit.state === PursuitState.IDLE) {
+      if (!this._updateSuspicion(dt, anyLOS, seeDist, effSight)) {
+        for (const cop of this.cops) {
+          cop.hasLOS = cop.aware = false;
+          cop.awareTimer = 0;
+        }
+        anyAware = anyLOS = false;
+      }
     }
     this._pmark("perception");
 
@@ -6659,6 +7208,11 @@ searchBurst: { on: ${t.searchBurstEnabled}, delay: ${t.searchBurstDelay}, cooldo
       py,
       dt,
     );
+    // A chase starts on leaving the quiet: straight into ACTIVE (seen), or into SEARCH when an alert
+    // sends the cops after you while none of them has eyes on you yet.
+    const chasing = state === PursuitState.ACTIVE || state === PursuitState.SEARCH;
+    const wasChasing = this._prevState === PursuitState.ACTIVE || this._prevState === PursuitState.SEARCH;
+    if (chasing && !wasChasing) this._onChaseStart();
     if (this.pursuit.justDitched) this._flashGhost();
     // Player's heading/speed at the last REAL sighting (the search/track vector).
     if (anyLOS) {
@@ -6692,6 +7246,7 @@ searchBurst: { on: ${t.searchBurstEnabled}, delay: ${t.searchBurstDelay}, cooldo
     // Pursuit Mode: advance heat/level and dispatch/retire reinforcements. Runs before
     // the director so a cop dispatched this frame is included in coordination/targets.
     if (this.pursuitLevel) this._updatePursuitLevel(state, dt);
+    this._trackRunHeat(state, dt);
 
     // Per-cop target depends on pursuit state:
     //  ACTIVE    → chase the player
@@ -6760,6 +7315,9 @@ searchBurst: { on: ${t.searchBurstEnabled}, delay: ${t.searchBurstDelay}, cooldo
     this._updatePlayerPit(delta / 1000);
     this._pmark("director");
 
+    // Mission, chase over or not yet begun: the cops are on routine patrol (road-node goals).
+    const cruising = this._coldWorld && !this.sandbox &&
+      (state === PursuitState.IDLE || state === PursuitState.RETURNING);
     for (const cop of this.cops) {
       let target = null;
       // ACTIVE: a cop that can SEE the player uses the Director's live, coordinated
@@ -6770,6 +7328,7 @@ searchBurst: { on: ${t.searchBurstEnabled}, delay: ${t.searchBurstDelay}, cooldo
         target = cop.hasLOS ? cop.dirTarget : this._huntGoal();
       else if (state === PursuitState.SEARCH)
         target = this._cooldownTarget(cop);
+      else if (cruising) target = this._patrolTarget(cop);
       else if (state === PursuitState.RETURNING) target = this.station;
       // Separation spreads cops apart so they don't pile up; clamp always.
       // Separation only for a cop that SEES the player (it beelines, so nudging its aim spreads the
@@ -6792,14 +7351,16 @@ searchBurst: { on: ${t.searchBurstEnabled}, delay: ${t.searchBurstDelay}, cooldo
       // Full speed while chasing OR hunting; capped only for sustained search / withdrawal.
       // In ACTIVE the director may impose a maneuver/drafting cap (overtake-block, anti-
       // bumper-grind) — honour it so a fast unit spends its speed on maneuvers, not tailing.
-      const slow =
-        (state === PursuitState.SEARCH && !hunting) ||
-        state === PursuitState.RETURNING;
+      const slow = !cruising &&
+        ((state === PursuitState.SEARCH && !hunting) ||
+          state === PursuitState.RETURNING);
       cop.ai.speedCap = slow
         ? this._searchSpeed()
         : state === PursuitState.ACTIVE && cop.maneuverSpeedCap != null
           ? cop.maneuverSpeedCap
           : Infinity;
+      if (cruising) cop.ai.speedCap = this.patrolCruise;
+      cop.flashersOff = cruising; // routine patrol: no emergency bar
       // Cop-cop YIELD: a cop jammed nose-to-tail behind a teammate that's closer to you eases off
       // its throttle so the capsule resolver can separate the pile (front-to-back flow), instead of
       // everyone pressing inward and locking. Ease-off only (no steer/reverse → can't shove anyone
@@ -6917,7 +7478,14 @@ searchBurst: { on: ${t.searchBurstEnabled}, delay: ${t.searchBurstDelay}, cooldo
     // a tight alley on the way home (the K-turn can't always escape) would otherwise
     // strand the pursuit in RETURNING forever — so a returning cop that's stuck for a
     // beat just warps home. The chase is over and it's off-screen, so it's invisible.
-    if (state === PursuitState.RETURNING) {
+    if (state === PursuitState.RETURNING && this._coldWorld) {
+      // Mission: no trek back to the station — after a beat they just go back to patrolling.
+      this._returnT = (this._returnT || 0) + dt;
+      if (this._returnT >= this.returnPatrolDelay) {
+        this._returnT = 0;
+        this.pursuit.markIdle();
+      }
+    } else if (state === PursuitState.RETURNING) {
       for (const cop of this.cops) {
         cop._returnStuckT =
           cop.getSpeed() < 30 ? (cop._returnStuckT || 0) + dt : 0;
@@ -6945,6 +7513,8 @@ searchBurst: { on: ${t.searchBurstEnabled}, delay: ${t.searchBurstDelay}, cooldo
       );
       if (allHome) this.pursuit.markIdle();
     }
+
+    if (this._coldWorld && !this.sandbox && state === PursuitState.IDLE) this._updatePatrols(dt, px, py);
 
     // --- Bust meter (lose condition) ---
     // Pinned = actively pursued, a cop right on you, and you're slow (boxed/stopped).
@@ -6997,6 +7567,10 @@ searchBurst: { on: ${t.searchBurstEnabled}, delay: ${t.searchBurstDelay}, cooldo
         this.car.turnSpeed *= this.passengerTurnMult;
         this.car.turnSpeedLow *= this.passengerTurnMult;
       }
+      // Parked in the garage beside the waiting car → the switch (lights go down on yours, come
+      // up on the new one, and you roll out in it). See _startSwap.
+      if (this.mission.justSwap) this._startSwap(this.mission.justSwap.vehicle);
+      this._applyMissionLimits();
       if (this.mission.isOver) {
         this._onMissionEnd();
         return;
@@ -7080,6 +7654,8 @@ searchBurst: { on: ${t.searchBurstEnabled}, delay: ${t.searchBurstDelay}, cooldo
       this.statusText.setText("AREA HOT  " + Math.ceil(this.pursuit.hot)).setColor(HUD.css.bone);
     } else if (state === PursuitState.RETURNING) {
       this.statusText.setText("WITHDRAWING").setColor(HUD.css.boneDim);
+    } else if (this._coldWorld && this.suspicion > 0.02) {
+      this.statusText.setText("SUSPICION").setColor(HUD.css.brassHi);
     } else {
       this.statusText.setText("CLEAR").setColor(HUD.css.bone);
     }

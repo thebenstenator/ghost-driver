@@ -142,6 +142,7 @@ export class CarLights {
     const cx = b ? b.center.x : v.sprite.x;
     const cy = b ? b.center.y : v.sprite.y;
     const dead = !!v.disabled || (v._empT || 0) > 0; // EMP'd cop goes fully dark (fried electronics)
+    const quiet = !!v.flashersOff; // a cruiser on routine patrol: headlights, no emergency bar
     // Kill-lights is a hard on/off: head/tail lamps are fully on, or fully dark while v.lightsOff.
     // (GameScene snaps lightsOff back to false at speed, so there's no fade to do here.)
     const lit = v.lightsOff ? 0 : 1;
@@ -178,10 +179,10 @@ export class CarLights {
         const sc = braking ? 1.35 : 1.0;
         sx2 = L.len * sc; sy2 = L.wid * sc;
       } else if (L.type === 'flashRed') {
-        const on = redOn; alpha = (on ? 1.0 : 0.08) * T.flash;
+        const on = redOn; alpha = quiet ? 0 : (on ? 1.0 : 0.08) * T.flash;
         const sc = on ? 1.15 : 0.9; sx2 = L.len * sc; sy2 = L.wid * sc;
       } else if (L.type === 'flashBlue') {
-        const on = blueOn; alpha = (on ? 1.0 : 0.08) * T.flash;
+        const on = blueOn; alpha = quiet ? 0 : (on ? 1.0 : 0.08) * T.flash;
         const sc = on ? 1.15 : 0.9; sx2 = L.len * sc; sy2 = L.wid * sc;
       }
       s.setAlpha(alpha);
